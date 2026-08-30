@@ -1,0 +1,140 @@
+name: Buzz Android APK
+
+on:
+  push:
+    branches:
+      - "buzz-ci/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: buzz-android-apk
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Preview release APK
+    if: >-
+      github.repository == 'only21mil/t3code' &&
+      github.ref == format('refs/heads/buzz-ci/{0}', github.sha)
+    runs-on: [t3code-android, "t3code-android-${{ github.sha }}"]
+    timeout-minutes: 60
+    env:
+      APP_VARIANT: preview
+      EXPO_NO_DOTENV: "1"
+      CI: "1"
+      NODE_OPTIONS: --max-old-space-size=8192
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Check local toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --version
+          pnpm --version
+          java -version
+          test "$(node --print "require('./package.json').packageManager")" = "pnpm@11.10.0"
+          node --input-type=module -e 'import packageJson from "./package.json" with { type: "json" }; if (!process.version.startsWith("v24.")) throw new Error("Node 24 required, got " + process.version); if (packageJson.engines.node !== "^24.13.1") throw new Error("Unexpected Node engine " + packageJson.engines.node);'
+
+      - name: Install dependencies
+        shell: bash
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate preview Android project
+        shell: bash
+        run: pnpm --filter @t3tools/mobile exec expo prebuild --clean --platform android
+
+      - name: Build arm64 release APK
+        shell: bash
+        working-directory: apps/mobile/android
+        run: ./gradlew :app:assembleRelease -PreactNativeArchitectures=arm64-v8a --no-daemon --max-workers=2
+
+      - name: Verify and export locally
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          apk="apps/mobile/android/app/build/outputs/apk/release/app-release.apk"
+          apk_name="t3-code-preview-1.0.4-arm64-v8a.apk"
+          test -s "$apk"
+
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          test -n "$sdk_root"
+          build_tools_dir="$({ find "$sdk_root/build-tools" -mindepth 1 -maxdepth 1 -type d -printf '%p\n' || true; } | sort -V | tail -n 1)"
+          test -n "$build_tools_dir"
+          apksigner="$build_tools_dir/apksigner"
+          zipalign="$build_tools_dir/zipalign"
+          aapt2="$build_tools_dir/aapt2"
+          test -x "$apksigner" && test -x "$zipalign" && test -x "$aapt2"
+
+          evidence_dir="$RUNNER_TEMP/t3code-apk-evidence"
+          mkdir -p "$evidence_dir"
+          "$apksigner" verify --verbose --print-certs "$apk" | tee "$evidence_dir/apksigner.txt"
+          "$zipalign" -c -P 16 -v 4 "$apk" > "$evidence_dir/zipalign.txt"
+          "$aapt2" dump badging "$apk" > "$evidence_dir/aapt2-badging.txt"
+          unzip -tqq "$apk"
+          unzip -Z1 "$apk" > "$evidence_dir/archive-contents.txt"
+
+          grep -Fq "package: name='com.t3tools.t3code.preview' versionCode='1' versionName='1.0.4'" "$evidence_dir/aapt2-badging.txt"
+          abis="$(awk -F/ '/^lib\// { print $2 }' "$evidence_dir/archive-contents.txt" | sort -u)"
+          test "$abis" = "arm64-v8a"
+
+          : "${T3CODE_APK_EXPORT:?T3CODE_APK_EXPORT must be set by the runner}"
+          out_dir="$T3CODE_APK_EXPORT/$GITHUB_SHA"
+          mkdir -p "$out_dir"
+          install -m 0644 "$apk" "$out_dir/$apk_name"
+          install -m 0644 artifacts/android/LICENSE.txt "$out_dir/LICENSE.txt"
+          install -m 0644 artifacts/android/THIRD_PARTY_NOTICES.md "$out_dir/THIRD_PARTY_NOTICES.md"
+          install -m 0644 "$evidence_dir/apksigner.txt" "$out_dir/apksigner.txt"
+          install -m 0644 "$evidence_dir/zipalign.txt" "$out_dir/zipalign.txt"
+          install -m 0644 "$evidence_dir/aapt2-badging.txt" "$out_dir/aapt2-badging.txt"
+          install -m 0644 "$evidence_dir/archive-contents.txt" "$out_dir/archive-contents.txt"
+          (cd "$out_dir" && sha256sum "$apk_name" > "$apk_name.sha256")
+
+          APK_PATH="$out_dir/$apk_name" \
+          PROVENANCE_PATH="$out_dir/t3-code-preview-1.0.4-arm64-v8a.provenance.json" \
+          BUILD_TOOLS_VERSION="$(basename "$build_tools_dir")" \
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFileSync, statSync, writeFileSync } from "node:fs";
+
+          const bytes = readFileSync(process.env.APK_PATH);
+          const provenance = {
+            schemaVersion: 1,
+            source: {
+              repository: process.env.GITHUB_SERVER_URL + "/" + process.env.GITHUB_REPOSITORY,
+              commit: process.env.GITHUB_SHA,
+              ref: process.env.GITHUB_REF,
+            },
+            artifact: {
+              file: process.env.APK_PATH.split("/").at(-1),
+              sha256: createHash("sha256").update(bytes).digest("hex"),
+              sizeBytes: statSync(process.env.APK_PATH).size,
+            },
+            build: {
+              appVariant: "preview",
+              expoNoDotenv: true,
+              nativeAbis: ["arm64-v8a"],
+              androidBuildTools: process.env.BUILD_TOOLS_VERSION,
+              runner: process.env.RUNNER_NAME,
+            },
+            evidence: [
+              "apksigner.txt",
+              "zipalign.txt",
+              "aapt2-badging.txt",
+              "archive-contents.txt",
+            ],
+          };
+          writeFileSync(process.env.PROVENANCE_PATH, JSON.stringify(provenance, null, 2) + "\n", { mode: 0o644 });
+          NODE
+
+          sha256sum "$out_dir/$apk_name"
+          printf 'Local APK export: %s\n' "$out_dir"

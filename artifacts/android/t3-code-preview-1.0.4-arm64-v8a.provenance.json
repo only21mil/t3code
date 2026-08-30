@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "artifact": {
+    "path": "artifacts/android/t3-code-preview-1.0.4-arm64-v8a.apk",
+    "mediaType": "application/vnd.android.package-archive",
+    "sha256": "f6e8de46e8622cd67a94c647cff68849d09ad5e8aa505c613e76905dab959cc0",
+    "sizeBytes": 91145344
+  },
+  "source": {
+    "repository": "https://github.com/pingdotgg/t3code.git",
+    "commit": "1f8ed54add4133ac39effceded8fc1fff12d8e03",
+    "tree": "0d4a1445f2e01050a7ce6d53e0b114b0bc0ea6b4",
+    "priorBuzzMain": "018d7f2775daabd2ef07898af29586915a0b7f67",
+    "priorBuzzMainIsAncestor": true
+  },
+  "build": {
+    "builtAtUtc": "2026-08-30T00:27:30Z",
+    "host": "framework-desktop",
+    "environment": {
+      "APP_VARIANT": "preview",
+      "EXPO_NO_DOTENV": "1",
+      "reactNativeArchitectures": "arm64-v8a"
+    },
+    "commands": [
+      "CI=1 pnpm install --frozen-lockfile",
+      "CI=1 EXPO_NO_DOTENV=1 APP_VARIANT=preview pnpm --filter @t3tools/mobile exec expo prebuild --clean --platform android",
+      "CI=1 EXPO_NO_DOTENV=1 APP_VARIANT=preview NODE_OPTIONS=--max-old-space-size=8192 ./gradlew :app:assembleRelease -PreactNativeArchitectures=arm64-v8a --no-daemon --max-workers=2"
+    ],
+    "toolchain": {
+      "node": "24.18.1",
+      "pnpm": "11.10.0",
+      "java": "OpenJDK 21.0.12",
+      "gradle": "9.3.1",
+      "androidBuildTools": "36.0.0",
+      "androidNdk": "27.1.12297006",
+      "compileSdk": 36,
+      "targetSdk": 36,
+      "minSdk": 24
+    }
+  },
+  "package": {
+    "applicationId": "com.t3tools.t3code.preview",
+    "label": "T3 Code Preview",
+    "versionName": "1.0.4",
+    "versionCode": 1,
+    "nativeAbis": ["arm64-v8a"],
+    "archiveEntries": 3061,
+    "uncompressedBytes": 141276417
+  },
+  "signing": {
+    "verified": true,
+    "apkSignatureSchemeV2": true,
+    "certificateDn": "CN=Android Debug, OU=Android, O=Unknown, L=Unknown, ST=Unknown, C=US",
+    "certificateSha256": "fac61745dc0903786fb9ede62a962b399f7348f0bb6f899b8332667591033b9c",
+    "releaseBuildUsesDebugKey": true
+  },
+  "verification": {
+    "apksigner": "pass",
+    "zipalign4And16KiB": "pass",
+    "aapt2Badging": "pass",
+    "archiveIntegrity": "pass",
+    "arm64Only": "pass"
+  }
+}
