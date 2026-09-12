@@ -14,10 +14,10 @@ import * as Path from "effect/Path";
 import { normalizeProjectPathForComparison } from "@t3tools/shared/path";
 import type { ThreadId } from "@t3tools/contracts";
 
-export const APP_OWNED_CONVERSATION_DIR = "conversations";
-export const APP_OWNED_WORK_DIR = "work";
+const APP_OWNED_CONVERSATION_DIR = "conversations";
+const APP_OWNED_WORK_DIR = "work";
 
-export function appOwnedConversationRoot(stateDir: string, threadId: ThreadId, join: Path.Path["join"]) {
+function appOwnedConversationRoot(stateDir: string, threadId: ThreadId, join: Path.Path["join"]) {
   return join(stateDir, APP_OWNED_CONVERSATION_DIR, threadId);
 }
 

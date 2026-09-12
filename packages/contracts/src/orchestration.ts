@@ -624,13 +624,6 @@ export type ThreadLinkedPullRequest = typeof ThreadLinkedPullRequest.Type;
 export const ThreadWorkspaceOwnership = Schema.Literals(["app", "user"]);
 export type ThreadWorkspaceOwnership = typeof ThreadWorkspaceOwnership.Type;
 
-export function inferThreadWorkspaceOwnership(
-  projectId: ProjectId | null,
-  workspaceOwnership?: ThreadWorkspaceOwnership,
-): ThreadWorkspaceOwnership {
-  return workspaceOwnership ?? (projectId === null ? "app" : "user");
-}
-
 /** Who created a thread ↔ pull request link. `stack-dismissed` is a tombstone
  * for a native-stack member the user unlinked, so the sync reactor does not
  * re-add it; clients hide it. */
