@@ -111,9 +111,7 @@ export function buildArchivedThreadGroups(input: {
     }
 
     const chatsGroupMatches =
-      query.length === 0 ||
-      matchesQuery("Chats", query) ||
-      matchesQuery(environmentLabel, query);
+      query.length === 0 || matchesQuery("Chats", query) || matchesQuery(environmentLabel, query);
     const matchingProjectlessThreads = chatsGroupMatches
       ? projectlessThreads
       : projectlessThreads.filter(

@@ -2638,7 +2638,9 @@ pending_approval_requests AS (
                         ...mapThreadPullRequests(
                           pullRequestsByThread.get(row.threadId) ?? [],
                           row.projectId,
-                          row.projectId === null ? undefined : repositoryIdentities.get(row.projectId),
+                          row.projectId === null
+                            ? undefined
+                            : repositoryIdentities.get(row.projectId),
                         ),
                         latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                         createdAt: row.createdAt,

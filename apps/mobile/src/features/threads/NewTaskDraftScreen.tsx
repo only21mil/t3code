@@ -171,9 +171,8 @@ export function NewTaskDraftScreen(props: {
   const selectedEnvironmentServerConfig = useEnvironmentServerConfig(selectedEnvironmentId);
   const environmentConnected =
     selectedEnvironmentId !== null &&
-    connectedEnvironments.find(
-      (environment) => environment.environmentId === selectedEnvironmentId,
-    )?.connectionState === "connected";
+    connectedEnvironments.find((environment) => environment.environmentId === selectedEnvironmentId)
+      ?.connectionState === "connected";
   const modelUnavailable = environmentConnected && flow.selectedModelOption?.isUnavailable === true;
   const uploadStates = useAtomValue(composerAttachmentUploadsAtom);
   const attachmentBlockReason = selectedEnvironmentId

@@ -1,8 +1,13 @@
 import { projectlessLogicalKey } from "@t3tools/client-runtime/projectless";
 import { ApprovalRequestId, EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
 
-export function scopedProjectKey(environmentId: EnvironmentId, projectId: ProjectId | null): string {
-  return projectId === null ? projectlessLogicalKey(environmentId) : `${environmentId}:${projectId}`;
+export function scopedProjectKey(
+  environmentId: EnvironmentId,
+  projectId: ProjectId | null,
+): string {
+  return projectId === null
+    ? projectlessLogicalKey(environmentId)
+    : `${environmentId}:${projectId}`;
 }
 
 export function scopedThreadKey(environmentId: EnvironmentId, threadId: ThreadId): string {

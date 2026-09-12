@@ -39,7 +39,11 @@ export function NoProjectsHero() {
                     Start chat
                   </Button>
                 ) : null}
-                <Button size="sm" variant={environments.length > 0 ? "outline" : "default"} onClick={openAddProject}>
+                <Button
+                  size="sm"
+                  variant={environments.length > 0 ? "outline" : "default"}
+                  onClick={openAddProject}
+                >
                   <PlusIcon className="size-4" />
                   Add project
                 </Button>

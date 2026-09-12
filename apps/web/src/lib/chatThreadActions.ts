@@ -35,9 +35,7 @@ export interface ChatThreadActionContext {
   readonly activeThread: ThreadContextLike | undefined;
   readonly defaultProjectRef: ScopedProjectRef | null;
   readonly handleNewThread: NewThreadHandler;
-  readonly handleNewProjectlessThread?: (
-    environmentId: EnvironmentId,
-  ) => Promise<unknown>;
+  readonly handleNewProjectlessThread?: (environmentId: EnvironmentId) => Promise<unknown>;
 }
 
 export function resolveNewDraftStartFromOrigin(input: {

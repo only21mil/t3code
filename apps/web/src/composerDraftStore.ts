@@ -1786,7 +1786,7 @@ function normalizePersistedDraftThreads(
               ? projectlessLogicalKey(normalizedEnvironmentId)
               : parsedThreadRef
                 ? projectDraftKey(scopeProjectRef(normalizedEnvironmentId, normalizedProjectId))
-              : threadKeyOrId,
+                : threadKeyOrId,
         createdAt:
           typeof createdAt === "string" && createdAt.length > 0
             ? createdAt
@@ -2643,10 +2643,14 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               environmentId,
               projectId: null,
               logicalProjectKey,
-              createdAt: options?.createdAt ?? existingThread?.createdAt ?? new Date().toISOString(),
-              runtimeMode: options?.runtimeMode ?? existingThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+              createdAt:
+                options?.createdAt ?? existingThread?.createdAt ?? new Date().toISOString(),
+              runtimeMode:
+                options?.runtimeMode ?? existingThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
               interactionMode:
-                options?.interactionMode ?? existingThread?.interactionMode ?? DEFAULT_INTERACTION_MODE,
+                options?.interactionMode ??
+                existingThread?.interactionMode ??
+                DEFAULT_INTERACTION_MODE,
               branch: null,
               worktreePath: null,
               envMode: "local",
@@ -2658,7 +2662,9 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               previousThreadKeyForLogicalProject &&
               previousThreadKeyForLogicalProject !== draftId &&
               nextDraftThreadsByThreadKey[previousThreadKeyForLogicalProject]?.promotedTo == null &&
-              !composerDraftHasUserContent(state.draftsByThreadKey[previousThreadKeyForLogicalProject])
+              !composerDraftHasUserContent(
+                state.draftsByThreadKey[previousThreadKeyForLogicalProject],
+              )
             ) {
               delete nextDraftThreadsByThreadKey[previousThreadKeyForLogicalProject];
             }

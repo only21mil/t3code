@@ -25,8 +25,14 @@ it.layer(NodeServices.layer)("threadWorkspace", (it) => {
       const secondWork = yield* allocateAppOwnedThreadWorkspace({ stateDir, threadId: second });
       assert.notEqual(firstWork, secondWork);
       assert.equal(firstWork, appOwnedConversationWorkPath(stateDir, first, path.join));
-      assert.equal(yield* fileSystem.exists(path.join(stateDir, "conversations", first, "attachments")), true);
-      assert.equal(yield* fileSystem.exists(path.join(stateDir, "conversations", first, "outputs")), true);
+      assert.equal(
+        yield* fileSystem.exists(path.join(stateDir, "conversations", first, "attachments")),
+        true,
+      );
+      assert.equal(
+        yield* fileSystem.exists(path.join(stateDir, "conversations", first, "outputs")),
+        true,
+      );
 
       yield* fileSystem.writeFileString(path.join(firstWork, "notes.md"), "one");
       yield* fileSystem.writeFileString(path.join(secondWork, "notes.md"), "two");
@@ -44,7 +50,9 @@ it.layer(NodeServices.layer)("threadWorkspace", (it) => {
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const stateDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-conversations-protect-" });
+      const stateDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-conversations-protect-",
+      });
       const threadId = ThreadId.make("thread-protected");
       const workPath = yield* allocateAppOwnedThreadWorkspace({ stateDir, threadId });
       const conversationRoot = path.dirname(workPath);
@@ -60,7 +68,10 @@ it.layer(NodeServices.layer)("threadWorkspace", (it) => {
 
   it.effect("treats a path as inside its parent directory", () =>
     Effect.sync(() => {
-      assert.equal(isPathInsideDirectory("/tmp/conversations", "/tmp/conversations/thread-1/work"), true);
+      assert.equal(
+        isPathInsideDirectory("/tmp/conversations", "/tmp/conversations/thread-1/work"),
+        true,
+      );
       assert.equal(isPathInsideDirectory("/tmp/conversations", "/tmp/other/thread-1"), false);
     }),
   );

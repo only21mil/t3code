@@ -44,33 +44,39 @@ export const allocateAppOwnedThreadWorkspace = Effect.fn("allocateAppOwnedThread
     const path = yield* Path.Path;
     const conversationRoot = appOwnedConversationRoot(input.stateDir, input.threadId, path.join);
     const workPath = path.join(conversationRoot, APP_OWNED_WORK_DIR);
-    yield* fileSystem.makeDirectory(path.join(conversationRoot, "attachments"), { recursive: true });
+    yield* fileSystem.makeDirectory(path.join(conversationRoot, "attachments"), {
+      recursive: true,
+    });
     yield* fileSystem.makeDirectory(workPath, { recursive: true });
     yield* fileSystem.makeDirectory(path.join(conversationRoot, "outputs"), { recursive: true });
     return workPath;
   },
 );
 
-export const removeAppOwnedThreadWorkspace = Effect.fn("removeAppOwnedThreadWorkspace")(function* (input: {
-  readonly stateDir: string;
-  readonly threadId: ThreadId;
-  readonly projectWorkspaceRoots?: ReadonlyArray<string>;
-}) {
-  const fileSystem = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const conversationsDir = path.join(input.stateDir, APP_OWNED_CONVERSATION_DIR);
-  const conversationRoot = appOwnedConversationRoot(input.stateDir, input.threadId, path.join);
-  if (!isPathInsideDirectory(conversationsDir, conversationRoot)) {
-    return false;
-  }
-  const protectedRoots = (input.projectWorkspaceRoots ?? []).map(normalizeProjectPathForComparison);
-  if (protectedRoots.includes(normalizeProjectPathForComparison(conversationRoot))) {
-    return false;
-  }
-  const exists = yield* fileSystem.exists(conversationRoot);
-  if (!exists) {
-    return false;
-  }
-  yield* fileSystem.remove(conversationRoot, { recursive: true });
-  return true;
-});
+export const removeAppOwnedThreadWorkspace = Effect.fn("removeAppOwnedThreadWorkspace")(
+  function* (input: {
+    readonly stateDir: string;
+    readonly threadId: ThreadId;
+    readonly projectWorkspaceRoots?: ReadonlyArray<string>;
+  }) {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const conversationsDir = path.join(input.stateDir, APP_OWNED_CONVERSATION_DIR);
+    const conversationRoot = appOwnedConversationRoot(input.stateDir, input.threadId, path.join);
+    if (!isPathInsideDirectory(conversationsDir, conversationRoot)) {
+      return false;
+    }
+    const protectedRoots = (input.projectWorkspaceRoots ?? []).map(
+      normalizeProjectPathForComparison,
+    );
+    if (protectedRoots.includes(normalizeProjectPathForComparison(conversationRoot))) {
+      return false;
+    }
+    const exists = yield* fileSystem.exists(conversationRoot);
+    if (!exists) {
+      return false;
+    }
+    yield* fileSystem.remove(conversationRoot, { recursive: true });
+    return true;
+  },
+);

@@ -243,8 +243,7 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
             accessibilityRole="button"
             className="rounded-[24px] bg-card px-4 py-3.5"
             onPress={() => {
-              const environmentId =
-                selectedEnvironmentId ?? environments[0]?.environmentId ?? null;
+              const environmentId = selectedEnvironmentId ?? environments[0]?.environmentId ?? null;
               if (!environmentId) {
                 return;
               }

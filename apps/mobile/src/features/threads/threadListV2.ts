@@ -397,8 +397,7 @@ export function buildThreadListV2Items(input: {
     if (input.environmentId !== null && thread.environmentId !== input.environmentId) continue;
     if (
       projectKeys !== null &&
-      (thread.projectId === null ||
-        !projectKeys.has(`${thread.environmentId}:${thread.projectId}`))
+      (thread.projectId === null || !projectKeys.has(`${thread.environmentId}:${thread.projectId}`))
     ) {
       continue;
     }
