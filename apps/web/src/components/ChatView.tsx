@@ -255,7 +255,7 @@ import {
 } from "../hooks/useSettings";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { usePanelAnimationSettings, usePanelPresence } from "../panelAnimations";
-import { useNewThreadHandler } from "../hooks/useHandleNewThread";
+import { useNewProjectlessThreadHandler, useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { resolveAppModelSelectionForInstance } from "../modelSelection";
@@ -1421,6 +1421,7 @@ export default function ChatView(props: ChatViewProps) {
   const threadSyncPhase = routeKind === "server" ? (props.threadSyncPhase ?? null) : null;
   const threadDetailLoading = threadSyncPhase === "loading";
   const handleNewThread = useNewThreadHandler();
+  const handleNewProjectlessThread = useNewProjectlessThreadHandler();
   const { settleThread, pinThread, confirmAndUnpinThread } = useThreadActions();
   const routeThreadRef = useMemo(
     () => scopeThreadRef(environmentId, threadId),
@@ -7320,14 +7321,16 @@ export default function ChatView(props: ChatViewProps) {
         if (backgroundThreadRef) {
           markPromotedDraftThreadByRef(backgroundThreadRef);
           try {
-            const nextDraft = await handleNewThread(
-              scopeProjectRef(activeProject.environmentId, activeProject.id),
-              resolveBackgroundDraftWorkspaceOptions({
-                envMode: sendEnvMode,
-                branch: activeThreadBranch,
-                startFromOrigin,
-              }),
-            );
+            const nextDraft = activeProject
+              ? await handleNewThread(
+                  scopeProjectRef(activeProject.environmentId, activeProject.id),
+                  resolveBackgroundDraftWorkspaceOptions({
+                    envMode: sendEnvMode,
+                    branch: activeThreadBranch,
+                    startFromOrigin,
+                  }),
+                )
+              : await handleNewProjectlessThread(environmentId);
             if (nextDraft) {
               finalizePromotedDraftThreadByRef(backgroundThreadRef);
               toastManager.add(

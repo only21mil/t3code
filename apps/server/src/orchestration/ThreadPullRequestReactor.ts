@@ -131,6 +131,7 @@ export const make = Effect.gen(function* () {
       (group) =>
         Effect.gen(function* () {
           const first = group[0]!;
+          if (first.projectId === null) return finishBackfill(group);
           const project = projects.get(first.projectId);
           if (project === undefined) return finishBackfill(group);
           const repository = sourceControlRepositorySelector(project.repositoryIdentity);

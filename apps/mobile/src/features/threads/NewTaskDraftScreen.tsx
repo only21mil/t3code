@@ -21,6 +21,7 @@ import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { useFontFamily } from "../../lib/useFontFamily";
 
 import {
+  EnvironmentId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   resolveEnvironmentMachineKind,
 } from "@t3tools/contracts";
@@ -515,7 +516,7 @@ export function NewTaskDraftScreen(props: {
     const initialProjectId = props.initialProjectRef?.projectId;
     if (initialEnvironmentId && !initialProjectId) {
       if (!flow.isProjectless || flow.selectedEnvironmentId !== initialEnvironmentId) {
-        setProjectless(initialEnvironmentId);
+        setProjectless(EnvironmentId.make(initialEnvironmentId));
       }
       return;
     }
@@ -1311,7 +1312,7 @@ export function NewTaskDraftScreen(props: {
         {flow.attachments.length > 0 ? (
           <View className="px-[14px] pb-2.5">
             <ComposerAttachmentStrip
-              environmentId={selectedEnvironmentId ?? selectedProject?.environmentId ?? ""}
+              environmentId={selectedEnvironmentId ?? selectedProject?.environmentId}
               attachments={flow.attachments}
               imageBorderRadius={16}
               imageSize={72}

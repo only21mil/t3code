@@ -49,11 +49,11 @@ class AgentSessionThreadProjectConflictError extends Schema.TaggedError<AgentSes
   {
     threadId: ThreadId,
     expectedProjectId: ProjectId,
-    actualProjectId: ProjectId,
+    actualProjectId: Schema.NullOr(ProjectId),
   },
 ) {
   override get message(): string {
-    return `Imported thread '${this.threadId}' belongs to project '${this.actualProjectId}', not '${this.expectedProjectId}'.`;
+    return `Imported thread '${this.threadId}' belongs to project '${this.actualProjectId ?? "none"}', not '${this.expectedProjectId}'.`;
   }
 }
 

@@ -2991,11 +2991,11 @@ export default function Sidebar() {
               (key) => !settledKeys.has(key) && !snoozedKeys.has(key) && !coParkingKeys?.has(key),
             ) ?? null);
       const nextThread = nextCardKey ? threadByKeyRef.current.get(nextCardKey) : null;
+      const projectId = shell?.projectId ?? null;
       return nextThread
         ? () => navigateToThread(scopeThreadRef(nextThread.environmentId, nextThread.id))
-        : shell?.projectId
-          ? () =>
-              void handleNewThreadRef.current(scopeProjectRef(shell.environmentId, shell.projectId))
+        : projectId && shell
+          ? () => void handleNewThreadRef.current(scopeProjectRef(shell.environmentId, projectId))
           : shell
             ? () => void newThreadContext.handleNewProjectlessThread(shell.environmentId)
             : () => void router.navigate({ to: "/" });
@@ -3963,8 +3963,10 @@ export default function Sidebar() {
         if (!thread) return;
         const threadWorkspacePath =
           thread.worktreePath ??
-          projectByKey.get(`${thread.environmentId}:${thread.projectId}`)?.workspaceRoot ??
-          null;
+          (thread.projectId === null
+            ? null
+            : (projectByKey.get(`${thread.environmentId}:${thread.projectId}`)?.workspaceRoot ??
+              null));
         // Un-settle pins the thread active until real activity clears the pin.
         // Environments without
         // the settlement capability get no lifecycle items at all.
@@ -4027,13 +4029,14 @@ export default function Sidebar() {
             return;
           }
           case "new-thread-on-branch": {
-            if (thread.projectId === null) {
+            const projectId = thread.projectId;
+            if (projectId === null) {
               return;
             }
             // Explicit branch carry-over: reuse the thread's worktree when it
             // has one, otherwise its branch on the local checkout.
             const result = await settlePromise(() =>
-              handleNewThreadRef.current(scopeProjectRef(thread.environmentId, thread.projectId), {
+              handleNewThreadRef.current(scopeProjectRef(thread.environmentId, projectId), {
                 branch: thread.branch,
                 worktreePath: thread.worktreePath,
                 envMode: thread.worktreePath ? "worktree" : "local",
@@ -4592,12 +4595,17 @@ export default function Sidebar() {
                         key={threadKey}
                         thread={thread}
                         project={
-                          projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null
+                          thread.projectId === null
+                            ? null
+                            : (projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ??
+                              null)
                         }
                         projectDisplayName={
-                          projectDisplayNameByKey.get(
-                            `${thread.environmentId}:${thread.projectId}`,
-                          ) ?? null
+                          thread.projectId === null
+                            ? null
+                            : (projectDisplayNameByKey.get(
+                                `${thread.environmentId}:${thread.projectId}`,
+                              ) ?? null)
                         }
                         environmentLabel={environmentLabelById.get(thread.environmentId) ?? null}
                         environmentMachine={
@@ -4730,13 +4738,18 @@ export default function Sidebar() {
                               environmentMachineById.get(thread.environmentId) ?? "server"
                             }
                             project={
-                              projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ??
-                              null
+                              thread.projectId === null
+                                ? null
+                                : (projectByKey.get(
+                                    `${thread.environmentId}:${thread.projectId}`,
+                                  ) ?? null)
                             }
                             projectDisplayName={
-                              projectDisplayNameByKey.get(
-                                `${thread.environmentId}:${thread.projectId}`,
-                              ) ?? null
+                              thread.projectId === null
+                                ? null
+                                : (projectDisplayNameByKey.get(
+                                    `${thread.environmentId}:${thread.projectId}`,
+                                  ) ?? null)
                             }
                             providerEntryByInstanceId={
                               providerEntriesByEnvironment.get(thread.environmentId) ??

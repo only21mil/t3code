@@ -363,7 +363,7 @@ type ScopedSidebarProject = SidebarProject & {
 
 type ScopedSidebarThread = ThreadSortInput & {
   environmentId: string;
-  projectId: string;
+  projectId: string | null;
   archivedAt: string | null;
 };
 

@@ -2949,25 +2949,27 @@ pending_approval_requests AS (
       );
 
   const getProjectShellById: ProjectionSnapshotQueryShape["getProjectShellById"] = (projectId) =>
-    getActiveProjectRowById({ projectId }).pipe(
-      Effect.mapError(
-        toPersistenceSqlOrDecodeError(
-          "ProjectionSnapshotQuery.getProjectShellById:query",
-          "ProjectionSnapshotQuery.getProjectShellById:decodeRow",
-        ),
-      ),
-      Effect.flatMap((option) =>
-        Option.isNone(option)
-          ? Effect.succeed(Option.none<OrchestrationProjectShell>())
-          : repositoryIdentityResolver
-              .resolve(option.value.workspaceRoot)
-              .pipe(
-                Effect.map((repositoryIdentity) =>
-                  Option.some(mapProjectShellRow(option.value, repositoryIdentity)),
-                ),
-              ),
-      ),
-    );
+    projectId === null
+      ? Effect.succeed(Option.none())
+      : getActiveProjectRowById({ projectId }).pipe(
+          Effect.mapError(
+            toPersistenceSqlOrDecodeError(
+              "ProjectionSnapshotQuery.getProjectShellById:query",
+              "ProjectionSnapshotQuery.getProjectShellById:decodeRow",
+            ),
+          ),
+          Effect.flatMap((option) =>
+            Option.isNone(option)
+              ? Effect.succeed(Option.none<OrchestrationProjectShell>())
+              : repositoryIdentityResolver
+                  .resolve(option.value.workspaceRoot)
+                  .pipe(
+                    Effect.map((repositoryIdentity) =>
+                      Option.some(mapProjectShellRow(option.value, repositoryIdentity)),
+                    ),
+                  ),
+          ),
+        );
 
   const getFirstActiveThreadIdByProjectId: ProjectionSnapshotQueryShape["getFirstActiveThreadIdByProjectId"] =
     (projectId) =>

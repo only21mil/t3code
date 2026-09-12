@@ -470,7 +470,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       resolveProjectSettings(
         selectedEnvironmentServerConfig?.settings ?? DEFAULT_SERVER_SETTINGS,
         selectedProject?.id ?? null,
-        selectedProject,
+        selectedProject ?? undefined,
       ),
     [selectedEnvironmentServerConfig?.settings, selectedProject],
   );

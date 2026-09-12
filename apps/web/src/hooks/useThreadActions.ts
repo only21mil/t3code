@@ -334,10 +334,13 @@ export function useThreadActions() {
         const shell = readThreadShell(ref);
         return shell === null ? [] : [shell];
       });
-      const threadProject = readProject({
-        environmentId: threadRef.environmentId,
-        projectId: thread.projectId,
-      });
+      const threadProject =
+        thread.projectId === null
+          ? null
+          : readProject({
+              environmentId: threadRef.environmentId,
+              projectId: thread.projectId,
+            });
       const deletedIds =
         opts.deletedThreadKeys && opts.deletedThreadKeys.size > 0
           ? new Set<ThreadId>(

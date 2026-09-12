@@ -5,7 +5,7 @@ import {
   type EnvironmentProject,
   type EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
-import type { EnvironmentId } from "@t3tools/contracts";
+import { ProjectId, type EnvironmentId } from "@t3tools/contracts";
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 
@@ -28,6 +28,20 @@ function matchesQuery(value: string | null, query: string): boolean {
   return value?.toLocaleLowerCase().includes(query) ?? false;
 }
 
+function chatsGroupStandIn(environmentId: EnvironmentId, createdAt: string): EnvironmentProject {
+  return {
+    environmentId,
+    id: ProjectId.make("projectless"),
+    title: "Chats",
+    workspaceRoot: "",
+    repositoryIdentity: null,
+    defaultModelSelection: null,
+    scripts: [],
+    createdAt,
+    updatedAt: createdAt,
+  };
+}
+
 export function buildArchivedThreadGroups(input: {
   readonly snapshots: ReadonlyArray<ArchivedSnapshotEntry>;
   readonly environmentLabels: Readonly<Record<string, string>>;
@@ -45,12 +59,18 @@ export function buildArchivedThreadGroups(input: {
 
     const environmentLabel = input.environmentLabels[entry.environmentId] ?? null;
     const threadsByProjectId = new Map<string, EnvironmentThreadShell[]>();
+    const projectlessThreads: EnvironmentThreadShell[] = [];
     for (const thread of entry.snapshot.threads) {
       if (thread.archivedAt === null) {
         continue;
       }
+      const scoped = scopeThreadShell(entry.environmentId, thread);
+      if (thread.projectId === null) {
+        projectlessThreads.push(scoped);
+        continue;
+      }
       const threads = threadsByProjectId.get(thread.projectId) ?? [];
-      threads.push(scopeThreadShell(entry.environmentId, thread));
+      threads.push(scoped);
       threadsByProjectId.set(thread.projectId, threads);
     }
 
@@ -78,6 +98,39 @@ export function buildArchivedThreadGroups(input: {
         project,
         threads: Arr.sort(
           matchingThreads,
+          Order.mapInput(
+            Order.Struct({ timestamp: timestampOrder, title: Order.String, id: Order.String }),
+            (thread: EnvironmentThreadShell) => ({
+              timestamp: archiveTimestamp(thread),
+              title: thread.title,
+              id: thread.id,
+            }),
+          ),
+        ),
+      });
+    }
+
+    const chatsGroupMatches =
+      query.length === 0 ||
+      matchesQuery("Chats", query) ||
+      matchesQuery(environmentLabel, query);
+    const matchingProjectlessThreads = chatsGroupMatches
+      ? projectlessThreads
+      : projectlessThreads.filter(
+          (thread) => matchesQuery(thread.title, query) || matchesQuery(thread.branch, query),
+        );
+    if (matchingProjectlessThreads.length > 0) {
+      const timestampOrder = input.sortOrder === "newest" ? Order.flip(Order.Number) : Order.Number;
+      groups.push({
+        key: scopedProjectKey(entry.environmentId, null),
+        project: chatsGroupStandIn(
+          entry.environmentId,
+          matchingProjectlessThreads[0]?.archivedAt ??
+            matchingProjectlessThreads[0]?.updatedAt ??
+            "",
+        ),
+        threads: Arr.sort(
+          matchingProjectlessThreads,
           Order.mapInput(
             Order.Struct({ timestamp: timestampOrder, title: Order.String, id: Order.String }),
             (thread: EnvironmentThreadShell) => ({

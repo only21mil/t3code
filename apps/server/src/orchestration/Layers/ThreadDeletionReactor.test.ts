@@ -5,6 +5,7 @@ import {
   type OrchestrationEvent,
   ThreadId,
 } from "@t3tools/contracts";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it as effectIt } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -114,6 +115,7 @@ describe("ThreadDeletionReactor drain", () => {
         Layer.provide(Layer.succeed(TerminalManager.TerminalManager, terminalManager)),
         Layer.provide(Layer.succeed(OrchestrationEngineService, engine)),
         Layer.provide(serverConfigLayerTest("/tmp", { prefix: "thread-deletion-reactor-" })),
+        Layer.provide(NodeServices.layer),
       );
 
       yield* Effect.scoped(
