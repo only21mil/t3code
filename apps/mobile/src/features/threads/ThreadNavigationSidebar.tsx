@@ -298,6 +298,7 @@ function ThreadNavigationSidebarPane(
         : selectedProjectRefs === null
           ? threads
           : threads.filter((thread) =>
+              thread.projectId !== null &&
               selectedProjectRefs.has(scopedProjectKey(thread.environmentId, thread.projectId)),
             ),
     [threadListV2Enabled, selectedProjectRefs, threads],

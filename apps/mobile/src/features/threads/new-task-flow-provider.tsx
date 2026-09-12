@@ -167,6 +167,7 @@ type NewTaskFlowContextValue = {
     readonly environmentLabel: string;
   }>;
   readonly selectedProject: EnvironmentProject | null;
+  readonly isProjectless: boolean;
   readonly modelOptions: ReadonlyArray<ModelOption>;
   readonly selectedModel: ModelSelection | null;
   readonly selectedModelOption: ModelOption | null;
@@ -175,6 +176,7 @@ type NewTaskFlowContextValue = {
   readonly filteredBranches: ReadonlyArray<VcsRef>;
   readonly reset: () => void;
   readonly setProject: (project: EnvironmentProject) => void;
+  readonly setProjectless: (environmentId: EnvironmentId) => void;
   /**
    * Binds the composer to an existing new-task draft (a row in the thread
    * list). Returns false when the draft is gone, so the caller can fall back
@@ -246,10 +248,18 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   );
   const selectedEnvironmentId =
     selectedEnvironmentIdOverride !== null &&
-    projects.some((project) => project.environmentId === selectedEnvironmentIdOverride)
+    (projects.some((project) => project.environmentId === selectedEnvironmentIdOverride) ||
+      savedConnectionsById[selectedEnvironmentIdOverride] !== undefined)
       ? selectedEnvironmentIdOverride
-      : (projects[0]?.environmentId ?? null);
+      : (projects[0]?.environmentId ??
+        (Object.keys(savedConnectionsById)[0] as EnvironmentId | undefined) ??
+        null);
   const [selectedProjectKey, setSelectedProjectKey] = useState<string | null>(null);
+  const projectlessEnvironmentId =
+    selectedProjectKey !== null && selectedProjectKey.startsWith("projectless:")
+      ? (selectedProjectKey.slice("projectless:".length) as EnvironmentId)
+      : null;
+  const isProjectless = projectlessEnvironmentId !== null;
   // The new-task draft the composer is bound to. Null until a project is
   // chosen; each New Task entry mints its own, so a project can hold several.
   const [activeDraftKey, setActiveDraftKey] = useState<string | null>(null);
@@ -298,7 +308,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   // snapshotted at enqueue time.
   const editingPendingProject = useMemo<EnvironmentProject | null>(() => {
     const creation = editingPendingTask?.creation;
-    if (!editingPendingTask || !creation) {
+    if (!editingPendingTask || !creation || creation.projectId === null) {
       return null;
     }
     return {
@@ -317,18 +327,19 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     };
   }, [editingPendingTask]);
 
-  const selectedProject =
-    projectsForEnvironment.find(
-      (project) => scopedProjectKey(project.environmentId, project.id) === selectedProjectKey,
-    ) ??
-    // While editing a queued task whose project shell is absent, keep the task
-    // pinned to its own project — falling through to an arbitrary first
-    // project would silently retarget it (and its reused turn identifiers).
-    (editingPendingProject !== null &&
-    selectedProjectKey ===
-      scopedProjectKey(editingPendingProject.environmentId, editingPendingProject.id)
-      ? editingPendingProject
-      : (projectsForEnvironment[0] ?? null));
+  const selectedProject = isProjectless
+    ? null
+    : (projectsForEnvironment.find(
+        (project) => scopedProjectKey(project.environmentId, project.id) === selectedProjectKey,
+      ) ??
+      // While editing a queued task whose project shell is absent, keep the task
+      // pinned to its own project — falling through to an arbitrary first
+      // project would silently retarget it (and its reused turn identifiers).
+      (editingPendingProject !== null &&
+      selectedProjectKey ===
+        scopedProjectKey(editingPendingProject.environmentId, editingPendingProject.id)
+        ? editingPendingProject
+        : (projectsForEnvironment[0] ?? null)));
 
   // Only offer machines that actually host the currently selected repository, so
   // switching computers moves the same repo across machines instead of jumping to
@@ -359,40 +370,51 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         (selectedProjectTitle !== null && project.title === selectedProjectTitle)
       );
     };
+    const addConnection = (environmentId: EnvironmentId) => {
+      if (seen.has(environmentId)) {
+        return;
+      }
+      const environment = savedConnectionsById[environmentId];
+      if (!environment) {
+        return;
+      }
+      seen.add(environmentId);
+      result.push({
+        environmentId,
+        environmentLabel: environment.environmentLabel,
+      });
+    };
+    if (isProjectless || selectedProject === null) {
+      for (const environmentId of Object.keys(savedConnectionsById) as EnvironmentId[]) {
+        addConnection(environmentId);
+      }
+      return result;
+    }
     for (const project of projects) {
       if (!hostsSelectedRepository(project)) {
         continue;
       }
-      if (seen.has(project.environmentId)) {
-        continue;
-      }
-      const environment = savedConnectionsById[project.environmentId];
-      if (!environment) {
-        continue;
-      }
-      seen.add(project.environmentId);
-      result.push({
-        environmentId: project.environmentId,
-        environmentLabel: environment.environmentLabel,
-      });
+      addConnection(project.environmentId);
     }
     return result;
   }, [
+    isProjectless,
     projects,
     savedConnectionsById,
+    selectedProject,
     selectedRepositoryKey,
     selectedWorkspaceBasename,
     selectedProjectTitle,
   ]);
 
   const selectedEnvironmentServerConfig = useEnvironmentServerConfig(
-    selectedProject?.environmentId ?? null,
+    selectedProject?.environmentId ?? projectlessEnvironmentId ?? selectedEnvironmentId,
   );
   // While a queued pending task is being edited its draft lives under a key
   // scoped to the queued message, so new-task drafts stay intact.
   const selectedProjectDraftKey = editingPendingTask
     ? pendingTaskDraftKey(editingPendingTask.messageId)
-    : selectedProject
+    : selectedProject || isProjectless
       ? activeDraftKey
       : null;
   // selectedProject can resolve without setProject ever running (the
@@ -401,16 +423,27 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   // still needs a draft to write into, so bind one the moment a project is
   // in view and nothing else owns the key.
   useEffect(() => {
-    if (activeDraftKey !== null || editingPendingTask !== null || selectedProject === null) {
+    if (activeDraftKey !== null || editingPendingTask !== null) {
       return;
     }
-    setActiveDraftKey(
-      createNewTaskDraft({
-        environmentId: selectedProject.environmentId,
-        projectId: selectedProject.id,
-      }),
-    );
-  }, [activeDraftKey, editingPendingTask, selectedProject]);
+    if (selectedProject !== null) {
+      setActiveDraftKey(
+        createNewTaskDraft({
+          environmentId: selectedProject.environmentId,
+          projectId: selectedProject.id,
+        }),
+      );
+      return;
+    }
+    if (projectlessEnvironmentId !== null) {
+      setActiveDraftKey(
+        createNewTaskDraft({
+          environmentId: projectlessEnvironmentId,
+          projectId: null,
+        }),
+      );
+    }
+  }, [activeDraftKey, editingPendingTask, projectlessEnvironmentId, selectedProject]);
   const selectedProjectDraft = useComposerDraft(selectedProjectDraftKey);
   const prompt = selectedProjectDraft.text;
   const attachments = selectedProjectDraft.attachments;
@@ -698,12 +731,23 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     [carryDraftContentTo],
   );
 
+  const setProjectless = useCallback((environmentId: EnvironmentId) => {
+    setSelectedEnvironmentId(environmentId);
+    setSelectedProjectKey(`projectless:${environmentId}`);
+  }, []);
+
   const openDraft = useCallback(
     (draftKey: string): boolean => {
       const draft = appAtomRegistry.get(composerDraftsAtom)[draftKey];
       const stamp = draft?.project;
       if (!isNewTaskDraftKey(draftKey) || !stamp) {
         return false;
+      }
+      if (stamp.projectId === null) {
+        setActiveDraftKey(draftKey);
+        setSelectedEnvironmentId(stamp.environmentId);
+        setSelectedProjectKey(`projectless:${stamp.environmentId}`);
+        return true;
       }
       // The stamped project must be loaded: selectedProject falls back to
       // the environment's first project otherwise, and the draft would be
@@ -940,7 +984,11 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       metadata: TurnCommandMetadata,
       options?: { readonly currentCheckoutBranch?: string | null },
     ): QueuedThreadMessage | null => {
-      if (!selectedProject || !selectedProjectDraftKey) {
+      if ((!selectedProject && !isProjectless) || !selectedProjectDraftKey) {
+        return null;
+      }
+      const environmentId = selectedProject?.environmentId ?? projectlessEnvironmentId;
+      if (!environmentId) {
         return null;
       }
       const draft = getComposerDraftSnapshot(selectedProjectDraftKey);
@@ -958,7 +1006,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       const workspaceSelection = draft.workspaceSelection;
       // Fall back to the resolved mode (server default) so queued tasks drain
       // with the same mode the composer displayed.
-      const mode = workspaceSelection?.mode ?? workspaceMode;
+      const mode = isProjectless ? "local" : (workspaceSelection?.mode ?? workspaceMode);
       // When the selection is the stand-in built from the queued snapshot,
       // persist the original (possibly absent) snapshot values — the
       // stand-in's placeholder title/workspaceRoot must never be written back
@@ -966,12 +1014,12 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       const usingPendingSnapshot = selectedProject === editingPendingProject;
       const projectTitle = usingPendingSnapshot
         ? editingPendingTask?.creation?.projectTitle
-        : selectedProject.title;
+        : selectedProject?.title;
       const projectCwd = usingPendingSnapshot
         ? editingPendingTask?.creation?.projectCwd
-        : selectedProject.workspaceRoot;
+        : selectedProject?.workspaceRoot;
       return {
-        environmentId: selectedProject.environmentId,
+        environmentId,
         threadId: ThreadId.make(metadata.threadId),
         messageId: MessageId.make(metadata.messageId),
         commandId: CommandId.make(metadata.commandId),
@@ -989,7 +1037,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
           ),
         }),
         creation: {
-          projectId: selectedProject.id,
+          projectId: selectedProject?.id ?? null,
           ...(projectTitle !== undefined ? { projectTitle } : {}),
           ...(projectCwd !== undefined ? { projectCwd } : {}),
           workspaceMode: mode,
@@ -1016,6 +1064,8 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     [
       editingPendingProject,
       editingPendingTask,
+      isProjectless,
+      projectlessEnvironmentId,
       selectedEnvironmentServerConfig,
       selectedModel,
       selectedProject,
@@ -1157,6 +1207,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       expandedProvider,
       environments,
       selectedProject,
+      isProjectless,
       modelOptions,
       selectedModel,
       selectedModelOption,
@@ -1165,6 +1216,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       filteredBranches,
       reset,
       setProject,
+      setProjectless,
       openDraft,
       selectEnvironment,
       setSelectedModelKey,
@@ -1206,6 +1258,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       filteredBranches,
       finishEditingPendingTask,
       interactionMode,
+      isProjectless,
       planModeEnabled,
       loadBranches,
       loadMoreBranches,
@@ -1229,6 +1282,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       selectedProjectKey,
       selectedWorktreePath,
       setProject,
+      setProjectless,
       openDraft,
       selectBranch,
       selectEnvironment,

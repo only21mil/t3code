@@ -1148,6 +1148,9 @@ export function sortProjectsForSidebar<
 ): TProject[] {
   const threadsByProjectId = new Map<string, TThread[]>();
   for (const thread of threads) {
+    if (thread.projectId === null) {
+      continue;
+    }
     const existing = threadsByProjectId.get(thread.projectId) ?? [];
     existing.push(thread);
     threadsByProjectId.set(thread.projectId, existing);
@@ -1179,7 +1182,7 @@ export function sortLogicalProjectsForSidebar<
   );
   const threadsByProjectKey = new Map<string, TThread[]>();
   for (const thread of threads) {
-    if (thread.archivedAt !== null) continue;
+    if (thread.archivedAt !== null || thread.projectId === null) continue;
     const projectKey = groupKeyByProjectRef.get(`${thread.environmentId}\0${thread.projectId}`);
     if (!projectKey) continue;
     const existing = threadsByProjectKey.get(projectKey);
@@ -1217,6 +1220,9 @@ export function sortScopedProjectsForSidebar<
   const threadsByProject = new Map<string, TThread[]>();
   for (const thread of threads) {
     if (thread.archivedAt !== null) {
+      continue;
+    }
+    if (thread.projectId === null) {
       continue;
     }
     const key = scopedKey(thread.environmentId, thread.projectId);

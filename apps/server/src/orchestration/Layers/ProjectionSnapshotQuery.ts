@@ -142,7 +142,7 @@ const ProjectionThreadActivityIdRowSchema = Schema.Struct({
 const ProjectionThreadSessionDbRowSchema = ProjectionThreadSession;
 const ProjectionThreadRuntimeContextDbRowSchema = Schema.Struct({
   id: ThreadId,
-  projectId: ProjectId,
+  projectId: Schema.NullOr(ProjectId),
   title: Schema.String,
   session: Schema.NullOr(ProjectionThreadSessionDbRowSchema),
 });
@@ -181,7 +181,7 @@ const ProjectionThreadSearchRequest = Schema.Struct({
 });
 const ProjectionThreadSearchRow = Schema.Struct({
   threadId: ThreadId,
-  projectId: ProjectId,
+  projectId: Schema.NullOr(ProjectId),
   source: OrchestrationThreadSearchSource,
   matchText: Schema.String,
   messageCreatedAt: Schema.NullOr(IsoDateTime),
@@ -246,8 +246,8 @@ const ProjectionThreadIdLookupRowSchema = Schema.Struct({
 });
 const ProjectionThreadCheckpointContextThreadRowSchema = Schema.Struct({
   threadId: ThreadId,
-  projectId: ProjectId,
-  workspaceRoot: Schema.String,
+  projectId: Schema.NullOr(ProjectId),
+  workspaceRoot: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
 });
 const FullThreadDiffContextLookupInput = Schema.Struct({
@@ -256,8 +256,8 @@ const FullThreadDiffContextLookupInput = Schema.Struct({
 });
 const ProjectionFullThreadDiffContextRowSchema = Schema.Struct({
   threadId: ThreadId,
-  projectId: ProjectId,
-  workspaceRoot: Schema.String,
+  projectId: Schema.NullOr(ProjectId),
+  workspaceRoot: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
   latestCheckpointTurnCount: Schema.NullOr(NonNegativeInt),
   toCheckpointRef: Schema.NullOr(CheckpointRef),
@@ -448,9 +448,12 @@ function groupPullRequestRowsByThread(
  */
 function mapThreadPullRequests(
   pullRequests: ReadonlyArray<ThreadPullRequestLink>,
-  projectId: ProjectId,
+  projectId: ProjectId | null,
   identity?: OrchestrationProject["repositoryIdentity"],
 ): Pick<OrchestrationThread, "pullRequests" | "linkedPullRequest"> {
+  if (projectId === null) {
+    return { pullRequests };
+  }
   const linkedPullRequest = legacyLinkedPullRequestOf(pullRequests, projectId, identity);
   return {
     pullRequests,
@@ -549,6 +552,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
+          workspace_ownership AS "workspaceOwnership",
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
@@ -589,6 +593,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
+          workspace_ownership AS "workspaceOwnership",
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
@@ -631,6 +636,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
+          workspace_ownership AS "workspaceOwnership",
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
@@ -1034,11 +1040,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           FROM projection_thread_messages AS messages
           INNER JOIN projection_threads AS threads
             ON threads.thread_id = messages.thread_id
-          INNER JOIN projection_projects AS projects
+          LEFT JOIN projection_projects AS projects
             ON projects.project_id = threads.project_id
           WHERE threads.deleted_at IS NULL
             AND threads.archived_at IS NULL
-            AND projects.deleted_at IS NULL
+            AND (projects.project_id IS NULL OR projects.deleted_at IS NULL)
             AND messages.is_streaming = 0
             AND (
               messages.role = 'user'
@@ -1174,7 +1180,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           projects.workspace_root AS "workspaceRoot",
           threads.worktree_path AS "worktreePath"
         FROM projection_threads AS threads
-        INNER JOIN projection_projects AS projects
+        LEFT JOIN projection_projects AS projects
           ON projects.project_id = threads.project_id
         WHERE threads.thread_id = ${threadId}
           AND threads.deleted_at IS NULL
@@ -1190,6 +1196,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           project_id AS "projectId",
+          workspace_ownership AS "workspaceOwnership",
           title,
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
@@ -1954,7 +1961,7 @@ pending_approval_requests AS (
             LIMIT 1
           ) AS "toCheckpointRef"
         FROM projection_threads AS threads
-        INNER JOIN projection_projects AS projects
+        LEFT JOIN projection_projects AS projects
           ON projects.project_id = threads.project_id
         WHERE threads.thread_id = ${threadId}
           AND threads.deleted_at IS NULL
@@ -2221,6 +2228,7 @@ pending_approval_requests AS (
               const threads: ReadonlyArray<OrchestrationThread> = threadRows.map((row) => ({
                 id: row.threadId,
                 projectId: row.projectId,
+                ...(row.workspaceOwnership ? { workspaceOwnership: row.workspaceOwnership } : {}),
                 title: row.title,
                 modelSelection: row.modelSelection,
                 runtimeMode: row.runtimeMode,
@@ -2230,7 +2238,7 @@ pending_approval_requests AS (
                 ...mapThreadPullRequests(
                   pullRequestsByThread.get(row.threadId) ?? [],
                   row.projectId,
-                  repositoryIdentities.get(row.projectId),
+                  row.projectId === null ? undefined : repositoryIdentities.get(row.projectId),
                 ),
                 branchPullRequest: row.branchPullRequest,
                 latestTurn: latestTurnByThread.get(row.threadId) ?? null,
@@ -2474,7 +2482,7 @@ pending_approval_requests AS (
                   ...mapThreadPullRequests(
                     pullRequestsByThread.get(row.threadId) ?? [],
                     row.projectId,
-                    repositoryIdentities.get(row.projectId),
+                    row.projectId === null ? undefined : repositoryIdentities.get(row.projectId),
                   ),
                   branchPullRequest: row.branchPullRequest,
                   latestTurn: latestTurnByThread.get(row.threadId) ?? null,
@@ -2630,7 +2638,7 @@ pending_approval_requests AS (
                         ...mapThreadPullRequests(
                           pullRequestsByThread.get(row.threadId) ?? [],
                           row.projectId,
-                          repositoryIdentities.get(row.projectId),
+                          row.projectId === null ? undefined : repositoryIdentities.get(row.projectId),
                         ),
                         latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                         createdAt: row.createdAt,
@@ -2792,7 +2800,7 @@ pending_approval_requests AS (
                   ...mapThreadPullRequests(
                     pullRequestsByThread.get(row.threadId) ?? [],
                     row.projectId,
-                    repositoryIdentities.get(row.projectId),
+                    row.projectId === null ? undefined : repositoryIdentities.get(row.projectId),
                   ),
                   latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                   createdAt: row.createdAt,

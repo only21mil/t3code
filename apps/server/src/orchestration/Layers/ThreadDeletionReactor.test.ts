@@ -26,6 +26,7 @@ import {
   type OrchestrationEngineShape,
 } from "../Services/OrchestrationEngine.ts";
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
+import { layerTest as serverConfigLayerTest } from "../../config.ts";
 import {
   logCleanupCauseUnlessInterrupted,
   ThreadDeletionReactorLive,
@@ -112,6 +113,7 @@ describe("ThreadDeletionReactor drain", () => {
         Layer.provide(Layer.succeed(ProviderService, providerService)),
         Layer.provide(Layer.succeed(TerminalManager.TerminalManager, terminalManager)),
         Layer.provide(Layer.succeed(OrchestrationEngineService, engine)),
+        Layer.provide(serverConfigLayerTest("/tmp", { prefix: "thread-deletion-reactor-" })),
       );
 
       yield* Effect.scoped(

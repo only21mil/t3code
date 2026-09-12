@@ -18,7 +18,7 @@ export interface PendingQueuedTask {
   readonly kind: "pending";
   readonly key: string;
   readonly environmentId: EnvironmentId;
-  readonly projectId: ProjectId;
+  readonly projectId: ProjectId | null;
   readonly projectTitle: string | undefined;
   readonly projectCwd: string | undefined;
   readonly branch: string | null;
@@ -32,7 +32,7 @@ export interface PendingDraftTask {
   readonly kind: "draft";
   readonly key: string;
   readonly environmentId: EnvironmentId;
-  readonly projectId: ProjectId;
+  readonly projectId: ProjectId | null;
   readonly projectTitle: undefined;
   readonly projectCwd: undefined;
   readonly branch: string | null;

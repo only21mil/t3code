@@ -27,7 +27,8 @@ import type { ProjectionRepositoryError } from "../Errors.ts";
 
 export const ProjectionThread = Schema.Struct({
   threadId: ThreadId,
-  projectId: ProjectId,
+  projectId: Schema.NullOr(ProjectId),
+  workspaceOwnership: Schema.optional(Schema.NullOr(Schema.Literals(["app", "user"]))),
   title: Schema.String,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,

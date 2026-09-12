@@ -7,6 +7,7 @@ import {
 import {
   DEFAULT_RUNTIME_MODE,
   DEFAULT_SERVER_SETTINGS,
+  type EnvironmentId,
   type ScopedProjectRef,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -40,6 +41,7 @@ import { environmentServerConfigsAtom } from "../state/server";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
 import { useClientSettings } from "./useSettings";
+import { projectlessLogicalKey } from "@t3tools/client-runtime/projectless";
 
 interface NewThreadWorkspaceOptions {
   branch?: string | null;
@@ -448,6 +450,63 @@ export function useNewThreadHandler() {
   );
 }
 
+export function useNewProjectlessThreadHandler() {
+  const router = useRouter();
+  return useCallback(
+    (
+      environmentId: EnvironmentId,
+      options?: { readonly replace?: boolean },
+    ): Promise<{ draftId: DraftId; threadId: ThreadId } | null> => {
+      const {
+        getDraftSessionByLogicalProjectKey,
+        getComposerDraft,
+        setProjectlessDraftThreadId,
+        applyStickyState,
+      } = useComposerDraftStore.getState();
+      const logicalProjectKey = projectlessLogicalKey(environmentId);
+      const storedDraftThread = getDraftSessionByLogicalProjectKey(logicalProjectKey);
+      const storedDraftThreadRef = storedDraftThread
+        ? scopeThreadRef(storedDraftThread.environmentId, storedDraftThread.threadId)
+        : null;
+      const reusableStoredDraftThread =
+        storedDraftThread !== null &&
+        storedDraftThread.promotedTo == null &&
+        storedDraftThreadRef !== null &&
+        readThreadShell(storedDraftThreadRef) === null &&
+        !composerDraftHasUserContent(getComposerDraft(storedDraftThread.draftId))
+          ? storedDraftThread
+          : null;
+      if (reusableStoredDraftThread) {
+        return router
+          .navigate({
+            to: "/draft/$draftId",
+            params: { draftId: reusableStoredDraftThread.draftId },
+            replace: options?.replace ?? false,
+          })
+          .then(() => ({
+            draftId: reusableStoredDraftThread.draftId,
+            threadId: reusableStoredDraftThread.threadId,
+          }));
+      }
+      const draftId = newDraftId();
+      const threadId = newThreadId();
+      setProjectlessDraftThreadId(environmentId, draftId, {
+        threadId,
+        createdAt: new Date().toISOString(),
+      });
+      applyStickyState(draftId);
+      return router
+        .navigate({
+          to: "/draft/$draftId",
+          params: { draftId },
+          replace: options?.replace ?? false,
+        })
+        .then(() => ({ draftId, threadId }));
+    },
+    [router],
+  );
+}
+
 export function useHandleNewThread() {
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const routeTarget = useParams({
@@ -478,6 +537,7 @@ export function useHandleNewThread() {
     });
   }, [projectOrder, projects]);
   const handleNewThread = useNewThreadHandler();
+  const handleNewProjectlessThread = useNewProjectlessThreadHandler();
 
   return {
     activeDraftThread,
@@ -486,6 +546,7 @@ export function useHandleNewThread() {
       ? scopeProjectRef(orderedProjects[0].environmentId, orderedProjects[0].id)
       : null,
     handleNewThread,
+    handleNewProjectlessThread,
     routeDraftId,
     routeThreadRef,
   };

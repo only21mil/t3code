@@ -395,7 +395,11 @@ export function buildThreadListV2Items(input: {
   for (const thread of input.threads) {
     // Callers pass live shells. The server stamps settledOverride for the tail.
     if (input.environmentId !== null && thread.environmentId !== input.environmentId) continue;
-    if (projectKeys !== null && !projectKeys.has(`${thread.environmentId}:${thread.projectId}`)) {
+    if (
+      projectKeys !== null &&
+      (thread.projectId === null ||
+        !projectKeys.has(`${thread.environmentId}:${thread.projectId}`))
+    ) {
       continue;
     }
     if (

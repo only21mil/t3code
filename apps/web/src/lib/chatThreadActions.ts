@@ -14,7 +14,7 @@ type ComposerModelSelectionState = Pick<
 
 interface ThreadContextLike {
   environmentId: EnvironmentId;
-  projectId: ProjectId;
+  projectId: ProjectId | null;
 }
 
 interface NewThreadHandler {
@@ -35,6 +35,9 @@ export interface ChatThreadActionContext {
   readonly activeThread: ThreadContextLike | undefined;
   readonly defaultProjectRef: ScopedProjectRef | null;
   readonly handleNewThread: NewThreadHandler;
+  readonly handleNewProjectlessThread?: (
+    environmentId: EnvironmentId,
+  ) => Promise<unknown>;
 }
 
 export function resolveNewDraftStartFromOrigin(input: {
@@ -71,10 +74,10 @@ export function hasExplicitComposerModelSelection(
 export function resolveThreadActionProjectRef(
   context: ChatThreadActionContext,
 ): ScopedProjectRef | null {
-  if (context.activeThread) {
+  if (context.activeThread?.projectId) {
     return scopeProjectRef(context.activeThread.environmentId, context.activeThread.projectId);
   }
-  if (context.activeDraftThread) {
+  if (context.activeDraftThread?.projectId) {
     return scopeProjectRef(
       context.activeDraftThread.environmentId,
       context.activeDraftThread.projectId,
@@ -93,10 +96,15 @@ export async function startNewThreadFromContext(
   context: ChatThreadActionContext,
 ): Promise<boolean> {
   const projectRef = resolveThreadActionProjectRef(context);
-  if (!projectRef) {
-    return false;
+  if (projectRef) {
+    await context.handleNewThread(projectRef);
+    return true;
   }
-
-  await context.handleNewThread(projectRef);
-  return true;
+  const environmentId =
+    context.activeThread?.environmentId ?? context.activeDraftThread?.environmentId ?? null;
+  if (environmentId && context.handleNewProjectlessThread) {
+    await context.handleNewProjectlessThread(environmentId);
+    return true;
+  }
+  return false;
 }

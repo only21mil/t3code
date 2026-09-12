@@ -207,6 +207,9 @@ export function useThreadActionMenu(input: {
             return;
           }
           case "new-thread-on-branch": {
+            if (thread.projectId === null) {
+              return;
+            }
             // Explicit branch carry-over: reuse the thread's worktree when it
             // has one, otherwise its branch on the local checkout.
             const result = await settlePromise(() =>

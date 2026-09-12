@@ -123,6 +123,9 @@ function pullRequestsPatch(
   pullRequests: ReadonlyArray<ThreadPullRequestLink>,
   projects: OrchestrationReadModel["projects"],
 ): Pick<OrchestrationThread, "pullRequests" | "linkedPullRequest"> {
+  if (thread.projectId === null) {
+    return { pullRequests, linkedPullRequest: undefined };
+  }
   return {
     pullRequests,
     linkedPullRequest: legacyLinkedPullRequestOf(
@@ -417,6 +420,11 @@ export function projectEvent(
           {
             id: payload.threadId,
             projectId: payload.projectId,
+            ...(payload.workspaceOwnership !== undefined
+              ? { workspaceOwnership: payload.workspaceOwnership }
+              : payload.projectId === null
+                ? { workspaceOwnership: "app" as const }
+                : {}),
             title: payload.title,
             modelSelection: payload.modelSelection,
             runtimeMode: payload.runtimeMode,

@@ -164,21 +164,20 @@ export function NewTaskDraftScreen(props: {
   const isKeyboardVisible = useKeyboardState((state) => state.isVisible);
   const controlsBottomPadding = Math.max(insets.bottom, 10);
   const keyboardOpenedOffset = Math.max(0, controlsBottomPadding - 8);
-  const { projectScopes, selectedProject, selectedProjectKey, setProject } = flow;
+  const { projectScopes, selectedProject, selectedProjectKey, setProject, setProjectless } = flow;
+  const selectedEnvironmentId = selectedProject?.environmentId ?? flow.selectedEnvironmentId;
   const { connectedEnvironments } = useRemoteConnectionStatus();
-  const selectedEnvironmentServerConfig = useEnvironmentServerConfig(
-    selectedProject?.environmentId ?? null,
-  );
+  const selectedEnvironmentServerConfig = useEnvironmentServerConfig(selectedEnvironmentId);
   const environmentConnected =
-    selectedProject !== null &&
+    selectedEnvironmentId !== null &&
     connectedEnvironments.find(
-      (environment) => environment.environmentId === selectedProject.environmentId,
+      (environment) => environment.environmentId === selectedEnvironmentId,
     )?.connectionState === "connected";
   const modelUnavailable = environmentConnected && flow.selectedModelOption?.isUnavailable === true;
   const uploadStates = useAtomValue(composerAttachmentUploadsAtom);
-  const attachmentBlockReason = selectedProject
+  const attachmentBlockReason = selectedEnvironmentId
     ? composerAttachmentUploadBlockReason({
-        environmentId: selectedProject.environmentId,
+        environmentId: selectedEnvironmentId,
         attachments: flow.attachments,
         connected: environmentConnected,
         serverConfig: selectedEnvironmentServerConfig,
@@ -189,9 +188,9 @@ export function NewTaskDraftScreen(props: {
   // than making the user wait: the outbox drain finishes the upload and sends.
   const attachmentsUploading =
     environmentConnected &&
-    selectedProject !== null &&
+    selectedEnvironmentId !== null &&
     composerAttachmentsStillUploading({
-      environmentId: selectedProject.environmentId,
+      environmentId: selectedEnvironmentId,
       attachments: flow.attachments,
       serverConfig: selectedEnvironmentServerConfig,
       states: uploadStates,
@@ -514,6 +513,15 @@ export function NewTaskDraftScreen(props: {
     }
     const initialEnvironmentId = props.initialProjectRef?.environmentId;
     const initialProjectId = props.initialProjectRef?.projectId;
+    if (initialEnvironmentId && !initialProjectId) {
+      if (!flow.isProjectless || flow.selectedEnvironmentId !== initialEnvironmentId) {
+        setProjectless(initialEnvironmentId);
+      }
+      return;
+    }
+    if (flow.isProjectless) {
+      return;
+    }
     if (initialEnvironmentId && initialProjectId) {
       const directProject =
         projects.find(
@@ -590,6 +598,9 @@ export function NewTaskDraftScreen(props: {
     selectedProject,
     selectedProjectKey,
     setProject,
+    setProjectless,
+    flow.isProjectless,
+    flow.selectedEnvironmentId,
   ]);
 
   useEffect(() => {
@@ -942,7 +953,7 @@ export function NewTaskDraftScreen(props: {
     if (voiceInput.blocksSubmission) return;
     const selectedProject = flow.selectedProject;
     const draftKey = flow.draftKey;
-    if (!selectedProject || !draftKey) {
+    if ((!selectedProject && !flow.isProjectless) || !draftKey) {
       return;
     }
     const draft = getComposerDraftSnapshot(draftKey);
@@ -1032,9 +1043,9 @@ export function NewTaskDraftScreen(props: {
       // -only Activity start. If creation fails, the token registration's replay
       // finds no work and ends the card within seconds.
       armAgentAwarenessLiveActivityForLocalWork({
-        environmentId: selectedProject.environmentId,
+        environmentId: selectedProject?.environmentId ?? flow.selectedEnvironmentId!,
         threadTitle: deriveThreadTitleFromPrompt(initialMessageText),
-        projectTitle: selectedProject.title,
+        projectTitle: selectedProject?.title ?? "Chat",
       });
     }
     // Persist before clearing the draft or leaving its editor. This only waits
@@ -1076,7 +1087,7 @@ export function NewTaskDraftScreen(props: {
     scheduleUnusedComposerAttachmentCleanup(draftSnapshot.attachments);
   }
 
-  if (!selectedProject) {
+  if (!selectedProject && !flow.isProjectless) {
     return (
       <View className="flex-1 bg-sheet" collapsable={false}>
         {Platform.OS === "android" ? (
@@ -1095,7 +1106,7 @@ export function NewTaskDraftScreen(props: {
   const canStart =
     attachmentBlockReason === null &&
     !modelUnavailable &&
-    Boolean(flow.selectedProject) &&
+    (Boolean(flow.selectedProject) || flow.isProjectless) &&
     Boolean(flow.selectedModel) &&
     flow.prompt.trim().length > 0 &&
     isIncomingShareReady &&
@@ -1166,23 +1177,31 @@ export function NewTaskDraftScreen(props: {
           What should we build
         </Text>
         <View className="max-w-full flex-row items-center justify-center">
-          <Text className="text-2xl font-t3-medium tracking-tight text-foreground">in </Text>
-          <Pressable
-            accessibilityHint="Opens the project picker"
-            accessibilityLabel={`Change project from ${selectedProject.title}`}
-            accessibilityRole="button"
-            disabled={isComposerInteractionLocked}
-            onPress={chooseProject}
-            className="min-w-0 max-w-[250px] border-b border-foreground-muted active:opacity-65"
-          >
-            <Text
-              className="text-2xl font-t3-medium tracking-tight text-foreground"
-              numberOfLines={1}
-            >
-              {selectedProject.title}
+          {flow.isProjectless || !selectedProject ? (
+            <Text className="text-2xl font-t3-medium tracking-tight text-foreground">
+              without a project?
             </Text>
-          </Pressable>
-          <Text className="text-2xl font-t3-medium tracking-tight text-foreground">?</Text>
+          ) : (
+            <>
+              <Text className="text-2xl font-t3-medium tracking-tight text-foreground">in </Text>
+              <Pressable
+                accessibilityHint="Opens the project picker"
+                accessibilityLabel={`Change project from ${selectedProject.title}`}
+                accessibilityRole="button"
+                disabled={isComposerInteractionLocked}
+                onPress={chooseProject}
+                className="min-w-0 max-w-[250px] border-b border-foreground-muted active:opacity-65"
+              >
+                <Text
+                  className="text-2xl font-t3-medium tracking-tight text-foreground"
+                  numberOfLines={1}
+                >
+                  {selectedProject.title}
+                </Text>
+              </Pressable>
+              <Text className="text-2xl font-t3-medium tracking-tight text-foreground">?</Text>
+            </>
+          )}
         </View>
       </View>
 
@@ -1267,7 +1286,7 @@ export function NewTaskDraftScreen(props: {
           />
         </View>
       ) : null}
-      <View className="pb-1">{workspaceControls}</View>
+      {flow.isProjectless ? null : <View className="pb-1">{workspaceControls}</View>}
 
       {modelUnavailable ? (
         <Pressable
@@ -1292,7 +1311,7 @@ export function NewTaskDraftScreen(props: {
         {flow.attachments.length > 0 ? (
           <View className="px-[14px] pb-2.5">
             <ComposerAttachmentStrip
-              environmentId={selectedProject.environmentId}
+              environmentId={selectedEnvironmentId ?? selectedProject?.environmentId ?? ""}
               attachments={flow.attachments}
               imageBorderRadius={16}
               imageSize={72}
