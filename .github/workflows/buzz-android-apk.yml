@@ -1,0 +1,263 @@
+name: Buzz Android APK
+
+# Preview APK for only21mil/t3code. Official Mobile EAS Production stays on
+# Blacksmith + EXPO_TOKEN (unavailable on this personal fork). This job uses
+# GitHub-hosted runners and the Aug 30 gradle assembleRelease path.
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: "Commit to build (full SHA). Blank uses the projectless merge."
+        required: false
+        type: string
+        default: "2db2192902cbcc5bae3c96986d57451ffa1386cf"
+  push:
+    branches:
+      - cursor/android-preview-apk-5239
+      - "buzz-ci/**"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: buzz-android-apk
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Preview release APK
+    if: github.repository == 'only21mil/t3code'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      APP_VARIANT: preview
+      EXPO_NO_DOTENV: "1"
+      CI: "1"
+      NODE_OPTIONS: --max-old-space-size=8192
+      PINNED_SOURCE_SHA: 2db2192902cbcc5bae3c96986d57451ffa1386cf
+    steps:
+      - name: Resolve source revision
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="${{ github.event.inputs.source_sha }}"
+          sha="${sha:-$PINNED_SOURCE_SHA}"
+          if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "source_sha must be a 40-character lowercase SHA; received '$sha'" >&2
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "short=$(printf '%s' "$sha" | cut -c1-9)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout source revision
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.source.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Confirm checked-out commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse --verify HEAD)" = "${{ steps.source.outputs.sha }}"
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: ""
+
+      - name: Install Android packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager --install \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;27.1.12297006" \
+            "cmake;3.22.1" \
+            "platform-tools"
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=@t3tools/mobile...
+
+      - name: Expose pnpm
+        run: |
+          pnpm_version="$(node --print "require('./package.json').packageManager.split('@').pop()")"
+          vp_pnpm_bin="$HOME/.vite-plus/package_manager/pnpm/$pnpm_version/pnpm/bin"
+          echo "$vp_pnpm_bin" >> "$GITHUB_PATH"
+          "$vp_pnpm_bin/pnpm" --version
+
+      - name: Generate preview Android project
+        shell: bash
+        run: pnpm --filter @t3tools/mobile exec expo prebuild --clean --platform android
+
+      - name: Build arm64 release APK
+        shell: bash
+        working-directory: apps/mobile/android
+        run: ./gradlew :app:assembleRelease -PreactNativeArchitectures=arm64-v8a --no-daemon --max-workers=2
+
+      - name: Verify APK
+        id: apk
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          apk="apps/mobile/android/app/build/outputs/apk/release/app-release.apk"
+          test -s "$apk"
+
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          test -n "$sdk_root"
+          build_tools_dir="$({ find "$sdk_root/build-tools" -mindepth 1 -maxdepth 1 -type d -printf '%p\n' || true; } | sort -V | tail -n 1)"
+          test -n "$build_tools_dir"
+          apksigner="$build_tools_dir/apksigner"
+          zipalign="$build_tools_dir/zipalign"
+          aapt2="$build_tools_dir/aapt2"
+          test -x "$apksigner" && test -x "$zipalign" && test -x "$aapt2"
+
+          evidence_dir="$RUNNER_TEMP/t3code-apk-evidence"
+          mkdir -p "$evidence_dir"
+          "$apksigner" verify --verbose --print-certs "$apk" | tee "$evidence_dir/apksigner.txt"
+          "$zipalign" -c -P 16 -v 4 "$apk" > "$evidence_dir/zipalign.txt"
+          "$aapt2" dump badging "$apk" > "$evidence_dir/aapt2-badging.txt"
+          unzip -tqq "$apk"
+          unzip -Z1 "$apk" > "$evidence_dir/archive-contents.txt"
+
+          grep -Eq "package: name='com.t3tools.t3code.preview' versionCode='[0-9]+' versionName='[^']+'" "$evidence_dir/aapt2-badging.txt"
+          version_name="$(sed -n "s/.*versionName='\\([^']*\\)'.*/\\1/p" "$evidence_dir/aapt2-badging.txt" | head -n 1)"
+          test -n "$version_name"
+          abis="$(awk -F/ '/^lib\// { print $2 }' "$evidence_dir/archive-contents.txt" | sort -u)"
+          test "$abis" = "arm64-v8a"
+
+          apk_name="t3-code-preview-${version_name}-arm64-v8a.apk"
+          out_dir="$RUNNER_TEMP/t3code-apk-export"
+          mkdir -p "$out_dir"
+          install -m 0644 "$apk" "$out_dir/$apk_name"
+          install -m 0644 "$evidence_dir/apksigner.txt" "$out_dir/apksigner.txt"
+          install -m 0644 "$evidence_dir/zipalign.txt" "$out_dir/zipalign.txt"
+          install -m 0644 "$evidence_dir/aapt2-badging.txt" "$out_dir/aapt2-badging.txt"
+          install -m 0644 "$evidence_dir/archive-contents.txt" "$out_dir/archive-contents.txt"
+          (cd "$out_dir" && sha256sum "$apk_name" > "$apk_name.sha256")
+
+          APK_PATH="$out_dir/$apk_name" \
+          PROVENANCE_PATH="$out_dir/${apk_name%.apk}.provenance.json" \
+          BUILD_TOOLS_VERSION="$(basename "$build_tools_dir")" \
+          SOURCE_SHA="${{ steps.source.outputs.sha }}" \
+          APK_VERSION="$version_name" \
+          node --input-type=module <<'NODE'
+          import { createHash } from "node:crypto";
+          import { readFileSync, statSync, writeFileSync } from "node:fs";
+
+          const bytes = readFileSync(process.env.APK_PATH);
+          const provenance = {
+            schemaVersion: 1,
+            source: {
+              repository: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}`,
+              commit: process.env.SOURCE_SHA,
+              ref: process.env.GITHUB_REF,
+              workflowRun: process.env.GITHUB_RUN_ID,
+            },
+            artifact: {
+              file: process.env.APK_PATH.split("/").at(-1),
+              sha256: createHash("sha256").update(bytes).digest("hex"),
+              sizeBytes: statSync(process.env.APK_PATH).size,
+              versionName: process.env.APK_VERSION,
+            },
+            build: {
+              appVariant: "preview",
+              expoNoDotenv: true,
+              nativeAbis: ["arm64-v8a"],
+              androidBuildTools: process.env.BUILD_TOOLS_VERSION,
+              runner: process.env.RUNNER_NAME,
+            },
+            evidence: [
+              "apksigner.txt",
+              "zipalign.txt",
+              "aapt2-badging.txt",
+              "archive-contents.txt",
+            ],
+          };
+          writeFileSync(process.env.PROVENANCE_PATH, `${JSON.stringify(provenance, null, 2)}\n`, {
+            mode: 0o644,
+          });
+          NODE
+
+          echo "dir=$out_dir" >> "$GITHUB_OUTPUT"
+          echo "name=$apk_name" >> "$GITHUB_OUTPUT"
+          echo "provenance=${apk_name%.apk}.provenance.json" >> "$GITHUB_OUTPUT"
+          echo "version=$version_name" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(cut -d' ' -f1 "$out_dir/$apk_name.sha256")" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Preview APK"
+            echo
+            echo "- Source: \`${{ steps.source.outputs.sha }}\`"
+            echo "- Artifact: \`$apk_name\`"
+            echo "- SHA-256: \`$(cut -d' ' -f1 "$out_dir/$apk_name.sha256")\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.apk.outputs.name }}
+          path: |
+            ${{ steps.apk.outputs.dir }}/${{ steps.apk.outputs.name }}
+            ${{ steps.apk.outputs.dir }}/${{ steps.apk.outputs.name }}.sha256
+            ${{ steps.apk.outputs.dir }}/${{ steps.apk.outputs.provenance }}
+            ${{ steps.apk.outputs.dir }}/apksigner.txt
+            ${{ steps.apk.outputs.dir }}/aapt2-badging.txt
+          if-no-files-found: error
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+          SHORT_SHA: ${{ steps.source.outputs.short }}
+          APK_DIR: ${{ steps.apk.outputs.dir }}
+          APK_NAME: ${{ steps.apk.outputs.name }}
+          APK_VERSION: ${{ steps.apk.outputs.version }}
+          APK_SHA256: ${{ steps.apk.outputs.sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="android-preview-${SHORT_SHA}"
+          notes="$(cat <<EOF
+          Preview Android APK for only21mil/t3code.
+
+          - Source commit: \`${SOURCE_SHA}\` (projectless chats)
+          - Variant: preview (\`com.t3tools.t3code.preview\`)
+          - Version: ${APK_VERSION}
+          - ABI: arm64-v8a
+          - Signing: debug key (sideload / preview, same as the Aug 30 Buzz APK)
+          - SHA-256: \`${APK_SHA256}\`
+
+          Built on GitHub-hosted ubuntu-24.04 because Mobile EAS Production cannot start on this personal fork (Blacksmith runner labels + missing Expo token).
+          EOF
+          )"
+          assets=(
+            "$APK_DIR/$APK_NAME"
+            "$APK_DIR/$APK_NAME.sha256"
+            "$APK_DIR/${APK_NAME%.apk}.provenance.json"
+          )
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "${assets[@]}" --clobber
+            gh release edit "$tag" --title "Android preview APK ${APK_VERSION} (${SHORT_SHA})" --notes "$notes"
+          else
+            gh release create "$tag" "${assets[@]}" \
+              --target "$SOURCE_SHA" \
+              --title "Android preview APK ${APK_VERSION} (${SHORT_SHA})" \
+              --notes "$notes"
+          fi
+          echo "release=$(gh release view "$tag" --json url --jq .url)" >> "$GITHUB_STEP_SUMMARY"
