@@ -365,11 +365,18 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.create": {
-      yield* requireProject({
-        readModel,
-        command,
-        projectId: command.projectId,
-      });
+      if (command.projectId !== null) {
+        yield* requireProject({
+          readModel,
+          command,
+          projectId: command.projectId,
+        });
+      } else if (command.worktreePath === null || command.worktreePath.length === 0) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "A thread without a project needs an allocated workspace path.",
+        });
+      }
       yield* requireThreadAbsent({
         readModel,
         command,
@@ -387,6 +394,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           projectId: command.projectId,
+          ...(command.workspaceOwnership !== undefined
+            ? { workspaceOwnership: command.workspaceOwnership }
+            : command.projectId === null
+              ? { workspaceOwnership: "app" as const }
+              : {}),
           title: command.title,
           modelSelection: command.modelSelection,
           runtimeMode: command.runtimeMode,
@@ -894,11 +906,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // Old clients only see the derived single link. Unlink that request through
       // the same command path as modern clients, including stack dismissal, while
       // retaining other links they cannot see. Historical metadata events still replay unchanged.
-      const legacy = legacyLinkedPullRequestOf(
-        thread.pullRequests,
-        thread.projectId,
-        readModel.projects.find((project) => project.id === thread.projectId)?.repositoryIdentity,
-      );
+      const legacy =
+        thread.projectId === null
+          ? null
+          : legacyLinkedPullRequestOf(
+              thread.pullRequests,
+              thread.projectId,
+              readModel.projects.find((project) => project.id === thread.projectId)
+                ?.repositoryIdentity,
+            );
       const currentPullRequest =
         legacy === null
           ? null

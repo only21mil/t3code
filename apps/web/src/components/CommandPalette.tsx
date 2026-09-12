@@ -638,8 +638,13 @@ function OpenCommandPaletteDialog(props: {
   const desktopLocalBootstraps = useDesktopLocalBootstraps();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const availableSettingsSearchItems = useAvailableSettingsSearchItems();
-  const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
-    useHandleNewThread();
+  const {
+    activeDraftThread,
+    activeThread,
+    defaultProjectRef,
+    handleNewThread,
+    handleNewProjectlessThread,
+  } = useHandleNewThread();
   const projects = useProjects();
   const referenceThreadRef =
     pathname === "/pull-requests"
@@ -1634,6 +1639,27 @@ function OpenCommandPaletteDialog(props: {
 
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
 
+  if (environments.length > 0) {
+    actionItems.push({
+      kind: "action",
+      value: "action:new-chat",
+      searchTerms: ["new chat", "projectless", "no project", "scratch", "create"],
+      title: "New chat",
+      icon: <MessageSquareIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        const environmentId =
+          activeThread?.environmentId ??
+          activeDraftThread?.environmentId ??
+          defaultProjectRef?.environmentId ??
+          environments[0]?.environmentId;
+        if (!environmentId) {
+          return;
+        }
+        await handleNewProjectlessThread(environmentId);
+      },
+    });
+  }
+
   if (projects.length > 0) {
     const activeProjectTitle =
       projectPickerEntries.find((entry) => entry.isPreferred)?.group.displayName ??
@@ -1657,6 +1683,7 @@ function OpenCommandPaletteDialog(props: {
             activeThread: activeThread ?? undefined,
             defaultProjectRef,
             handleNewThread,
+            handleNewProjectlessThread,
           });
         },
       });

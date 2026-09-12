@@ -255,7 +255,7 @@ import {
 } from "../hooks/useSettings";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { usePanelAnimationSettings, usePanelPresence } from "../panelAnimations";
-import { useNewThreadHandler } from "../hooks/useHandleNewThread";
+import { useNewProjectlessThreadHandler, useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { resolveAppModelSelectionForInstance } from "../modelSelection";
@@ -861,9 +861,9 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
   const closeTerminalMutation = useAtomCommand(terminalEnvironment.close, "terminal close");
   const draftThread = useComposerDraftStore((store) => store.getDraftThreadByRef(threadRef));
   const serverThread = useThread(threadRef, { waitForShell: draftThread !== null });
-  const projectRef = serverThread
+  const projectRef = serverThread?.projectId
     ? scopeProjectRef(serverThread.environmentId, serverThread.projectId)
-    : draftThread
+    : draftThread?.projectId
       ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
       : null;
   const project = useProject(projectRef);
@@ -1243,9 +1243,9 @@ const PersistentThreadTerminalPanel = memo(function PersistentThreadTerminalPane
 }: PersistentThreadTerminalPanelProps) {
   const draftThread = useComposerDraftStore((store) => store.getDraftThreadByRef(threadRef));
   const serverThread = useThread(threadRef, { waitForShell: draftThread !== null });
-  const projectRef = serverThread
+  const projectRef = serverThread?.projectId
     ? scopeProjectRef(serverThread.environmentId, serverThread.projectId)
-    : draftThread
+    : draftThread?.projectId
       ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
       : null;
   const project = useProject(projectRef);
@@ -1268,7 +1268,7 @@ const PersistentThreadTerminalPanel = memo(function PersistentThreadTerminalPane
             project: { cwd: project.workspaceRoot },
             worktreePath,
           })
-        : null),
+        : (worktreePath ?? null)),
     [activeSummary?.cwd, launchContext?.cwd, project, worktreePath],
   );
   const runtimeEnv = useMemo(
@@ -1421,6 +1421,7 @@ export default function ChatView(props: ChatViewProps) {
   const threadSyncPhase = routeKind === "server" ? (props.threadSyncPhase ?? null) : null;
   const threadDetailLoading = threadSyncPhase === "loading";
   const handleNewThread = useNewThreadHandler();
+  const handleNewProjectlessThread = useNewProjectlessThreadHandler();
   const { settleThread, pinThread, confirmAndUnpinThread } = useThreadActions();
   const routeThreadRef = useMemo(
     () => scopeThreadRef(environmentId, threadId),
@@ -1586,6 +1587,9 @@ export default function ChatView(props: ChatViewProps) {
   const getDraftSession = useComposerDraftStore((store) => store.getDraftSession);
   const setLogicalProjectDraftThreadId = useComposerDraftStore(
     (store) => store.setLogicalProjectDraftThreadId,
+  );
+  const setProjectlessDraftThreadId = useComposerDraftStore(
+    (store) => store.setProjectlessDraftThreadId,
   );
   const promptRef = useRef("");
   const composerImagesRef = useRef<ComposerImageAttachment[]>([]);
@@ -1754,7 +1758,7 @@ export default function ChatView(props: ChatViewProps) {
     [mountedTerminalThreadKeys],
   );
 
-  const fallbackDraftProjectRef = draftThread
+  const fallbackDraftProjectRef = draftThread?.projectId
     ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
     : null;
   const fallbackDraftProject = useProject(fallbackDraftProjectRef);
@@ -2029,7 +2033,9 @@ export default function ChatView(props: ChatViewProps) {
   const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread?.session ?? null);
   const activeProjectRef = useMemo(
     () =>
-      activeThread ? scopeProjectRef(activeThread.environmentId, activeThread.projectId) : null,
+      activeThread?.projectId
+        ? scopeProjectRef(activeThread.environmentId, activeThread.projectId)
+        : null,
     [activeThread?.environmentId, activeThread?.projectId],
   );
   const activeProject = useProject(activeProjectRef);
@@ -5452,10 +5458,12 @@ export default function ChatView(props: ChatViewProps) {
       ? (pendingServerThreadStartFromOriginByThreadId[activeThread?.id ?? ""] ??
         activeProjectSettings.settings.newWorktreesStartFromOrigin)
       : false;
-  const sendEnvMode = resolveSendEnvMode({
-    requestedEnvMode: envMode,
-    isGitRepo,
-  });
+  const sendEnvMode = activeProject
+    ? resolveSendEnvMode({
+        requestedEnvMode: envMode,
+        isGitRepo,
+      })
+    : "local";
   const localCheckoutBranchMismatch = useMemo(
     () =>
       isServerThread
@@ -6926,7 +6934,7 @@ export default function ChatView(props: ChatViewProps) {
       }
       return;
     }
-    if (!activeProject) {
+    if (!activeProject && activeThread.projectId !== null) {
       toastManager.add(
         stackedThreadToast({
           type: "warning",
@@ -7243,7 +7251,10 @@ export default function ChatView(props: ChatViewProps) {
               ...(isLocalDraftThread
                 ? {
                     createThread: {
-                      projectId: activeProject.id,
+                      projectId: activeProject?.id ?? null,
+                      ...(activeProject === undefined || activeProject === null
+                        ? { workspaceOwnership: "app" as const }
+                        : {}),
                       title,
                       modelSelection: threadCreateModelSelection,
                       runtimeMode,
@@ -7254,7 +7265,7 @@ export default function ChatView(props: ChatViewProps) {
                     },
                   }
                 : {}),
-              ...(baseBranchForWorktree
+              ...(baseBranchForWorktree && activeProject
                 ? {
                     prepareWorktree: {
                       projectCwd: activeProject.workspaceRoot,
@@ -7310,14 +7321,16 @@ export default function ChatView(props: ChatViewProps) {
         if (backgroundThreadRef) {
           markPromotedDraftThreadByRef(backgroundThreadRef);
           try {
-            const nextDraft = await handleNewThread(
-              scopeProjectRef(activeProject.environmentId, activeProject.id),
-              resolveBackgroundDraftWorkspaceOptions({
-                envMode: sendEnvMode,
-                branch: activeThreadBranch,
-                startFromOrigin,
-              }),
-            );
+            const nextDraft = activeProject
+              ? await handleNewThread(
+                  scopeProjectRef(activeProject.environmentId, activeProject.id),
+                  resolveBackgroundDraftWorkspaceOptions({
+                    envMode: sendEnvMode,
+                    branch: activeThreadBranch,
+                    startFromOrigin,
+                  }),
+                )
+              : await handleNewProjectlessThread(environmentId);
             if (nextDraft) {
               finalizePromotedDraftThreadByRef(backgroundThreadRef);
               toastManager.add(
@@ -7401,15 +7414,22 @@ export default function ChatView(props: ChatViewProps) {
         if (isLocalDraftThread && draftId && wasBootstrapThreadDeleted(error)) {
           const failedDraftSession = getDraftSession(draftId);
           if (failedDraftSession?.threadId === threadIdForSend) {
-            setLogicalProjectDraftThreadId(
-              failedDraftSession.logicalProjectKey,
-              scopeProjectRef(failedDraftSession.environmentId, failedDraftSession.projectId),
-              draftId,
-              {
+            if (failedDraftSession.projectId === null) {
+              setProjectlessDraftThreadId(failedDraftSession.environmentId, draftId, {
                 threadId: newThreadId(),
                 createdAt: new Date().toISOString(),
-              },
-            );
+              });
+            } else {
+              setLogicalProjectDraftThreadId(
+                failedDraftSession.logicalProjectKey,
+                scopeProjectRef(failedDraftSession.environmentId, failedDraftSession.projectId),
+                draftId,
+                {
+                  threadId: newThreadId(),
+                  createdAt: new Date().toISOString(),
+                },
+              );
+            }
           }
         }
         setThreadError(
@@ -8705,7 +8725,11 @@ export default function ChatView(props: ChatViewProps) {
                             isServerThread={isServerThread}
                             isLocalDraftThread={isLocalDraftThread}
                             forceExpandedOnMobile={forceExpandedMobileComposer && isDraftHeroState}
-                            projectSelectionRequired={isLocalDraftThread && activeProject === null}
+                            projectSelectionRequired={
+                              isLocalDraftThread &&
+                              activeProject === null &&
+                              activeThread.projectId !== null
+                            }
                             phase={phase}
                             isConnecting={isConnecting}
                             isSendBusy={isSendBusy}

@@ -84,7 +84,8 @@ function deriveProjectEmptyState(catalogState: WorkspaceState): {
 
 export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRouteParams | undefined>) {
   const projects = useProjects();
-  const { projectScopes, selectedEnvironmentId, setProject } = useNewTaskFlow();
+  const { projectScopes, selectedEnvironmentId, setProject, setProjectless, environments } =
+    useNewTaskFlow();
   const { state: catalogState } = useWorkspaceState();
   const navigation = useNavigation();
   const isFocused = useIsFocused();
@@ -237,13 +238,38 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
           paddingTop: 8,
         }}
       >
+        {catalogState.hasReadyEnvironment ? (
+          <Pressable
+            accessibilityRole="button"
+            className="rounded-[24px] bg-card px-4 py-3.5"
+            onPress={() => {
+              const environmentId = selectedEnvironmentId ?? environments[0]?.environmentId ?? null;
+              if (!environmentId) {
+                return;
+              }
+              setProjectless(environmentId);
+              navigation.dispatch(
+                StackActions.push("NewTaskDraft", {
+                  environmentId,
+                  incomingShareId: incomingShare?.id,
+                }),
+              );
+            }}
+          >
+            <Text className="text-base leading-snug font-t3-bold">Start without a project</Text>
+            <Text className="mt-1 text-xs leading-snug text-foreground-muted">
+              Chat first, pick a folder later.
+            </Text>
+          </Pressable>
+        ) : null}
+
         {projectScopes.length === 0 ? (
           <View collapsable={false} className="items-center gap-3 rounded-[24px] bg-card px-6 py-8">
             {projectEmptyState.loading ? (
               <ActivityIndicator colorClassName={"accent-icon-muted"} />
             ) : null}
             <Text className="text-center text-lg font-t3-bold text-foreground">
-              {projectEmptyState.title}
+              {catalogState.hasReadyEnvironment ? "Or add a project" : projectEmptyState.title}
             </Text>
             <Text className="text-center text-sm leading-normal text-foreground-muted">
               {projectEmptyState.detail}

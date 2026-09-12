@@ -27,6 +27,10 @@
       "types": "./src/environment/index.ts",
       "default": "./src/environment/index.ts"
     },
+    "./projectless": {
+      "types": "./src/projectless.ts",
+      "default": "./src/projectless.ts"
+    },
     "./markdown-images": {
       "types": "./src/markdownImages.ts",
       "default": "./src/markdownImages.ts"

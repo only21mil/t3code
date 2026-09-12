@@ -555,6 +555,83 @@ it.effect("accepts bootstrap metadata in thread.turn.start", () =>
   }),
 );
 
+it.effect("accepts projectless thread.create and thread.created payloads", () =>
+  Effect.gen(function* () {
+    const created = yield* decodeThreadCreatedPayload({
+      threadId: "thread-projectless",
+      projectId: null,
+      workspaceOwnership: "app",
+      title: "New chat",
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5.4",
+      },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: "/tmp/t3/conversations/thread-projectless/work",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(created.projectId, null);
+    assert.strictEqual(created.workspaceOwnership, "app");
+
+    const command = yield* decodeOrchestrationCommand({
+      type: "thread.create",
+      commandId: "cmd-projectless",
+      threadId: "thread-projectless",
+      projectId: null,
+      workspaceOwnership: "app",
+      title: "New chat",
+      modelSelection: {
+        instanceId: "codex",
+        model: "gpt-5.4",
+      },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      branch: null,
+      worktreePath: "/tmp/t3/conversations/thread-projectless/work",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(command.type, "thread.create");
+    if (command.type === "thread.create") {
+      assert.strictEqual(command.projectId, null);
+      assert.strictEqual(command.workspaceOwnership, "app");
+    }
+
+    const bootstrap = yield* decodeThreadTurnStartCommand({
+      type: "thread.turn.start",
+      commandId: "cmd-turn-projectless",
+      threadId: "thread-projectless",
+      message: {
+        messageId: "msg-projectless",
+        role: "user",
+        text: "hello",
+        attachments: [],
+      },
+      bootstrap: {
+        createThread: {
+          projectId: null,
+          workspaceOwnership: "app",
+          title: "New chat",
+          modelSelection: {
+            instanceId: "codex",
+            model: "gpt-5.4",
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: "/tmp/t3/conversations/thread-projectless/work",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+      },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(bootstrap.bootstrap?.createThread?.projectId, null);
+    assert.strictEqual(bootstrap.bootstrap?.createThread?.workspaceOwnership, "app");
+  }),
+);
+
 it.effect("decodes thread.created runtime mode for historical events", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeThreadCreatedPayload({

@@ -2991,14 +2991,16 @@ export default function Sidebar() {
               (key) => !settledKeys.has(key) && !snoozedKeys.has(key) && !coParkingKeys?.has(key),
             ) ?? null);
       const nextThread = nextCardKey ? threadByKeyRef.current.get(nextCardKey) : null;
+      const projectId = shell?.projectId ?? null;
       return nextThread
         ? () => navigateToThread(scopeThreadRef(nextThread.environmentId, nextThread.id))
-        : shell
-          ? () =>
-              void handleNewThreadRef.current(scopeProjectRef(shell.environmentId, shell.projectId))
-          : () => void router.navigate({ to: "/" });
+        : projectId && shell
+          ? () => void handleNewThreadRef.current(scopeProjectRef(shell.environmentId, projectId))
+          : shell
+            ? () => void newThreadContext.handleNewProjectlessThread(shell.environmentId)
+            : () => void router.navigate({ to: "/" });
     },
-    [navigateToThread, router],
+    [navigateToThread, newThreadContext.handleNewProjectlessThread, router],
   );
 
   const attemptSettle = useCallback(
@@ -3961,8 +3963,10 @@ export default function Sidebar() {
         if (!thread) return;
         const threadWorkspacePath =
           thread.worktreePath ??
-          projectByKey.get(`${thread.environmentId}:${thread.projectId}`)?.workspaceRoot ??
-          null;
+          (thread.projectId === null
+            ? null
+            : (projectByKey.get(`${thread.environmentId}:${thread.projectId}`)?.workspaceRoot ??
+              null));
         // Un-settle pins the thread active until real activity clears the pin.
         // Environments without
         // the settlement capability get no lifecycle items at all.
@@ -4025,10 +4029,14 @@ export default function Sidebar() {
             return;
           }
           case "new-thread-on-branch": {
+            const projectId = thread.projectId;
+            if (projectId === null) {
+              return;
+            }
             // Explicit branch carry-over: reuse the thread's worktree when it
             // has one, otherwise its branch on the local checkout.
             const result = await settlePromise(() =>
-              handleNewThreadRef.current(scopeProjectRef(thread.environmentId, thread.projectId), {
+              handleNewThreadRef.current(scopeProjectRef(thread.environmentId, projectId), {
                 branch: thread.branch,
                 worktreePath: thread.worktreePath,
                 envMode: thread.worktreePath ? "worktree" : "local",
@@ -4277,6 +4285,17 @@ export default function Sidebar() {
       // One project: nothing to pick, create immediately. Shift+click creates
       // directly in the current project even with several projects, skipping
       // the palette picker.
+      if (projectGroups.length === 0) {
+        const environmentId =
+          newThreadContext.activeThread?.environmentId ??
+          newThreadContext.activeDraftThread?.environmentId ??
+          environments[0]?.environmentId;
+        if (environmentId) {
+          if (isMobile) setOpenMobile(false);
+          void newThreadContext.handleNewProjectlessThread(environmentId);
+        }
+        return;
+      }
       if (shouldCreateNewThreadInCurrentProject(event?.shiftKey ?? false, projectGroups.length)) {
         if (isMobile) setOpenMobile(false);
         void startNewThreadFromContext({
@@ -4284,13 +4303,14 @@ export default function Sidebar() {
           activeThread: newThreadContext.activeThread ?? undefined,
           defaultProjectRef: newThreadContext.defaultProjectRef,
           handleNewThread: newThreadContext.handleNewThread,
+          handleNewProjectlessThread: newThreadContext.handleNewProjectlessThread,
         });
         return;
       }
       if (isMobile) setOpenMobile(false);
       openCommandPalette({ open: "new-thread-in" });
     },
-    [isMobile, newThreadContext, projectGroups.length, setOpenMobile],
+    [environments, isMobile, newThreadContext, projectGroups.length, setOpenMobile],
   );
 
   // The button mirrors chat.new: in multi-project setups both route through
@@ -4370,7 +4390,7 @@ export default function Sidebar() {
                         type="button"
                         className="relative focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
                         onClick={handleNewThreadClick}
-                        disabled={projects.length === 0}
+                        disabled={environments.length === 0}
                         aria-label="New thread"
                       />
                     }
@@ -4575,12 +4595,17 @@ export default function Sidebar() {
                         key={threadKey}
                         thread={thread}
                         project={
-                          projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ?? null
+                          thread.projectId === null
+                            ? null
+                            : (projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ??
+                              null)
                         }
                         projectDisplayName={
-                          projectDisplayNameByKey.get(
-                            `${thread.environmentId}:${thread.projectId}`,
-                          ) ?? null
+                          thread.projectId === null
+                            ? null
+                            : (projectDisplayNameByKey.get(
+                                `${thread.environmentId}:${thread.projectId}`,
+                              ) ?? null)
                         }
                         environmentLabel={environmentLabelById.get(thread.environmentId) ?? null}
                         environmentMachine={
@@ -4713,13 +4738,18 @@ export default function Sidebar() {
                               environmentMachineById.get(thread.environmentId) ?? "server"
                             }
                             project={
-                              projectByKey.get(`${thread.environmentId}:${thread.projectId}`) ??
-                              null
+                              thread.projectId === null
+                                ? null
+                                : (projectByKey.get(
+                                    `${thread.environmentId}:${thread.projectId}`,
+                                  ) ?? null)
                             }
                             projectDisplayName={
-                              projectDisplayNameByKey.get(
-                                `${thread.environmentId}:${thread.projectId}`,
-                              ) ?? null
+                              thread.projectId === null
+                                ? null
+                                : (projectDisplayNameByKey.get(
+                                    `${thread.environmentId}:${thread.projectId}`,
+                                  ) ?? null)
                             }
                             providerEntryByInstanceId={
                               providerEntriesByEnvironment.get(thread.environmentId) ??

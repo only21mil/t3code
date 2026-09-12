@@ -1196,8 +1196,8 @@ export function useThreadOutboxDrain(): void {
               recoverEditedCreationAfterDelivery(nextQueuedMessage)
             : removeQueuedMessage("[thread-outbox] failed to remove message for a missing thread")
           : creation !== undefined
-            ? creationProjectCwd !== null
-              ? sendQueuedCreation(nextQueuedMessage, creation, creationProjectCwd)
+            ? creationProjectCwd !== null || creation.projectId === null
+              ? sendQueuedCreation(nextQueuedMessage, creation, creationProjectCwd ?? "")
               : removeQueuedMessage("[thread-outbox] dropped pending task for a missing project")
             : thread !== undefined
               ? sendQueuedMessage(nextQueuedMessage, thread)

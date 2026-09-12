@@ -365,8 +365,12 @@ export function HomeScreen(props: HomeScreenProps) {
         ? []
         : selectedProjectRefKeys === null
           ? props.threads
-          : props.threads.filter((thread) =>
-              selectedProjectRefKeys.has(scopedProjectKey(thread.environmentId, thread.projectId)),
+          : props.threads.filter(
+              (thread) =>
+                thread.projectId !== null &&
+                selectedProjectRefKeys.has(
+                  scopedProjectKey(thread.environmentId, thread.projectId),
+                ),
             ),
     [threadListV2Enabled, props.threads, selectedProjectRefKeys],
   );

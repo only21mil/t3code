@@ -101,3 +101,34 @@ describe("new thread on an existing branch", () => {
     },
   );
 });
+
+describe("projectless thread create", () => {
+  it("omits worktree setup and marks the workspace as app-owned", () => {
+    const input = buildProjectThreadStartTurnInput({
+      projectId: null,
+      projectCwd: "",
+      threadId: "projectless-thread",
+      commandId: "command",
+      messageId: "message",
+      createdAt: "2026-09-12T00:00:00Z",
+      text: "Chat without a folder",
+      uploadedAttachments: [],
+      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6-sol" },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      workspaceMode: "local",
+      branch: null,
+      worktreePath: null,
+      startFromOrigin: false,
+      worktreeBranchName: "unused",
+    });
+
+    expect(input.bootstrap.createThread).toMatchObject({
+      projectId: null,
+      workspaceOwnership: "app",
+      worktreePath: null,
+    });
+    expect(input.bootstrap).not.toHaveProperty("prepareWorktree");
+    expect(input.bootstrap).not.toHaveProperty("runSetupScript");
+  });
+});

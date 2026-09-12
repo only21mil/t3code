@@ -459,6 +459,9 @@ function AdaptiveWorkspaceLayoutContent(
 
   const handleNewThreadOnBranch = useCallback(
     (thread: EnvironmentThreadShell) => {
+      if (thread.projectId === null) {
+        return;
+      }
       navigation.navigate("NewTaskSheet", {
         screen: "NewTaskDraft",
         params: {

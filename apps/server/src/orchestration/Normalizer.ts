@@ -10,6 +10,7 @@ import {
   type OrchestrationCommand,
   OrchestrationDispatchCommandError,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+  type ThreadId,
 } from "@t3tools/contracts";
 
 import {
@@ -22,6 +23,7 @@ import {
 import { ServerConfig } from "../config.ts";
 import { parseBase64DataUrl } from "../imageMime.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
+import { allocateAppOwnedThreadWorkspace } from "./threadWorkspace.ts";
 
 export const canonicalizeClientCommandTimestamps = (
   command: ClientOrchestrationCommand,
@@ -109,6 +111,33 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
               }),
           ),
         );
+
+    const allocateProjectlessWorkspace = Effect.fn("Normalizer.allocateProjectlessWorkspace")(
+      function* (threadId: ThreadId) {
+        return yield* allocateAppOwnedThreadWorkspace({
+          stateDir: serverConfig.stateDir,
+          threadId,
+        }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new OrchestrationDispatchCommandError({
+                message: `Failed to allocate a workspace for this chat: ${String(cause)}`,
+              }),
+          ),
+        );
+      },
+    );
+
+    if (canonicalCommand.type === "thread.create") {
+      if (canonicalCommand.projectId !== null) {
+        return canonicalCommand as OrchestrationCommand;
+      }
+      return {
+        ...canonicalCommand,
+        workspaceOwnership: "app",
+        worktreePath: yield* allocateProjectlessWorkspace(canonicalCommand.threadId),
+      } satisfies OrchestrationCommand;
+    }
 
     if (canonicalCommand.type === "project.create") {
       return {
@@ -296,12 +325,29 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
         ...(attachments.length > 0 ? { attachmentsByQuestionId } : {}),
       };
     }
+    const createThread = canonicalCommand.bootstrap?.createThread;
+    const allocatedCreateThread =
+      createThread !== undefined && createThread.projectId === null
+        ? {
+            ...createThread,
+            workspaceOwnership: "app" as const,
+            worktreePath: yield* allocateProjectlessWorkspace(canonicalCommand.threadId),
+          }
+        : createThread;
     return {
       ...canonicalCommand,
       message: {
         ...canonicalCommand.message,
         attachments: normalizedAttachments,
       },
+      ...(allocatedCreateThread === undefined || allocatedCreateThread === createThread
+        ? {}
+        : {
+            bootstrap: {
+              ...canonicalCommand.bootstrap,
+              createThread: allocatedCreateThread,
+            },
+          }),
     } satisfies OrchestrationCommand;
   });
 

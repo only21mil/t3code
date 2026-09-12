@@ -22,7 +22,7 @@ export function deriveThreadTitleFromPrompt(value: string): string {
 }
 
 export interface ProjectThreadStartTurnSpec {
-  readonly projectId: ProjectId;
+  readonly projectId: ProjectId | null;
   readonly projectCwd: string;
   readonly threadId: string;
   readonly commandId: string;
@@ -66,6 +66,7 @@ export function buildProjectThreadStartTurnInput(spec: ProjectThreadStartTurnSpe
     bootstrap: {
       createThread: {
         projectId: spec.projectId,
+        ...(spec.projectId === null ? { workspaceOwnership: "app" as const } : {}),
         title,
         modelSelection: spec.modelSelection,
         runtimeMode: spec.runtimeMode,

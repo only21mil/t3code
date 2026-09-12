@@ -1120,6 +1120,9 @@ const makeWsRpcLayer = (
                 commandId: yield* serverCommandId("bootstrap-thread-create"),
                 threadId: command.threadId,
                 projectId: bootstrap.createThread.projectId,
+                ...(bootstrap.createThread.workspaceOwnership !== undefined
+                  ? { workspaceOwnership: bootstrap.createThread.workspaceOwnership }
+                  : {}),
                 title: bootstrap.createThread.title,
                 modelSelection: bootstrap.createThread.modelSelection,
                 runtimeMode: bootstrap.createThread.runtimeMode,
@@ -2502,6 +2505,17 @@ const makeWsRpcLayer = (
               if (Option.isNone(thread)) {
                 return yield* new AssetWorkspaceContextNotFoundError({
                   resource: input.resource,
+                });
+              }
+              if (thread.value.projectId === null) {
+                if (thread.value.worktreePath === null) {
+                  return yield* new AssetWorkspaceContextNotFoundError({
+                    resource: input.resource,
+                  });
+                }
+                return yield* issueAssetUrl({
+                  resource: input.resource,
+                  workspaceRoot: thread.value.worktreePath,
                 });
               }
               const project = yield* projectionSnapshotQuery

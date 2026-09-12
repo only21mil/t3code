@@ -14,12 +14,13 @@ import {
   toSortableTimestamp,
 } from "@t3tools/client-runtime/state/thread-sort";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
-import type {
-  EnvironmentId,
-  ScopedProjectRef,
-  SidebarProjectGroupingMode,
-  SidebarProjectSortOrder,
-  SidebarThreadSortOrder,
+import {
+  ProjectId,
+  type EnvironmentId,
+  type ScopedProjectRef,
+  type SidebarProjectGroupingMode,
+  type SidebarProjectSortOrder,
+  type SidebarThreadSortOrder,
 } from "@t3tools/contracts";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
@@ -170,6 +171,43 @@ interface MutableHomeThreadGroup {
   readonly threads: EnvironmentThreadShell[];
 }
 
+function chatsGroupKey(environmentId: EnvironmentId): string {
+  return scopedProjectKey(environmentId, null);
+}
+
+function chatsGroupStandIn(environmentId: EnvironmentId, createdAt: string): EnvironmentProject {
+  return {
+    environmentId,
+    id: ProjectId.make("projectless"),
+    title: "Chats",
+    workspaceRoot: "",
+    repositoryIdentity: null,
+    defaultModelSelection: null,
+    scripts: [],
+    createdAt,
+    updatedAt: createdAt,
+  };
+}
+
+function ensureChatsGroup(
+  groups: Map<string, MutableHomeThreadGroup>,
+  groupTitleByKey: Map<string, string>,
+  environmentId: EnvironmentId,
+  createdAt: string,
+): string {
+  const groupKey = chatsGroupKey(environmentId);
+  if (!groups.has(groupKey)) {
+    groupTitleByKey.set(groupKey, "Chats");
+    groups.set(groupKey, {
+      key: groupKey,
+      projects: [chatsGroupStandIn(environmentId, createdAt)],
+      pendingTasks: [],
+      threads: [],
+    });
+  }
+  return groupKey;
+}
+
 function groupSortTimestamp(group: HomeThreadGroup, sortOrder: HomeProjectSortOrder): number {
   const latestThread = group.threads.reduce(
     (latest, thread) => Math.max(latest, getThreadSortTimestamp(thread, sortOrder)),
@@ -245,6 +283,17 @@ export function buildHomeThreadGroups(input: {
       continue;
     }
 
+    if (pendingTask.projectId === null) {
+      const groupKey = ensureChatsGroup(
+        groups,
+        groupTitleByKey,
+        pendingTask.environmentId,
+        pendingTask.createdAt,
+      );
+      groups.get(groupKey)?.pendingTasks.push(pendingTask);
+      continue;
+    }
+
     const physicalKey = scopedProjectKey(pendingTask.environmentId, pendingTask.projectId);
     let groupKey = groupKeyByProjectKey.get(physicalKey);
     if (!groupKey) {
@@ -280,6 +329,17 @@ export function buildHomeThreadGroups(input: {
       continue;
     }
     if (input.environmentId !== null && thread.environmentId !== input.environmentId) {
+      continue;
+    }
+
+    if (thread.projectId === null) {
+      const groupKey = ensureChatsGroup(
+        groups,
+        groupTitleByKey,
+        thread.environmentId,
+        thread.createdAt,
+      );
+      groups.get(groupKey)?.threads.push(thread);
       continue;
     }
 
@@ -368,9 +428,10 @@ export function buildHomeThreadGroups(input: {
       pendingTasks: matchingPendingTasks,
       threads: sortedThreads,
       recentThreads,
-      newThreadTarget: group.key.startsWith("pending-project:")
-        ? null
-        : (lastActiveProject ?? representative),
+      newThreadTarget:
+        group.key.startsWith("pending-project:") || group.key.startsWith("projectless:")
+          ? null
+          : (lastActiveProject ?? representative),
     });
   }
 
