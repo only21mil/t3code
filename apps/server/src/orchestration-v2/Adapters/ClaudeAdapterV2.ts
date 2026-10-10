@@ -185,10 +185,12 @@ export const CLAUDE_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(CLAUDE_PROV
 const DEFAULT_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({});
 // Entry extensions the Claude SDK runs through node instead of executing.
 const CLAUDE_SCRIPT_EXTENSIONS = [".js", ".mjs", ".tsx", ".ts", ".jsx"];
-// The SDK's mcp_set_servers request has no deadline of its own. This covers
-// the 60 s the SDK's startup() gives the CLI to initialize plus the CLI's
-// 30 s MCP connect timeout (MCP_TIMEOUT), so only a CLI that stopped
-// answering reaches it.
+// query() puts no deadline on the CLI's initialize or on its answer to
+// mcp_set_servers, so this is the runner's own deadline for that answer. It
+// is sized from the 60 s initialize budget the SDK's separate startup()
+// helper uses plus the CLI's 30 s MCP connect timeout (MCP_TIMEOUT). Missing
+// it fails the open and closes the CLI, however slow the start was; the next
+// turn starts a new CLI and registers again.
 const CLAUDE_MCP_REGISTRATION_TIMEOUT = "90 seconds";
 
 export const ClaudeProviderCapabilitiesV2 = {
@@ -672,8 +674,10 @@ export const layerQueryRunner: Layer.Layer<
                 executableArgs: [...launch.args, ...(queryOptions.executableArgs ?? [])],
               };
         // The CLI is running once query() returns, so open owns closing it
-        // until the session below is handed back: a registration that fails,
-        // times out or is interrupted closes the CLI before open exits.
+        // and the prompt queue until it returns the session below: every
+        // later step that can wait (the MCP registration and the protocol
+        // log) stays interruptible, and a failure, timeout or interrupt in
+        // any of them closes both before open exits.
         const queryRuntime = yield* Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
             const queryRuntime = yield* Effect.try({
@@ -684,42 +688,51 @@ export const layerQueryRunner: Layer.Layer<
                 }),
               catch: (cause) => queryRunnerError(cause, "query"),
             });
-            if (mcpServers === undefined) {
-              return queryRuntime;
-            }
-            // Resolves once each server has connected or failed, so the first
-            // prompt sees the tools. A rejected request (including a CLI that
-            // exited during startup) fails the open rather than starting a
-            // turn without the t3-code server. The CLI echoes these configs,
-            // headers included, in its mcp_status response
-            // (Query.mcpServerStatus()); never log that response.
             yield* restore(
-              Effect.tryPromise({
-                try: () => queryRuntime.setMcpServers(mcpServers),
-                catch: (cause) => queryRunnerError(cause, "setMcpServers"),
-              }).pipe(
-                Effect.timeoutOrElse({
-                  duration: CLAUDE_MCP_REGISTRATION_TIMEOUT,
-                  orElse: () =>
-                    Effect.fail(
-                      queryRunnerError(
-                        `Claude Code did not answer the MCP server registration within ${CLAUDE_MCP_REGISTRATION_TIMEOUT}.`,
-                        "setMcpServers",
-                      ),
+              Effect.gen(function* () {
+                if (mcpServers !== undefined) {
+                  // Resolves once each server has connected or failed, so the
+                  // first prompt sees the tools. A rejected request (including
+                  // a CLI that exited during startup) fails the open rather
+                  // than starting a turn without the t3-code server. The CLI
+                  // echoes these configs, headers included, in its mcp_status
+                  // response (Query.mcpServerStatus()); never log that response.
+                  yield* Effect.tryPromise({
+                    try: () => queryRuntime.setMcpServers(mcpServers),
+                    catch: (cause) => queryRunnerError(cause, "setMcpServers"),
+                  }).pipe(
+                    Effect.timeoutOrElse({
+                      duration: CLAUDE_MCP_REGISTRATION_TIMEOUT,
+                      orElse: () =>
+                        Effect.fail(
+                          queryRunnerError(
+                            `Claude Code did not answer the MCP server registration within ${CLAUDE_MCP_REGISTRATION_TIMEOUT}.`,
+                            "setMcpServers",
+                          ),
+                        ),
+                    }),
+                    // A server that failed to connect is not a rejected
+                    // request: the turn runs without its tools, as it did when
+                    // the CLI connected them in the background.
+                    Effect.tap((result) =>
+                      Object.keys(result.errors ?? {}).length === 0
+                        ? Effect.void
+                        : Effect.logWarning("orchestration-v2.claude-mcp-server-connect-failed", {
+                            threadId: input.threadId,
+                            errors: result.errors,
+                          }),
                     ),
-                }),
-                // A server that failed to connect is not a rejected request:
-                // the turn runs without its tools, as it did when the CLI
-                // connected them in the background.
-                Effect.tap((result) =>
-                  Object.keys(result.errors ?? {}).length === 0
-                    ? Effect.void
-                    : Effect.logWarning("orchestration-v2.claude-mcp-server-connect-failed", {
-                        threadId: input.threadId,
-                        errors: result.errors,
-                      }),
-                ),
-              ),
+                  );
+                }
+                yield* logProtocolEvent({
+                  direction: "outgoing",
+                  stage: "decoded",
+                  payload: {
+                    type: "query.open",
+                    options: loggedClaudeQueryOptions(input.options),
+                  },
+                });
+              }),
             ).pipe(
               Effect.onError(() =>
                 Queue.shutdown(promptQueue).pipe(
@@ -731,14 +744,6 @@ export const layerQueryRunner: Layer.Layer<
             return queryRuntime;
           }),
         );
-        yield* logProtocolEvent({
-          direction: "outgoing",
-          stage: "decoded",
-          payload: {
-            type: "query.open",
-            options: loggedClaudeQueryOptions(input.options),
-          },
-        });
 
         return {
           messages: Stream.fromAsyncIterable(claudeQueryMessages(queryRuntime), (cause) =>

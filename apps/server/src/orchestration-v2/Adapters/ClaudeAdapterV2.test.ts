@@ -1334,13 +1334,11 @@ describe("ClaudeAdapterV2 MCP credential channel", () => {
     });
   const provideQueryRunner = <A, E>(
     effect: Effect.Effect<A, E, ClaudeAdapterV2.ClaudeAgentSdkQueryRunner>,
+    loggers: ProviderEventLoggers.ProviderEventLoggers["Service"] = ProviderEventLoggers.NoOpProviderEventLoggers,
   ) =>
     effect.pipe(
       Effect.provide(ClaudeAdapterV2.layerQueryRunner),
-      Effect.provideService(
-        ProviderEventLoggers.ProviderEventLoggers,
-        ProviderEventLoggers.NoOpProviderEventLoggers,
-      ),
+      Effect.provideService(ProviderEventLoggers.ProviderEventLoggers, loggers),
       Effect.provide(NodeServices.layer),
     );
 
@@ -1379,6 +1377,35 @@ describe("ClaudeAdapterV2 MCP credential channel", () => {
         assert.isTrue(Exit.hasInterrupts(yield* Fiber.await(opening)));
       }),
     ),
+  );
+
+  it.effect("closes the CLI when open is interrupted while logging the opened query", () =>
+    Effect.gen(function* () {
+      const cli = makeFakeClaudeCli();
+      const logWriteStarted = yield* Deferred.make<void>();
+      // The query.open log write never finishes, so the interrupt lands after
+      // the CLI answered the registration and before open returns a session.
+      const blockingLogger: ProviderEventLoggers.EventNdjsonLogger = {
+        filePath: "/tmp/events.log",
+        write: () =>
+          Deferred.succeed(logWriteStarted, undefined).pipe(Effect.andThen(Effect.never)),
+        close: () => Effect.void,
+      };
+      const opening = yield* provideQueryRunner(openWithMcpServer(cli, "interrupted-log"), {
+        native: blockingLogger,
+        canonical: undefined,
+      }).pipe(Effect.forkChild);
+      yield* Deferred.await(logWriteStarted);
+      assert.deepInclude(cli.controlRequests, {
+        subtype: "mcp_set_servers",
+        servers: { "t3-code": t3McpServer },
+      });
+      yield* Fiber.interrupt(opening);
+      yield* settleFakeClaudeCliIo;
+
+      assert.isTrue(cli.state.stdinClosed, "the CLI started by the interrupted open is closed");
+      assert.isTrue(Exit.hasInterrupts(yield* Fiber.await(opening)));
+    }),
   );
 
   it.effect("fails the open and closes the CLI when it rejects MCP registration", () =>
