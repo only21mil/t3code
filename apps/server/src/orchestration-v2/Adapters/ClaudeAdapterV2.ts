@@ -185,6 +185,11 @@ export const CLAUDE_DEFAULT_INSTANCE_ID = defaultInstanceIdForDriver(CLAUDE_PROV
 const DEFAULT_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({});
 // Entry extensions the Claude SDK runs through node instead of executing.
 const CLAUDE_SCRIPT_EXTENSIONS = [".js", ".mjs", ".tsx", ".ts", ".jsx"];
+// The SDK's mcp_set_servers request has no deadline of its own. This covers
+// the 60 s the SDK's startup() gives the CLI to initialize plus the CLI's
+// 30 s MCP connect timeout (MCP_TIMEOUT), so only a CLI that stopped
+// answering reaches it.
+const CLAUDE_MCP_REGISTRATION_TIMEOUT = "90 seconds";
 
 export const ClaudeProviderCapabilitiesV2 = {
   sessions: {
@@ -666,31 +671,66 @@ export const layerQueryRunner: Layer.Layer<
                 pathToClaudeCodeExecutable: launch.command,
                 executableArgs: [...launch.args, ...(queryOptions.executableArgs ?? [])],
               };
-        const queryRuntime = yield* Effect.try({
-          try: () =>
-            query({
-              prompt,
-              options,
-            }),
-          catch: (cause) => queryRunnerError(cause, "query"),
-        });
-        if (mcpServers !== undefined) {
-          // Resolves once each server has connected or failed, so the first
-          // prompt sees the tools. A CLI that exits during startup rejects
-          // this, and the message stream reports that same exit, so the
-          // rejection is only logged here.
-          yield* Effect.tryPromise({
-            try: () => queryRuntime.setMcpServers(mcpServers),
-            catch: (cause) => queryRunnerError(cause, "setMcpServers"),
-          }).pipe(
-            Effect.catch((cause) =>
-              Effect.logWarning("orchestration-v2.claude-set-mcp-servers-failed", {
-                threadId: input.threadId,
-                cause,
-              }),
-            ),
-          );
-        }
+        // The CLI is running once query() returns, so open owns closing it
+        // until the session below is handed back: a registration that fails,
+        // times out or is interrupted closes the CLI before open exits.
+        const queryRuntime = yield* Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            const queryRuntime = yield* Effect.try({
+              try: () =>
+                query({
+                  prompt,
+                  options,
+                }),
+              catch: (cause) => queryRunnerError(cause, "query"),
+            });
+            if (mcpServers === undefined) {
+              return queryRuntime;
+            }
+            // Resolves once each server has connected or failed, so the first
+            // prompt sees the tools. A rejected request (including a CLI that
+            // exited during startup) fails the open rather than starting a
+            // turn without the t3-code server. The CLI echoes these configs,
+            // headers included, in its mcp_status response
+            // (Query.mcpServerStatus()); never log that response.
+            yield* restore(
+              Effect.tryPromise({
+                try: () => queryRuntime.setMcpServers(mcpServers),
+                catch: (cause) => queryRunnerError(cause, "setMcpServers"),
+              }).pipe(
+                Effect.timeoutOrElse({
+                  duration: CLAUDE_MCP_REGISTRATION_TIMEOUT,
+                  orElse: () =>
+                    Effect.fail(
+                      queryRunnerError(
+                        `Claude Code did not answer the MCP server registration within ${CLAUDE_MCP_REGISTRATION_TIMEOUT}.`,
+                        "setMcpServers",
+                      ),
+                    ),
+                }),
+                // A server that failed to connect is not a rejected request:
+                // the turn runs without its tools, as it did when the CLI
+                // connected them in the background.
+                Effect.tap((result) =>
+                  Object.keys(result.errors ?? {}).length === 0
+                    ? Effect.void
+                    : Effect.logWarning("orchestration-v2.claude-mcp-server-connect-failed", {
+                        threadId: input.threadId,
+                        errors: result.errors,
+                      }),
+                ),
+              ),
+            ).pipe(
+              Effect.onError(() =>
+                Queue.shutdown(promptQueue).pipe(
+                  Effect.andThen(closeClaudeQuery(queryRuntime)),
+                  Effect.ignore,
+                ),
+              ),
+            );
+            return queryRuntime;
+          }),
+        );
         yield* logProtocolEvent({
           direction: "outgoing",
           stage: "decoded",

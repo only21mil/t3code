@@ -43,6 +43,7 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
@@ -1205,11 +1206,24 @@ describe("ClaudeAdapterV2 executable path", () => {
   );
 });
 
+// How the fake CLI answers mcp_set_servers: every server connected, some
+// servers failed to connect, the request itself rejected, or no answer.
+type FakeClaudeMcpSetServersReply =
+  | { readonly type: "connected" }
+  | { readonly type: "failed"; readonly errors: Readonly<Record<string, string>> }
+  | { readonly type: "rejected"; readonly error: string }
+  | { readonly type: "withheld" };
+
 // Stands in for the Claude CLI behind the SDK's spawn hook: records how it was
-// started and answers every stdin control request with success.
-function makeFakeClaudeCli() {
+// started and answers every other stdin control request with success.
+function makeFakeClaudeCli(setServersReply: FakeClaudeMcpSetServersReply = { type: "connected" }) {
   const spawns: Array<SpawnOptions> = [];
   const controlRequests: Array<object> = [];
+  let markSetServersRequested = () => {};
+  const setServersRequested = new Promise<void>((resolve) => {
+    markSetServersRequested = resolve;
+  });
+  const state = { stdinClosed: false };
   const spawn = (options: SpawnOptions): SpawnedProcess => {
     spawns.push(options);
     const stdin = new NodeStream.PassThrough();
@@ -1237,27 +1251,39 @@ function makeFakeClaudeCli() {
         pending = pending.slice(newline + 1);
         if (frame.type !== "control_request" || frame.request === undefined) continue;
         controlRequests.push(frame.request);
-        const response =
-          frame.request.subtype === "mcp_set_servers"
-            ? { added: Object.keys(frame.request.servers ?? {}), removed: [], errors: {} }
-            : {};
-        stdout.write(
-          `${JSON.stringify({
-            type: "control_response",
-            response: { subtype: "success", request_id: frame.request_id, response },
-          })}\n`,
-        );
+        const isSetServers = frame.request.subtype === "mcp_set_servers";
+        if (isSetServers) markSetServersRequested();
+        if (isSetServers && setServersReply.type === "withheld") continue;
+        const reply =
+          isSetServers && setServersReply.type === "rejected"
+            ? { subtype: "error", request_id: frame.request_id, error: setServersReply.error }
+            : {
+                subtype: "success",
+                request_id: frame.request_id,
+                response: isSetServers
+                  ? {
+                      added: Object.keys(frame.request.servers ?? {}),
+                      removed: [],
+                      errors: setServersReply.type === "failed" ? setServersReply.errors : {},
+                    }
+                  : {},
+              };
+        stdout.write(`${JSON.stringify({ type: "control_response", response: reply })}\n`);
       }
     });
     stdin.on("end", () => {
+      state.stdinClosed = true;
       child.exitCode = 0;
       stdout.end();
       child.emit("exit", 0, null);
     });
     return child;
   };
-  return { spawn, spawns, controlRequests };
+  return { spawn, spawns, controlRequests, setServersRequested, state };
 }
+
+// Lets the SDK's pipe writes and the fake CLI's stream events run.
+const settleFakeClaudeCliIo = TestClock.withLive(Effect.sleep("20 millis"));
 
 describe("ClaudeAdapterV2 MCP credential channel", () => {
   const authorizationHeader = "Bearer dummy-mcp-credential";
@@ -1280,22 +1306,22 @@ describe("ClaudeAdapterV2 MCP credential channel", () => {
     browserToolsAvailable: true,
   });
 
-  it.effect("sends the t3-code server over the control channel, not argv or the environment", () =>
+  // Opens the real query runner with the t3-code server against a fake CLI.
+  const openWithMcpServer = (cli: ReturnType<typeof makeFakeClaudeCli>, name: string) =>
     Effect.gen(function* () {
-      const cli = makeFakeClaudeCli();
-      const threadId = ThreadId.make("thread-claude-mcp-channel");
+      const threadId = ThreadId.make(`thread-claude-mcp-${name}`);
       const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
         mcpSession: mcpSessionFor(threadId),
         readOnlySandbox: false,
       });
       const runner = yield* ClaudeAdapterV2.ClaudeAgentSdkQueryRunner;
-      const session = yield* runner.open({
+      return yield* runner.open({
         threadId,
-        providerSessionId: ProviderSessionId.make("provider-session-claude-mcp-channel"),
+        providerSessionId: ProviderSessionId.make(`provider-session-claude-mcp-${name}`),
         options: {
           ...ClaudeAdapterV2.makeClaudeQueryOptions({
             modelSelection: CLAUDE_TEST_MODEL_SELECTION,
-            nativeThreadId: "native-thread-claude-mcp-channel",
+            nativeThreadId: `native-thread-claude-mcp-${name}`,
             resume: false,
             cwd: null,
             environment: scrubbedEnvironment,
@@ -1305,28 +1331,115 @@ describe("ClaudeAdapterV2 MCP credential channel", () => {
           spawnClaudeCodeProcess: cli.spawn,
         },
       });
-      // open waits for the CLI's answer, so the first prompt sees the server.
-      assert.deepInclude(cli.controlRequests, {
-        subtype: "mcp_set_servers",
-        servers: { "t3-code": t3McpServer },
-      });
-      yield* session.close;
-
-      assert.lengthOf(cli.spawns, 1);
-      const [spawned] = cli.spawns;
-      assert.notInclude(spawned?.args ?? [], "--mcp-config");
-      assert.notInclude(JSON.stringify(spawned?.args), "dummy-mcp-credential");
-      assert.notInclude(JSON.stringify(spawned?.env), "dummy-mcp-credential");
-      assert.equal(spawned?.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, "1");
-    }).pipe(
+    });
+  const provideQueryRunner = <A, E>(
+    effect: Effect.Effect<A, E, ClaudeAdapterV2.ClaudeAgentSdkQueryRunner>,
+  ) =>
+    effect.pipe(
       Effect.provide(ClaudeAdapterV2.layerQueryRunner),
       Effect.provideService(
         ProviderEventLoggers.ProviderEventLoggers,
         ProviderEventLoggers.NoOpProviderEventLoggers,
       ),
       Effect.provide(NodeServices.layer),
+    );
+
+  it.effect("sends the t3-code server over the control channel, not argv or the environment", () =>
+    provideQueryRunner(
+      Effect.gen(function* () {
+        const cli = makeFakeClaudeCli();
+        const session = yield* openWithMcpServer(cli, "channel");
+        // open waits for the CLI's answer, so the first prompt sees the server.
+        assert.deepInclude(cli.controlRequests, {
+          subtype: "mcp_set_servers",
+          servers: { "t3-code": t3McpServer },
+        });
+        yield* session.close;
+
+        assert.lengthOf(cli.spawns, 1);
+        const [spawned] = cli.spawns;
+        assert.notInclude(spawned?.args ?? [], "--mcp-config");
+        assert.notInclude(JSON.stringify(spawned?.args), "dummy-mcp-credential");
+        assert.notInclude(JSON.stringify(spawned?.env), "dummy-mcp-credential");
+        assert.equal(spawned?.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, "1");
+      }),
     ),
   );
+
+  it.effect("closes the CLI when open is interrupted during MCP registration", () =>
+    provideQueryRunner(
+      Effect.gen(function* () {
+        const cli = makeFakeClaudeCli({ type: "withheld" });
+        const opening = yield* openWithMcpServer(cli, "interrupted").pipe(Effect.forkChild);
+        yield* Effect.promise(() => cli.setServersRequested);
+        yield* Fiber.interrupt(opening);
+        yield* settleFakeClaudeCliIo;
+
+        assert.isTrue(cli.state.stdinClosed, "the CLI started by the interrupted open is closed");
+        assert.isTrue(Exit.hasInterrupts(yield* Fiber.await(opening)));
+      }),
+    ),
+  );
+
+  it.effect("fails the open and closes the CLI when it rejects MCP registration", () =>
+    provideQueryRunner(
+      Effect.gen(function* () {
+        const cli = makeFakeClaudeCli({ type: "rejected", error: "mcp_set_servers failed" });
+        const opened = yield* openWithMcpServer(cli, "rejected").pipe(Effect.result);
+        yield* settleFakeClaudeCliIo;
+
+        assert.equal(opened._tag, "Failure", "no session is returned for a rejected registration");
+        if (opened._tag === "Failure") {
+          assert.equal(opened.failure.method, "setMcpServers");
+        }
+        assert.isTrue(cli.state.stdinClosed, "the CLI is closed");
+      }),
+    ),
+  );
+
+  it.effect("fails the open and closes the CLI when MCP registration gets no answer", () =>
+    provideQueryRunner(
+      Effect.gen(function* () {
+        const cli = makeFakeClaudeCli({ type: "withheld" });
+        const opening = yield* openWithMcpServer(cli, "unanswered").pipe(
+          Effect.result,
+          Effect.forkChild,
+        );
+        yield* Effect.promise(() => cli.setServersRequested);
+        yield* TestClock.adjust("90 seconds");
+        yield* settleFakeClaudeCliIo;
+
+        assert.isTrue(cli.state.stdinClosed, "the CLI is closed after the registration deadline");
+        const opened = yield* Fiber.join(opening);
+        assert.equal(opened._tag, "Failure");
+        if (opened._tag === "Failure") {
+          assert.equal(opened.failure.method, "setMcpServers");
+        }
+      }),
+    ),
+  );
+
+  it.effect("opens and logs the servers that failed to connect, without their config", () => {
+    const logs: Array<unknown> = [];
+    const logger = Logger.make(({ message }) => {
+      logs.push(message);
+    });
+    return provideQueryRunner(
+      Effect.gen(function* () {
+        const cli = makeFakeClaudeCli({
+          type: "failed",
+          errors: { "t3-code": "HTTP 401 missing_bearer_token" },
+        });
+        const session = yield* openWithMcpServer(cli, "connect-failed");
+        yield* session.close;
+
+        const logged = JSON.stringify(logs);
+        assert.include(logged, "orchestration-v2.claude-mcp-server-connect-failed");
+        assert.include(logged, "HTTP 401 missing_bearer_token");
+        assert.notInclude(logged, "dummy-mcp-credential");
+      }),
+    ).pipe(Effect.provide(Logger.layer([logger], { mergeWithExisting: false })));
+  });
 
   it.effect("keeps the credential out of the environment the adapter gives the CLI", () =>
     Effect.scoped(
