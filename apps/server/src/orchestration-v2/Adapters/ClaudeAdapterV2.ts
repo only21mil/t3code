@@ -636,11 +636,17 @@ export const layerQueryRunner: Layer.Layer<
           ),
           Stream.toAsyncIterable,
         );
+        // The SDK would pass `mcpServers` to the CLI as an inline
+        // `--mcp-config` argument, which every local user can read. They are
+        // sent over the stdin control channel below instead, so a credential
+        // in a server's headers reaches neither the CLI's argv nor its
+        // environment, which every command the agent runs inherits.
+        const { mcpServers, ...queryOptions } = input.options;
         // The SDK spawns a native binary as `path ...executableArgs ...sdkArgs`,
         // which lets the agent scope wrapper go in front of the CLI while the
         // SDK keeps its own stderr capture and exit reporting. The SDK runs a
         // script entry through node instead, so those launch unwrapped.
-        const binaryPath = input.options.pathToClaudeCodeExecutable;
+        const binaryPath = queryOptions.pathToClaudeCodeExecutable;
         const launch =
           binaryPath === undefined ||
           CLAUDE_SCRIPT_EXTENSIONS.some((ext) => binaryPath.endsWith(ext))
@@ -650,15 +656,15 @@ export const layerQueryRunner: Layer.Layer<
                 args: [],
                 name: "claude",
                 threadId: input.threadId,
-                env: input.options.env,
+                env: queryOptions.env,
               });
         const options =
           launch === undefined || launch.args.length === 0
-            ? input.options
+            ? queryOptions
             : {
-                ...input.options,
+                ...queryOptions,
                 pathToClaudeCodeExecutable: launch.command,
-                executableArgs: [...launch.args, ...(input.options.executableArgs ?? [])],
+                executableArgs: [...launch.args, ...(queryOptions.executableArgs ?? [])],
               };
         const queryRuntime = yield* Effect.try({
           try: () =>
@@ -668,6 +674,23 @@ export const layerQueryRunner: Layer.Layer<
             }),
           catch: (cause) => queryRunnerError(cause, "query"),
         });
+        if (mcpServers !== undefined) {
+          // Resolves once each server has connected or failed, so the first
+          // prompt sees the tools. A CLI that exits during startup rejects
+          // this, and the message stream reports that same exit, so the
+          // rejection is only logged here.
+          yield* Effect.tryPromise({
+            try: () => queryRuntime.setMcpServers(mcpServers),
+            catch: (cause) => queryRunnerError(cause, "setMcpServers"),
+          }).pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("orchestration-v2.claude-set-mcp-servers-failed", {
+                threadId: input.threadId,
+                cause,
+              }),
+            ),
+          );
+        }
         yield* logProtocolEvent({
           direction: "outgoing",
           stage: "decoded",
@@ -1005,12 +1028,9 @@ export const CLAUDE_T3_MCP_TOOL_TIMEOUT_MS = 65 * 60 * 1_000;
 // read-only orchestrator tools so a read-only session cannot silently spawn
 // threads or scheduled tasks.
 //
-// The SDK passes `mcpServers` to the CLI as an inline `--mcp-config` argument,
-// and process arguments are readable by every local user. The credential
-// therefore travels in the child's environment, which only its owner can read,
-// and the CLI expands the `${VAR}` reference when it connects.
-const CLAUDE_T3_MCP_AUTHORIZATION_ENV = "T3_CODE_MCP_AUTHORIZATION";
-
+// The header carries the credential itself: the query runner sends
+// `mcpServers` over the CLI's stdin control channel, never its argv or
+// environment (see layerQueryRunner).
 export function claudeMcpQueryOverrides(input: {
   readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
   readonly readOnlySandbox: boolean;
@@ -1018,7 +1038,6 @@ export function claudeMcpQueryOverrides(input: {
 }): {
   readonly allowedTools?: ReadonlyArray<string>;
   readonly mcpServers?: ClaudeQueryOptions["mcpServers"];
-  readonly mcpEnvironment?: Readonly<Record<string, string>>;
 } {
   const session = input.mcpSession;
   if (session === undefined) {
@@ -1034,12 +1053,11 @@ export function claudeMcpQueryOverrides(input: {
         type: "http",
         url: session.endpoint,
         headers: {
-          Authorization: `\${${CLAUDE_T3_MCP_AUTHORIZATION_ENV}}`,
+          Authorization: session.authorizationHeader,
         },
         timeout: CLAUDE_T3_MCP_TOOL_TIMEOUT_MS,
       },
     },
-    mcpEnvironment: { [CLAUDE_T3_MCP_AUTHORIZATION_ENV]: session.authorizationHeader },
   };
 }
 
@@ -1670,7 +1688,6 @@ export function claudeEffectiveQueryPolicyKey(
   mcpOverrides: {
     readonly allowedTools?: ReadonlyArray<string>;
     readonly mcpServers?: ClaudeQueryOptions["mcpServers"];
-    readonly mcpEnvironment?: Readonly<Record<string, string>>;
   },
 ): string {
   return JSON.stringify({
@@ -1681,7 +1698,6 @@ export function claudeEffectiveQueryPolicyKey(
         : { allowedTools: mcpOverrides.allowedTools }),
     }),
     mcpServers: mcpOverrides.mcpServers,
-    mcpEnvironment: mcpOverrides.mcpEnvironment,
   });
 }
 
@@ -7488,7 +7504,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             cwd: turnInput.runtimePolicy.cwd,
             attachmentsDir,
             settings: adapterOptions.settings,
-            environment: { ...adapterOptions.environment, ...mcpOverrides.mcpEnvironment },
+            environment: adapterOptions.environment,
             tools: queryPolicy.tools ?? CLAUDE_CODE_PRESET_TOOLS,
             ...(mcpOverrides.allowedTools === undefined
               ? {}
