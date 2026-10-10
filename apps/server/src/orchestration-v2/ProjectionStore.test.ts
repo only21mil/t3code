@@ -2979,7 +2979,69 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         return threadId;
       });
 
-      const threadId = yield* attachErroredSession("own", "own session failed", now);
+      const failure = {
+        class: "usage_limit" as const,
+        message: "Plan limit reached.",
+        resetAt: "2099-01-01T00:00:00.000Z",
+        code: "usageLimitExceeded",
+        retryable: null,
+      };
+      const threadId = yield* attachErroredSession("own", failure.message, now);
+      // The own session repeats the root turn's limit, so the thread stays a
+      // recovery candidate only while the lookup reads that session.
+      const runId = RunId.make("run:projection-session-error-lookup:own");
+      const rootNodeId = NodeId.make("node:projection-session-error-lookup:own");
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-session-error-lookup:own:run"),
+        type: "run.created",
+        threadId,
+        runId,
+        nodeId: rootNodeId,
+        driver,
+        providerInstanceId,
+        occurredAt: now,
+        payload: {
+          id: runId,
+          threadId,
+          ordinal: 1,
+          providerInstanceId,
+          modelSelection,
+          providerThreadId: null,
+          userMessageId: MessageId.make("message:projection-session-error-lookup:own"),
+          rootNodeId,
+          activeAttemptId: null,
+          status: "failed",
+          requestedAt: now,
+          startedAt: now,
+          completedAt: now,
+          checkpointId: null,
+          contextHandoffId: null,
+        },
+      });
+      yield* projectionStore.apply({
+        id: EventId.make("event:projection-session-error-lookup:own:error"),
+        type: "turn-item.updated",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id: TurnItemId.make("projection-session-error-lookup:own:error"),
+          threadId,
+          runId,
+          nodeId: rootNodeId,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 1,
+          status: "failed",
+          title: "Usage limit reached",
+          startedAt: now,
+          completedAt: now,
+          updatedAt: now,
+          type: "error",
+          failure,
+        },
+      });
       // Every thread on the provider instance has its own session, and these
       // are newer. They must neither leak into the thread nor be walked for it.
       for (let index = 0; index < 24; index++) {
@@ -2990,11 +3052,20 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
       const shell = yield* projectionStore.getShellSnapshot().pipe(Effect.withTracer(tracer));
       assert.equal(
         shell.threads.find((thread) => thread.id === threadId)?.lastError,
-        "own session failed",
+        failure.message,
       );
-      yield* projectionStore
+      const candidates = yield* projectionStore
         .getLimitRecoveryCandidates({ now, autoResume: true, snooze: false })
         .pipe(Effect.withTracer(tracer));
+      // Another thread's newer error would replace the limit and drop the candidate.
+      const candidate = candidates.find((row) => row.id === threadId);
+      assert.isDefined(candidate);
+      assert.include(candidate, {
+        status: "failed",
+        lastErrorClass: "usage_limit",
+        usageLimitResetAt: failure.resetAt,
+        latestRunId: runId,
+      });
 
       // One provider instance usually holds most sessions. Driving the lookup
       // from sessions walks all of them for every thread in the snapshot.
