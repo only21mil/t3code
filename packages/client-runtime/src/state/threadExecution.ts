@@ -339,7 +339,8 @@ export interface ComposerBackgroundWork {
   readonly presentation: PendingBackgroundWorkPresentation;
   /**
    * Whether the strip offers Stop. Only for work a settled thread waits on:
-   * a working thread's composer Stop already covers it.
+   * a working thread's composer Stop already covers it. Stop ends only the
+   * wait, so subagents named apart from it keep running.
    */
   readonly stoppable: boolean;
 }
@@ -347,8 +348,9 @@ export interface ComposerBackgroundWork {
 /**
  * What the composer strip shows. A working thread names its live subagents,
  * since the post-settlement list is empty until its run settles. A settled
- * thread names the work it waits on, with Stop, or else subagents still
- * running without it, such as a follow-up on a finished task.
+ * thread names the work it waits on, with Stop, and then any other live
+ * subagent apart from it, such as a follow-up on a finished task. With
+ * nothing to wait on, those subagents show without Stop.
  */
 export function presentComposerBackgroundWork(input: {
   readonly threadWorking: boolean;
@@ -357,10 +359,78 @@ export function presentComposerBackgroundWork(input: {
 }): ComposerBackgroundWork | null {
   if (!input.threadWorking) {
     const pending = presentPendingBackgroundWork(input.pendingTasks);
-    if (pending !== null) return { presentation: pending, stoppable: true };
+    if (pending !== null) {
+      return {
+        presentation: withSeparateSubagents(
+          pending,
+          subagentsOutsideWait(input.pendingTasks, input.liveSubagents),
+        ),
+        stoppable: true,
+      };
+    }
   }
   const live = presentBackgroundWork(input.liveSubagents, false);
   return live === null ? null : { presentation: live, stoppable: false };
+}
+
+/**
+ * Live subagents the wait does not name, by task or by child thread. Each runs
+ * in its own conversation, which the parent's Stop does not reach.
+ */
+function subagentsOutsideWait(
+  pendingTasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>,
+  liveSubagents: ReadonlyArray<OrchestrationV2PendingBackgroundTask>,
+): ReadonlyArray<OrchestrationV2PendingBackgroundTask> {
+  const taskIds = new Set(pendingTasks.map((task) => task.taskId));
+  const childThreadIds = new Set(
+    pendingTasks.flatMap((task) =>
+      task.kind === "subagent" && task.childThreadId !== undefined ? [task.childThreadId] : [],
+    ),
+  );
+  return liveSubagents.filter(
+    (task) =>
+      !taskIds.has(task.taskId) &&
+      !(
+        task.kind === "subagent" &&
+        task.childThreadId !== undefined &&
+        childThreadIds.has(task.childThreadId)
+      ),
+  );
+}
+
+/** "Running: vp run dev; subagent Review runs separately". The wait leads, as Stop ends it. */
+function withSeparateSubagents(
+  wait: PendingBackgroundWorkPresentation,
+  subagents: ReadonlyArray<OrchestrationV2PendingBackgroundTask>,
+): PendingBackgroundWorkPresentation {
+  const items = subagents.map(presentBackgroundWorkItem);
+  const [only] = items;
+  if (only === undefined) return wait;
+  const noun = BACKGROUND_WORK_KINDS.subagent.singular;
+  const separate =
+    items.length > 1
+      ? `${items.length} ${BACKGROUND_WORK_KINDS.subagent.plural} run separately`
+      : only.label === noun
+        ? `a ${noun} runs separately`
+        : `${noun} ${only.label} runs separately`;
+  return { ...wait, title: `${wait.title}; ${separate}`, items: [...wait.items, ...items] };
+}
+
+function presentBackgroundWorkItem(
+  task: OrchestrationV2PendingBackgroundTask,
+): PendingBackgroundWorkItem {
+  const description = task.description?.trim();
+  const label =
+    task.kind === "subagent" && description !== undefined
+      ? formatSubagentDisplayTitle(description).trim()
+      : description;
+  return {
+    taskId: task.taskId,
+    kind: task.kind,
+    label:
+      label === undefined || label.length === 0 ? BACKGROUND_WORK_KINDS[task.kind].singular : label,
+    childThreadId: task.kind === "subagent" ? task.childThreadId : undefined,
+  };
 }
 
 /** `waiting` picks the wording: "Waiting on 2 subagents" or "Running 2 subagents". */
@@ -370,22 +440,7 @@ function presentBackgroundWork(
 ): PendingBackgroundWorkPresentation | null {
   if (tasks.length === 0) return null;
   const items = tasks
-    .map((task): PendingBackgroundWorkItem => {
-      const description = task.description?.trim();
-      const label =
-        task.kind === "subagent" && description !== undefined
-          ? formatSubagentDisplayTitle(description).trim()
-          : description;
-      return {
-        taskId: task.taskId,
-        kind: task.kind,
-        label:
-          label === undefined || label.length === 0
-            ? BACKGROUND_WORK_KINDS[task.kind].singular
-            : label,
-        childThreadId: task.kind === "subagent" ? task.childThreadId : undefined,
-      };
-    })
+    .map(presentBackgroundWorkItem)
     // `map` returned a new array; Hermes has no `toSorted`.
     .sort(
       (left, right) =>

@@ -618,6 +618,7 @@ describe("presentPendingBackgroundWork", () => {
 
 describe("presentComposerBackgroundWork", () => {
   const childThreadId = ThreadId.make("thread:child");
+  const otherThreadId = ThreadId.make("thread:other");
   // What ChatView feeds the composer strip from one parent projection.
   const composerWork = (input: {
     readonly runStatus: OrchestrationV2RunStatus;
@@ -625,6 +626,8 @@ describe("presentComposerBackgroundWork", () => {
     readonly childStatus?: "running" | "completed";
     readonly roster?: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
     readonly childConversationLive?: ReadonlyMap<string, boolean>;
+    /** A second subagent from the same run, still running as a task. */
+    readonly otherSubagent?: boolean;
   }) => {
     const runs = [{ id: RunId.make("run:parent"), ordinal: 1, status: input.runStatus }];
     const work = {
@@ -642,6 +645,18 @@ describe("presentComposerBackgroundWork", () => {
           runId: runs[0]!.id,
           childThreadId,
         },
+        ...(input.otherSubagent === true
+          ? [
+              {
+                id: TurnItemId.make("item:other"),
+                type: "subagent" as const,
+                status: "running" as const,
+                title: "Review src/math.ts",
+                runId: runs[0]!.id,
+                childThreadId: otherThreadId,
+              },
+            ]
+          : []),
       ],
     };
     return presentComposerBackgroundWork({
@@ -706,6 +721,187 @@ describe("presentComposerBackgroundWork", () => {
       presentation: { title: "Running subagent Sol 6.1 Xhigh · produce_probe", waiting: false },
       stoppable: false,
     });
+  });
+
+  // The parent waits on other work, which Stop ends. The follow-up runs in the
+  // child's own conversation, outside that wait, so it is named apart from it.
+  describe("a settled parent's follow-up beside other pending work", () => {
+    const followUp = {
+      runStatus: "completed",
+      threadWorking: false,
+      childStatus: "completed",
+      childConversationLive: new Map([[childThreadId, true]]),
+    } as const;
+    const followUpItem = {
+      taskId: "item:child",
+      kind: "subagent",
+      label: "Sol 6.1 Xhigh · produce_probe",
+      childThreadId,
+    };
+
+    it("keeps its link beside a command", () => {
+      expect(
+        composerWork({
+          ...followUp,
+          roster: [{ taskId: "dev", kind: "command", description: "vp run dev" }],
+        }),
+      ).toEqual({
+        presentation: {
+          title: "Running: vp run dev; subagent Sol 6.1 Xhigh · produce_probe runs separately",
+          items: [
+            { taskId: "dev", kind: "command", label: "vp run dev", childThreadId: undefined },
+            followUpItem,
+          ],
+          waiting: false,
+        },
+        stoppable: true,
+      });
+    });
+
+    it("keeps its link beside a monitor", () => {
+      expect(
+        composerWork({
+          ...followUp,
+          roster: [{ taskId: "watch", kind: "monitor", description: "Watch PR checks" }],
+        }),
+      ).toEqual({
+        presentation: {
+          title: "Watch PR checks; subagent Sol 6.1 Xhigh · produce_probe runs separately",
+          items: [
+            {
+              taskId: "watch",
+              kind: "monitor",
+              label: "Watch PR checks",
+              childThreadId: undefined,
+            },
+            followUpItem,
+          ],
+          waiting: true,
+        },
+        stoppable: true,
+      });
+    });
+
+    it("links both children beside another pending subagent", () => {
+      const work = composerWork({ ...followUp, otherSubagent: true });
+      expect(work?.presentation.title).toBe(
+        "Waiting on subagent Review src/math.ts; subagent Sol 6.1 Xhigh · produce_probe runs separately",
+      );
+      expect(work?.presentation.items.map((item) => item.childThreadId)).toEqual([
+        otherThreadId,
+        childThreadId,
+      ]);
+      expect(work?.stoppable).toBe(true);
+    });
+
+    it("counts several follow-ups apart from the wait", () => {
+      expect(
+        presentComposerBackgroundWork({
+          threadWorking: false,
+          pendingTasks: [{ taskId: "dev", kind: "command", description: "vp run dev" }],
+          liveSubagents: [
+            { taskId: "a", kind: "subagent", description: "Write tests", childThreadId },
+            { taskId: "b", kind: "subagent", childThreadId: otherThreadId },
+          ],
+        })?.presentation,
+      ).toMatchObject({
+        title: "Running: vp run dev; 2 subagents run separately",
+        items: [
+          { taskId: "dev" },
+          { taskId: "a", label: "Write tests", childThreadId },
+          { taskId: "b", label: "subagent", childThreadId: otherThreadId },
+        ],
+      });
+    });
+
+    // Stop still ends the stale task, so it stays in the wait; it is not
+    // counted again as running.
+    it("keeps a stale pending task in the wait without counting it as running", () => {
+      const stale = composerWork({
+        ...followUp,
+        otherSubagent: true,
+        childConversationLive: new Map([
+          [childThreadId, true],
+          [otherThreadId, false],
+        ]),
+      });
+      expect(stale?.presentation.title).toBe(
+        "Waiting on subagent Review src/math.ts; subagent Sol 6.1 Xhigh · produce_probe runs separately",
+      );
+      expect(stale?.presentation.items).toHaveLength(2);
+
+      expect(
+        composerWork({
+          ...followUp,
+          otherSubagent: true,
+          childConversationLive: new Map([
+            [childThreadId, false],
+            [otherThreadId, false],
+          ]),
+        }),
+      ).toMatchObject({
+        presentation: { title: "Waiting on subagent Review src/math.ts", waiting: true },
+        stoppable: true,
+      });
+    });
+  });
+
+  it("names a child the parent waits on once, by task or by child thread", () => {
+    expect(
+      composerWork({
+        runStatus: "waiting",
+        threadWorking: false,
+        childConversationLive: new Map([[childThreadId, true]]),
+      }),
+    ).toMatchObject({
+      presentation: { title: "Waiting on subagent Sol 6.1 Xhigh · produce_probe" },
+      stoppable: true,
+    });
+    // A native roster subagent has no child thread, only its task id.
+    expect(
+      composerWork({
+        runStatus: "completed",
+        threadWorking: false,
+        childStatus: "completed",
+        roster: [{ taskId: "native", kind: "subagent", description: "Explore the repo" }],
+      }),
+    ).toMatchObject({
+      presentation: {
+        title: "Waiting on subagent Explore the repo",
+        items: [{ taskId: "native" }],
+      },
+      stoppable: true,
+    });
+    const pendingTasks = [
+      { taskId: "roster", kind: "subagent", description: "Explore", childThreadId },
+    ] as const;
+    expect(
+      presentComposerBackgroundWork({
+        threadWorking: false,
+        pendingTasks,
+        liveSubagents: [
+          { taskId: "item:child", kind: "subagent", description: "Explore", childThreadId },
+        ],
+      }),
+    ).toEqual({ presentation: presentPendingBackgroundWork(pendingTasks), stoppable: true });
+    // Two native subagents without child threads are not the same child.
+    expect(
+      presentComposerBackgroundWork({
+        threadWorking: false,
+        pendingTasks: [{ taskId: "native-a", kind: "subagent" }],
+        liveSubagents: [{ taskId: "native-b", kind: "subagent" }],
+      })?.presentation.title,
+    ).toBe("Waiting on a subagent; a subagent runs separately");
+  });
+
+  it("keeps a settled wait unchanged when no other child runs", () => {
+    const pendingTasks = [
+      { taskId: "dev", kind: "command", description: "vp run dev" },
+      { taskId: "watch", kind: "monitor" },
+    ] as const;
+    expect(
+      presentComposerBackgroundWork({ threadWorking: false, pendingTasks, liveSubagents: [] }),
+    ).toEqual({ presentation: presentPendingBackgroundWork(pendingTasks), stoppable: true });
   });
 
   it("does not count a task left running after its child finished", () => {
