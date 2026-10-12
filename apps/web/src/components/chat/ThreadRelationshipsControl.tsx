@@ -8,6 +8,7 @@ import { PullRequestGlyph } from "../pullRequest/pullRequestIcons";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   deriveWorkflowGroups,
+  isActiveSubagentStatus,
   projectedSubagentsToRuntime,
   type RuntimeSubagent,
 } from "@t3tools/client-runtime/state/subagentRuntime";
@@ -201,6 +202,10 @@ function currentSubagent<Agent extends RuntimeSubagent>(
   const status = liveStatus ?? childThread.status;
   const startedAt = liveStatus ? childThread.activityRunStartedAt : childThread.latestRunStartedAt;
   const completedAt = liveStatus ? null : childThread.latestRunCompletedAt;
+  // An active task owns its child's live work, because the server records
+  // each follow-up after a task publishes as a new task. Only a settled task's
+  // output is stale beside newer child work.
+  const ownsLiveWork = liveStatus !== null && isActiveSubagentStatus(agent.status);
   return {
     ...agent,
     status:
@@ -211,10 +216,7 @@ function currentSubagent<Agent extends RuntimeSubagent>(
           : status,
     startedAt: startedAt ? DateTime.formatIso(startedAt) : null,
     completedAt: completedAt ? DateTime.formatIso(completedAt) : null,
-    // The task's output belongs to its recorded run, not newer child work.
-    progress: null,
-    result: null,
-    error: null,
+    ...(ownsLiveWork ? {} : { progress: null, result: null, error: null }),
   };
 }
 

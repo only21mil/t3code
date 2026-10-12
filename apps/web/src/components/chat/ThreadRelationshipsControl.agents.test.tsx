@@ -744,6 +744,178 @@ it("shows the matching child agent details and refreshes them when the agent set
   expect(text()).toContain("Lineage · 1 running");
 });
 
+it.each([
+  { driver: "codex", origin: "app_owned", runId: null },
+  { driver: "claudeAgent", origin: "provider_native", runId: "run-1" },
+])(
+  "keeps $origin task progress for its own child run and drops it for later child work",
+  async ({ driver, origin, runId }) => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    state.showTooltips = true;
+    const agent = {
+      id: "agent",
+      childThreadId: "child",
+      origin,
+      threadId: "parent",
+      runId,
+      nativeTaskRef: { driver, nativeId: "claude-task", strength: "strong" },
+      driver,
+      providerInstanceId: "codex",
+      title: "Worker",
+      prompt: "Check the change",
+      model: "gpt-5.4",
+      status: "running",
+      progress: "Inspecting source",
+      result: null,
+      startedAt: DateTime.makeUnsafe("2026-09-16T12:00:00Z"),
+      completedAt: null,
+      updatedAt: DateTime.makeUnsafe("2026-09-16T12:01:00Z"),
+    };
+    const child = {
+      id: "child",
+      title: "Worker",
+      lineage: { parentThreadId: "parent", relationshipToParent: "subagent" },
+      latestRunId: "child-run-1",
+      latestRunRequestedAt: DateTime.makeUnsafe("2026-09-16T12:00:00Z"),
+      latestRunStartedAt: DateTime.makeUnsafe("2026-09-16T12:00:02Z"),
+      latestRunCompletedAt: null,
+      activityRunStatus: "running",
+      activityRunStartedAt: DateTime.makeUnsafe("2026-09-16T12:00:02Z"),
+      status: "running",
+    };
+    const projection = {
+      thread: {
+        id: "parent",
+        lineage: { relationshipToParent: null },
+        activeProviderThreadId: null,
+      },
+      runs: [],
+      providerThreads: [],
+      providerSessions: [],
+      contextTransfers: [],
+      subagents: [agent],
+    };
+    state.projection = projection;
+    state.shells = [{ environmentId: "test", source: child }];
+    const panel = (
+      <ThreadRelationshipsPanel
+        environmentId={EnvironmentId.make("test")}
+        threadId={ThreadId.make("parent")}
+      />
+    );
+    await act(async () => {
+      renderer = create(panel);
+    });
+    const text = () =>
+      renderer.root
+        .findAll((node) => typeof node.type === "string")
+        .flatMap((node) => node.children.filter((child) => typeof child === "string"))
+        .join("");
+    const update = async (
+      subagent: Record<string, unknown>,
+      shell: Record<string, unknown> = child,
+    ) => {
+      state.projection = { ...projection, subagents: [{ ...agent, ...subagent }] };
+      state.shells = [{ environmentId: "test", source: shell }];
+      await act(async () => renderer.update(cloneElement(panel)));
+    };
+    const stopButtons = () =>
+      renderer.root.findAllByProps({ "aria-label": "Stop subagent Worker" }, { deep: false });
+
+    // The original run is live on the child, so its progress is current.
+    expect(text()).toContain("Lineage · 1 running");
+    expect(text()).toContain("Inspecting source");
+    expect(stopButtons()).toHaveLength(1);
+    await act(async () => stopButtons()[0]!.props.onClick());
+    expect(state.command).toHaveBeenLastCalledWith({
+      environmentId: "test",
+      input:
+        origin === "provider_native"
+          ? { threadId: "parent", subagentId: "agent" }
+          : { threadId: "child" },
+    });
+    await update({}, { ...child, activityRunStatus: "waiting" });
+    expect(text()).toContain("Inspecting source");
+    await act(async () => renderer.root.findAllByProps({ part: "row" })[0]!.props.onClick());
+    expect(state.navigate).toHaveBeenLastCalledWith({
+      to: "/$environmentId/$threadId",
+      params: { environmentId: "test", threadId: "child" },
+    });
+
+    const settled = {
+      status: "completed",
+      progress: "Final source pass",
+      result: "Original answer",
+      completedAt: DateTime.makeUnsafe("2026-09-16T12:03:00Z"),
+    };
+    const laterRun = {
+      ...child,
+      latestRunId: "child-run-2",
+      latestRunRequestedAt: DateTime.makeUnsafe("2026-09-16T12:05:00Z"),
+      latestRunStartedAt: null,
+      activityRunStatus: null,
+      activityRunStartedAt: null,
+      status: "queued",
+    };
+    // A later queued or running child turn is not the settled task's work.
+    await update(settled, laterRun);
+    expect(text()).toContain("Lineage");
+    expect(text()).toContain("pending");
+    expect(text()).not.toContain("Original answer");
+    expect(text()).not.toContain("Final source pass");
+    expect(text()).not.toContain("Previous agents");
+    await update(settled, {
+      ...laterRun,
+      latestRunStartedAt: DateTime.makeUnsafe("2026-09-16T12:05:01Z"),
+      activityRunStatus: "running",
+      activityRunStartedAt: DateTime.makeUnsafe("2026-09-16T12:05:01Z"),
+      status: "running",
+    });
+    expect(text()).toContain("Lineage · 1 running");
+    expect(text()).not.toContain("Original answer");
+    expect(text()).not.toContain("Final source pass");
+    expect(stopButtons()).toHaveLength(origin === "app_owned" ? 1 : 0);
+    await update(
+      { ...settled, status: "failed", result: "Original build failed" },
+      { ...laterRun, activityRunStatus: "running", status: "running" },
+    );
+    expect(text()).not.toContain("Original build failed");
+
+    // Without later child work, the settled task keeps its outcome in history.
+    for (const [status, result] of [
+      ["completed", "Original answer"],
+      ["failed", "Original build failed"],
+    ] as const) {
+      await update(
+        { ...settled, status, result },
+        {
+          ...child,
+          latestRunCompletedAt: DateTime.makeUnsafe("2026-09-16T12:03:00Z"),
+          activityRunStatus: null,
+          activityRunStartedAt: null,
+          status,
+        },
+      );
+      expect(text()).toContain("Previous agents");
+      // The group stays expanded across updates once opened.
+      if (status === "completed") {
+        await act(async () =>
+          renderer.root.findByProps({ type: "button", "aria-expanded": false }).props.onClick(),
+        );
+      }
+      expect(text()).toContain(result);
+      expect(stopButtons()).toHaveLength(0);
+    }
+
+    // A native agent without app runs, or a missing child chat, keeps its own task.
+    await update({}, { ...child, latestRunId: null, activityRunStatus: null, status: "idle" });
+    expect(text()).toContain("Inspecting source");
+    state.shells = [];
+    await act(async () => renderer.update(cloneElement(panel)));
+    expect(text()).toContain("Inspecting source");
+  },
+);
+
 it("shows readable models and only differing workspace details in agent tooltips", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   state.showTooltips = true;
