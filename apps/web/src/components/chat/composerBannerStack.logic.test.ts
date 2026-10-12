@@ -7,7 +7,11 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 
 import type { ComposerBannerStackItem } from "./ComposerBannerStack";
-import { composeComposerBannerStack, orderComposerBannerStack } from "./composerBannerStack.logic";
+import {
+  composeComposerBannerStack,
+  composeThreadActivityBanners,
+  orderComposerBannerStack,
+} from "./composerBannerStack.logic";
 
 const banner = (
   id: string,
@@ -108,5 +112,63 @@ describe("composeComposerBannerStack", () => {
       stacked: ["child", "error", "urgent", "info"],
       taskPlanInline: false,
     });
+  });
+});
+
+describe("composeThreadActivityBanners", () => {
+  // The three activity banners ChatView builds for the open thread.
+  const childInput = banner("child-input:thread:asking", { priority: "activity" });
+  const goal = { ...banner("goal:thread:parent", { priority: "activity" }), actions: "Clear" };
+  const backgroundWork = banner("background-work:thread:parent", { priority: "activity" });
+
+  it("keeps live subagent links in front of a persistent goal", () => {
+    const bannerItems = composeThreadActivityBanners({ childInput: null, goal, backgroundWork });
+    expect(visible(bannerItems)).toEqual({
+      front: "background-work:thread:parent",
+      stacked: ["goal:thread:parent"],
+      taskPlanInline: false,
+    });
+    // The goal stays one hover away with its own actions.
+    expect(bannerItems.find((item) => item.id === goal.id)).toBe(goal);
+  });
+
+  it("keeps the links in front of the goal when there is also a task plan", () => {
+    const bannerItems = composeThreadActivityBanners({ childInput: null, goal, backgroundWork });
+    expect(visible(bannerItems, { taskPlan: "Tasks 1/4" })).toEqual({
+      front: "background-work:thread:parent",
+      stacked: ["goal:thread:parent"],
+      taskPlanInline: true,
+    });
+  });
+
+  it("still leads with a subagent's request for input", () => {
+    expect(
+      visible(composeThreadActivityBanners({ childInput, goal, backgroundWork }), {
+        taskPlan: "Tasks",
+      }),
+    ).toEqual({
+      front: "child-input:thread:asking",
+      stacked: ["background-work:thread:parent", "goal:thread:parent"],
+      taskPlanInline: true,
+    });
+  });
+
+  it("still leads with the sync phase", () => {
+    expect(
+      visible(composeThreadActivityBanners({ childInput: null, goal, backgroundWork }), {
+        syncPhase: "Syncing",
+      }),
+    ).toMatchObject({
+      front: "composer-activity",
+      stacked: ["background-work:thread:parent", "goal:thread:parent"],
+    });
+  });
+
+  it("shows the goal in front when no subagent is live", () => {
+    expect(
+      visible(composeThreadActivityBanners({ childInput: null, goal, backgroundWork: null }), {
+        taskPlan: "Tasks",
+      }),
+    ).toEqual({ front: "goal:thread:parent", stacked: [], taskPlanInline: true });
   });
 });

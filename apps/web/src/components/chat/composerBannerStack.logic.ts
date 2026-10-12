@@ -27,6 +27,20 @@ export function orderComposerBannerStack<Entry extends PrioritizedEntry>(
 }
 
 /**
+ * The thread's own activity banners, in stack order. A subagent waiting on the
+ * user leads. Live subagent links come before a /goal: the goal stays up for
+ * its whole lifetime and would keep the links behind the stack, while the goal
+ * stays one hover away with its actions.
+ */
+export function composeThreadActivityBanners(banners: {
+  readonly childInput: ComposerBannerStackItem | null;
+  readonly goal: ComposerBannerStackItem | null;
+  readonly backgroundWork: ComposerBannerStackItem | null;
+}): ReadonlyArray<ComposerBannerStackItem> {
+  return [banners.childInput, banners.backgroundWork, banners.goal].filter((item) => item !== null);
+}
+
+/**
  * Adds the composer's own activity row to its banner stack. The sync phase
  * leads it. The task plan leads only when no banner is activity, such as
  * subagents at work: it would hide their links behind the stack, so it stays
