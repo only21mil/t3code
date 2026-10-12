@@ -214,7 +214,8 @@ const makeHarness = Effect.fn("TestThreadAtoms.makeHarness")(function* (options?
     ),
   );
   const raw = createEnvironmentThreadStateAtoms(runtime);
-  const details = createEnvironmentThreadDetailAtoms(raw.stateAtom);
+  const noChildConversations = Atom.make<ReadonlyMap<string, boolean>>(new Map());
+  const details = createEnvironmentThreadDetailAtoms(raw.stateAtom, () => noChildConversations);
   const ref = { environmentId: TARGET.environmentId, threadId: THREAD_ID };
   const stateAtom = details.stateAtom(ref);
   const makeRegistry = Effect.acquireRelease(
