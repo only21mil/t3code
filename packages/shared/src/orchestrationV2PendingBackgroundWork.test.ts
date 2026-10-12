@@ -2,7 +2,9 @@ import { describe, expect, it } from "vite-plus/test";
 import type { OrchestrationV2PendingBackgroundTask } from "@t3tools/contracts";
 import {
   backgroundWorkHoldsCompletion,
+  deriveLiveSubagents,
   derivePendingBackgroundWork,
+  subagentConversationIsLive,
   turnItemUpdateCanEndBackgroundWork,
 } from "./orchestrationV2PendingBackgroundWork.ts";
 
@@ -585,5 +587,166 @@ describe("derivePendingBackgroundWork kinds", () => {
         }),
       ).toEqual([]);
     });
+  });
+});
+
+describe("deriveLiveSubagents", () => {
+  const run = (id: string, ordinal: number, status: "running" | "waiting" | "rolled_back") => ({
+    id: id as never,
+    ordinal,
+    status,
+  });
+  const subagentItem = (
+    id: string,
+    status: "running" | "waiting" | "pending" | "completed" | "failed" | "interrupted",
+    options: { runId?: string; childThreadId?: string; nativeId?: string } = {},
+  ) => ({
+    id: id as never,
+    type: "subagent" as const,
+    status,
+    title: `Review ${id}`,
+    runId: (options.runId ?? "run-2") as never,
+    nativeItemRef: options.nativeId === undefined ? null : { nativeId: options.nativeId },
+    ...(options.childThreadId === undefined
+      ? {}
+      : { childThreadId: options.childThreadId as never }),
+  });
+  const runningParent = {
+    latestRun: run("run-2", 2, "running"),
+    runs: [run("run-1", 1, "waiting"), run("run-2", 2, "running")],
+    providerThreads: [],
+  };
+
+  it("names a working parent's live child, which the post-settlement list leaves out", () => {
+    const input = {
+      ...runningParent,
+      turnItems: [subagentItem("a", "running", { childThreadId: "thread:a" })],
+    };
+    expect(derivePendingBackgroundWork(input)).toEqual([]);
+    expect(deriveLiveSubagents(input)).toEqual([
+      { taskId: "a", description: "Review a", kind: "subagent", childThreadId: "thread:a" },
+    ]);
+  });
+
+  it("keeps a child launched by an earlier turn while a newer turn works", () => {
+    expect(
+      deriveLiveSubagents({
+        ...runningParent,
+        turnItems: [
+          subagentItem("old", "waiting", { runId: "run-1", childThreadId: "thread:old" }),
+        ],
+      }).map((task) => task.taskId),
+    ).toEqual(["old"]);
+  });
+
+  it("leaves finished, failed and interrupted children to the relationship history", () => {
+    expect(
+      deriveLiveSubagents({
+        ...runningParent,
+        turnItems: [
+          subagentItem("done", "completed", { childThreadId: "thread:done" }),
+          subagentItem("failed", "failed", { childThreadId: "thread:failed" }),
+          subagentItem("stopped", "interrupted", { childThreadId: "thread:stopped" }),
+          subagentItem("queued", "pending", { childThreadId: "thread:queued" }),
+        ],
+      }).map((task) => task.taskId),
+    ).toEqual(["queued"]);
+  });
+
+  it("trusts the child conversation over its task status", () => {
+    const tasks = deriveLiveSubagents({
+      ...runningParent,
+      turnItems: [
+        // The task finished, but a follow-up is running in the child.
+        subagentItem("follow-up", "completed", { childThreadId: "thread:follow-up" }),
+        // The task was left running, but its child finished.
+        subagentItem("stale", "running", { childThreadId: "thread:stale" }),
+        // No shell for this child, so the task status stands.
+        subagentItem("unknown", "running", { childThreadId: "thread:unknown" }),
+      ],
+      childConversationLive: new Map([
+        ["thread:follow-up", true],
+        ["thread:stale", false],
+      ]),
+    });
+    expect(tasks.map((task) => task.taskId)).toEqual(["follow-up", "unknown"]);
+  });
+
+  it("drops children of rolled-back turns, and the roster when the latest turn rolled back", () => {
+    expect(
+      deriveLiveSubagents({
+        latestRun: run("run-2", 2, "rolled_back"),
+        runs: [run("run-1", 1, "waiting"), run("run-2", 2, "rolled_back")],
+        providerThreads: [
+          {
+            id: "pt-1" as never,
+            pendingBackgroundTasks: [{ taskId: "native", kind: "subagent" }],
+          },
+        ],
+        turnItems: [
+          subagentItem("abandoned", "running", { runId: "run-2" }),
+          subagentItem("earlier", "running", { runId: "run-1" }),
+        ],
+      }).map((task) => task.taskId),
+    ).toEqual(["earlier"]);
+  });
+
+  it("names native roster subagents once, and only subagents", () => {
+    const tasks = deriveLiveSubagents({
+      ...runningParent,
+      activeProviderThreadId: "pt-1",
+      providerThreads: [
+        {
+          id: "pt-1" as never,
+          pendingBackgroundTasks: [
+            { taskId: "native-1", description: "  Explore the repo ", kind: "subagent" },
+            { taskId: "dev", description: "vp run dev", kind: "command" },
+            { taskId: "watch", kind: "monitor" },
+          ],
+        },
+        {
+          id: "pt-old" as never,
+          pendingBackgroundTasks: [{ taskId: "other-thread", kind: "subagent" }],
+        },
+      ],
+      turnItems: [
+        subagentItem("item-1", "running", { nativeId: "native-1" }),
+        {
+          id: "cmd" as never,
+          type: "command_execution",
+          status: "running",
+          title: "npm test",
+          input: "npm test",
+        },
+      ],
+    });
+    expect(tasks).toEqual([
+      { taskId: "native-1", description: "Explore the repo", kind: "subagent" },
+    ]);
+  });
+
+  it("names a child thread once when several items point at it", () => {
+    expect(
+      deriveLiveSubagents({
+        ...runningParent,
+        turnItems: [
+          subagentItem("first", "running", { runId: "run-1", childThreadId: "thread:a" }),
+          subagentItem("again", "running", { childThreadId: "thread:a" }),
+        ],
+      }).map((task) => task.taskId),
+    ).toEqual(["first"]);
+  });
+});
+
+describe("subagentConversationIsLive", () => {
+  it.each([
+    ["an active run", true, { activityRunStatus: "running", latestRunId: "r", status: "running" }],
+    ["a waiting run", true, { activityRunStatus: "waiting", latestRunId: "r", status: "waiting" }],
+    ["a queued follow-up", true, { activityRunStatus: null, latestRunId: "r", status: "queued" }],
+    ["a completed run", false, { activityRunStatus: null, latestRunId: "r", status: "completed" }],
+    ["a failed run", false, { latestRunId: "r", status: "failed" }],
+    ["no run yet", null, { activityRunStatus: null, latestRunId: null, status: "idle" }],
+  ] as const)("%s: %s", (_case, live, shell) => {
+    expect(subagentConversationIsLive(shell as never)).toBe(live);
   });
 });

@@ -5,6 +5,10 @@ import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { ComposerBanner, type ComposerBannerVariant } from "./ComposerBanner";
+import {
+  orderComposerBannerStack,
+  type ComposerBannerStackEntry,
+} from "./composerBannerStack.logic";
 import { observeResize } from "~/lib/observeResize";
 
 // Match the duration-220 exit transition before removing a dismissed notice.
@@ -27,18 +31,6 @@ export type ComposerBannerStackContent = Pick<
   ComposerBannerStackItem,
   "id" | "variant" | "priority"
 > & { readonly content: ReactNode };
-
-type ComposerBannerStackEntry = ComposerBannerStackItem | ComposerBannerStackContent;
-
-function bannerPriority(item: ComposerBannerStackEntry) {
-  if (item.priority === "activity") {
-    return 0;
-  }
-  if (item.priority === "urgent" || item.variant === "error" || item.variant === "warning") {
-    return 1;
-  }
-  return 2;
-}
 
 interface ComposerBannerStackProps {
   readonly className?: string;
@@ -87,8 +79,7 @@ export function ComposerBannerStack({ className, items, attachedAbove }: Compose
     }
   }, [stackExpanded]);
 
-  // Activity stays attached. Urgency and severity only order the notices behind it.
-  const orderedItems = items.toSorted((a, b) => bannerPriority(a) - bannerPriority(b));
+  const orderedItems = orderComposerBannerStack(items);
   const frontItem = orderedItems[0];
   if (!frontItem) {
     return (

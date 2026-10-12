@@ -2,6 +2,7 @@ import type {
   OrchestrationV2PendingBackgroundTask,
   OrchestrationV2ProviderThread,
   OrchestrationV2Run,
+  OrchestrationV2ThreadShell,
   OrchestrationV2TurnItem,
   ThreadId,
   ThreadPullRequestLink,
@@ -253,22 +254,12 @@ export function derivePendingBackgroundWork(input: {
 
   const byTaskId = new Map<string, PendingBackgroundWorkTask>();
 
-  const providerThreads =
-    input.activeProviderThreadId === undefined || input.activeProviderThreadId === null
-      ? input.providerThreads
-      : input.providerThreads.filter((thread) => thread.id === input.activeProviderThreadId);
-
-  for (const providerThread of providerThreads) {
+  for (const providerThread of rosterForActiveProviderThread(input)) {
     for (const task of providerThread.pendingBackgroundTasks ?? []) {
       if (task.taskId.length === 0 || byTaskId.has(task.taskId)) {
         continue;
       }
-      const { description: rawDescription, ...named } = task;
-      const description = rawDescription?.trim();
-      byTaskId.set(task.taskId, {
-        ...named,
-        ...(description === undefined || description.length === 0 ? {} : { description }),
-      });
+      byTaskId.set(task.taskId, trimmedRosterTask(task));
     }
   }
 
@@ -282,6 +273,114 @@ export function derivePendingBackgroundWork(input: {
   }
 
   for (const task of pullRequestWatchTasks(input.pullRequests)) byTaskId.set(task.taskId, task);
+
+  return Array.from(byTaskId.values());
+}
+
+function trimmedRosterTask(task: PendingBackgroundWorkTask): PendingBackgroundWorkTask {
+  const { description: rawDescription, ...named } = task;
+  const description = rawDescription?.trim();
+  return {
+    ...named,
+    ...(description === undefined || description.length === 0 ? {} : { description }),
+  };
+}
+
+function rosterForActiveProviderThread(input: {
+  readonly providerThreads: ReadonlyArray<PendingBackgroundWorkProviderThread>;
+  readonly activeProviderThreadId?: string | null;
+}): ReadonlyArray<PendingBackgroundWorkProviderThread> {
+  return input.activeProviderThreadId === undefined || input.activeProviderThreadId === null
+    ? input.providerThreads
+    : input.providerThreads.filter((thread) => thread.id === input.activeProviderThreadId);
+}
+
+const LIVE_CONVERSATION_STATUSES = new Set<OrchestrationV2ThreadShell["status"]>([
+  "preparing",
+  "queued",
+  "starting",
+  "running",
+  "waiting",
+]);
+
+type SubagentConversationShell = Pick<OrchestrationV2ThreadShell, "latestRunId" | "status"> & {
+  readonly activityRunStatus?: OrchestrationV2ThreadShell["activityRunStatus"];
+};
+
+/**
+ * Whether a subagent's own conversation is working, from its thread shell.
+ * Null when the child never ran, so its task status is all there is. This is
+ * the status the relationship panel shows for the child.
+ */
+export function subagentConversationIsLive(shell: SubagentConversationShell): boolean | null {
+  if (shell.activityRunStatus !== undefined && shell.activityRunStatus !== null) {
+    return true;
+  }
+  if (shell.latestRunId === null) {
+    return null;
+  }
+  return LIVE_CONVERSATION_STATUSES.has(shell.status);
+}
+
+/**
+ * Subagents still at work for a thread, whatever its own run is doing. The
+ * composer names these while the parent works, when the post-settlement list
+ * above is empty by design. Only subagents: commands and monitors stay
+ * post-settlement work.
+ *
+ * Sources are the provider roster (Claude background agents) and subagent
+ * turn items from every run but rolled-back ones, since a child launched by
+ * an earlier turn can outlive it. `childConversationLive`, keyed by child
+ * thread id, overrides the task's own status: a finished task can have a
+ * running follow-up, and a task left running can point at a finished child.
+ * Deduped by native task id and by child thread.
+ */
+export function deriveLiveSubagents(input: {
+  readonly latestRun: PendingBackgroundWorkRun | null | undefined;
+  readonly providerThreads: ReadonlyArray<PendingBackgroundWorkProviderThread>;
+  readonly turnItems: ReadonlyArray<PendingBackgroundWorkTurnItem>;
+  readonly activeProviderThreadId?: string | null;
+  readonly runs?: ReadonlyArray<PendingBackgroundWorkRun>;
+  readonly childConversationLive?: ReadonlyMap<string, boolean>;
+}): ReadonlyArray<PendingBackgroundWorkTask> {
+  const isLive = (childThreadId: string | null | undefined, taskActive: boolean) =>
+    (childThreadId == null ? undefined : input.childConversationLive?.get(childThreadId)) ??
+    taskActive;
+  const byTaskId = new Map<string, PendingBackgroundWorkTask>();
+  const childThreadIds = new Set<string>();
+  const add = (task: PendingBackgroundWorkTask) => {
+    if (task.taskId.length === 0 || byTaskId.has(task.taskId)) return;
+    const childThreadId = task.kind === "subagent" ? task.childThreadId : undefined;
+    if (childThreadId !== undefined) {
+      if (childThreadIds.has(childThreadId)) return;
+      childThreadIds.add(childThreadId);
+    }
+    byTaskId.set(task.taskId, task);
+  };
+
+  // The roster is not tied to a run, so a rolled-back latest run drops it whole.
+  if (input.latestRun?.status !== "rolled_back") {
+    for (const providerThread of rosterForActiveProviderThread(input)) {
+      for (const task of providerThread.pendingBackgroundTasks ?? []) {
+        if (task.kind !== "subagent" || !isLive(task.childThreadId, true)) continue;
+        add(trimmedRosterTask(task));
+      }
+    }
+  }
+
+  const rolledBackRunIds = new Set(
+    (input.runs ?? []).filter((run) => run.status === "rolled_back").map((run) => String(run.id)),
+  );
+  for (const item of input.turnItems) {
+    if (
+      item.type !== "subagent" ||
+      (item.runId != null && rolledBackRunIds.has(String(item.runId))) ||
+      !isLive(item.childThreadId, isOrchestrationV2WorkActive(item.status))
+    ) {
+      continue;
+    }
+    add(pendingTaskFromTurnItem(nativeTaskIdFromTurnItem(item), item));
+  }
 
   return Array.from(byTaskId.values());
 }

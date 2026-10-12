@@ -332,8 +332,43 @@ function joinWithAnd(parts: ReadonlyArray<string>): string {
 export function presentPendingBackgroundWork(
   tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>,
 ): PendingBackgroundWorkPresentation | null {
+  return presentBackgroundWork(tasks, backgroundWorkHoldsCompletion(tasks));
+}
+
+export interface ComposerBackgroundWork {
+  readonly presentation: PendingBackgroundWorkPresentation;
+  /**
+   * Whether the strip offers Stop. Only for work a settled thread waits on:
+   * a working thread's composer Stop already covers it.
+   */
+  readonly stoppable: boolean;
+}
+
+/**
+ * What the composer strip shows. A working thread names its live subagents,
+ * since the post-settlement list is empty until its run settles. A settled
+ * thread names the work it waits on, with Stop, or else subagents still
+ * running without it, such as a follow-up on a finished task.
+ */
+export function presentComposerBackgroundWork(input: {
+  readonly threadWorking: boolean;
+  readonly pendingTasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
+  readonly liveSubagents: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
+}): ComposerBackgroundWork | null {
+  if (!input.threadWorking) {
+    const pending = presentPendingBackgroundWork(input.pendingTasks);
+    if (pending !== null) return { presentation: pending, stoppable: true };
+  }
+  const live = presentBackgroundWork(input.liveSubagents, false);
+  return live === null ? null : { presentation: live, stoppable: false };
+}
+
+/** `waiting` picks the wording: "Waiting on 2 subagents" or "Running 2 subagents". */
+function presentBackgroundWork(
+  tasks: ReadonlyArray<OrchestrationV2PendingBackgroundTask>,
+  waiting: boolean,
+): PendingBackgroundWorkPresentation | null {
   if (tasks.length === 0) return null;
-  const waiting = backgroundWorkHoldsCompletion(tasks);
   const items = tasks
     .map((task): PendingBackgroundWorkItem => {
       const description = task.description?.trim();
@@ -365,7 +400,9 @@ export function presentPendingBackgroundWork(
         ? `${only.kind === "monitor" ? "" : `Waiting on ${noun} `}${only.label}`
         : `Waiting on a ${noun}`
       : named
-        ? `Running: ${only.label}`
+        ? only.kind === "subagent"
+          ? `Running ${noun} ${only.label}`
+          : `Running: ${only.label}`
         : `Running a ${noun}`;
     return { title, items, waiting };
   }
