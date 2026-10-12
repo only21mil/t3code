@@ -9,14 +9,20 @@ import {
   RunId,
   ThreadId,
   type OrchestrationV2ExecutionNode,
+  type OrchestrationV2PendingBackgroundTask,
   type OrchestrationV2RunStatus,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import {
+  deriveLiveSubagents,
+  derivePendingBackgroundWork,
+} from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { usageLimitBlockedRun } from "@t3tools/shared/orchestrationV2ThreadError";
 import { describe, expect, it } from "vite-plus/test";
 
 import { v2Projection } from "./orchestrationV2TestFixtures.ts";
 import {
+  presentComposerBackgroundWork,
   presentPendingBackgroundWork,
   presentProviderGoal,
   deriveReportedModelSelection,
@@ -607,6 +613,133 @@ describe("presentPendingBackgroundWork", () => {
     expect(presentPendingBackgroundWork([{ taskId: "old", kind: "background_task" }])?.title).toBe(
       "Waiting on a background task",
     );
+  });
+});
+
+describe("presentComposerBackgroundWork", () => {
+  const childThreadId = ThreadId.make("thread:child");
+  // What ChatView feeds the composer strip from one parent projection.
+  const composerWork = (input: {
+    readonly runStatus: OrchestrationV2RunStatus;
+    readonly threadWorking: boolean;
+    readonly childStatus?: "running" | "completed";
+    readonly roster?: ReadonlyArray<OrchestrationV2PendingBackgroundTask>;
+    readonly childConversationLive?: ReadonlyMap<string, boolean>;
+  }) => {
+    const runs = [{ id: RunId.make("run:parent"), ordinal: 1, status: input.runStatus }];
+    const work = {
+      latestRun: runs[0],
+      runs,
+      providerThreads: [
+        { id: ProviderThreadId.make("pt:parent"), pendingBackgroundTasks: input.roster ?? [] },
+      ],
+      turnItems: [
+        {
+          id: TurnItemId.make("item:child"),
+          type: "subagent" as const,
+          status: input.childStatus ?? "running",
+          title: "Sol 6.1 Xhigh · produce_probe",
+          runId: runs[0]!.id,
+          childThreadId,
+        },
+      ],
+    };
+    return presentComposerBackgroundWork({
+      threadWorking: input.threadWorking,
+      pendingTasks: derivePendingBackgroundWork(work),
+      liveSubagents: deriveLiveSubagents({
+        ...work,
+        ...(input.childConversationLive === undefined
+          ? {}
+          : { childConversationLive: input.childConversationLive }),
+      }),
+    });
+  };
+
+  it("links a working parent's live child, without a second Stop", () => {
+    expect(composerWork({ runStatus: "running", threadWorking: true })).toEqual({
+      presentation: {
+        title: "Running subagent Sol 6.1 Xhigh · produce_probe",
+        items: [
+          {
+            taskId: "item:child",
+            kind: "subagent",
+            label: "Sol 6.1 Xhigh · produce_probe",
+            childThreadId,
+          },
+        ],
+        waiting: false,
+      },
+      stoppable: false,
+    });
+  });
+
+  it("keeps the settled parent's wait and its Stop", () => {
+    expect(composerWork({ runStatus: "waiting", threadWorking: false })).toMatchObject({
+      presentation: {
+        title: "Waiting on subagent Sol 6.1 Xhigh · produce_probe",
+        items: [{ childThreadId }],
+        waiting: true,
+      },
+      stoppable: true,
+    });
+  });
+
+  it("shows nothing once the child is done, working or settled", () => {
+    expect(
+      composerWork({ runStatus: "running", threadWorking: true, childStatus: "completed" }),
+    ).toBeNull();
+    expect(
+      composerWork({ runStatus: "completed", threadWorking: false, childStatus: "completed" }),
+    ).toBeNull();
+  });
+
+  it("links a follow-up running in a finished task's child, without Stop", () => {
+    expect(
+      composerWork({
+        runStatus: "completed",
+        threadWorking: false,
+        childStatus: "completed",
+        childConversationLive: new Map([[childThreadId, true]]),
+      }),
+    ).toMatchObject({
+      presentation: { title: "Running subagent Sol 6.1 Xhigh · produce_probe", waiting: false },
+      stoppable: false,
+    });
+  });
+
+  it("does not count a task left running after its child finished", () => {
+    expect(
+      composerWork({
+        runStatus: "running",
+        threadWorking: true,
+        childConversationLive: new Map([[childThreadId, false]]),
+      }),
+    ).toBeNull();
+  });
+
+  it("leaves a working parent's commands and monitors to its own Stop", () => {
+    expect(
+      composerWork({
+        runStatus: "running",
+        threadWorking: true,
+        childStatus: "completed",
+        roster: [
+          { taskId: "dev", kind: "command", description: "vp run dev" },
+          { taskId: "watch", kind: "monitor" },
+        ],
+      }),
+    ).toBeNull();
+  });
+
+  it("counts a native roster subagent and an app-owned child together", () => {
+    expect(
+      composerWork({
+        runStatus: "running",
+        threadWorking: true,
+        roster: [{ taskId: "native", kind: "subagent", description: "Explore the repo" }],
+      })?.presentation.title,
+    ).toBe("Running 2 subagents");
   });
 });
 

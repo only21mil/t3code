@@ -103,7 +103,7 @@ import {
   deriveThreadActivityRun,
   deriveLatestThreadRun,
   deriveThreadRuntime,
-  presentPendingBackgroundWork,
+  presentComposerBackgroundWork,
   presentProviderGoal,
 } from "@t3tools/client-runtime/state/thread-execution";
 import { threadSupportsProviderHandoff } from "@t3tools/client-runtime/state/thread-workflows";
@@ -135,7 +135,10 @@ import {
   resolveProjectScripts,
 } from "@t3tools/shared/projectScripts";
 import { CHAT_LIST_ANCHOR_OFFSET } from "@t3tools/shared/chatList";
-import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import {
+  deriveLiveSubagents,
+  derivePendingBackgroundWork,
+} from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import {
   latestUnheldRun,
   usageLimitRunPresentedAsLatest,
@@ -489,6 +492,7 @@ import {
 } from "./chat/QueuedRunsControl";
 import { useLinkedThreadPullRequest } from "./ThreadStatusIndicators";
 import type { ComposerBannerStackItem } from "./chat/ComposerBannerStack";
+import { useChildConversationLive } from "./chat/useChildConversationLive";
 import { ThreadStatusLine } from "./chat/ThreadStatusLine";
 import { formatRelativeTimeLabel, formatRelativeTimeUntilLabel } from "../timestampFormat";
 import { ComposerSurface } from "./chat/ComposerSurface";
@@ -3629,9 +3633,12 @@ export default function ChatView(props: ChatViewProps) {
       ),
     [activeThreadLiveTokenUsage, serverVisibleTurnItems, serverProjection],
   );
-  const pendingBackgroundTasks = useMemo(() => {
+  const childConversationLive = useChildConversationLive(isServerThread ? activeThreadRef : null);
+  // Post-settlement work names what a settled thread waits on and Stop ends;
+  // live subagents keep child links reachable while the thread still works.
+  const { pendingBackgroundTasks, liveSubagentTasks } = useMemo(() => {
     if (serverProjection === null || serverProjection === undefined) {
-      return [];
+      return { pendingBackgroundTasks: [], liveSubagentTasks: [] };
     }
     const sessionError =
       serverProjection.providerSessions.findLast(
@@ -3643,17 +3650,21 @@ export default function ChatView(props: ChatViewProps) {
         serverProjection.turnItems,
         sessionError,
       ) ?? latestUnheldRun(serverProjection.runs);
-    return [
-      ...derivePendingBackgroundWork({
-        latestRun,
-        providerThreads: serverProjection.providerThreads,
-        turnItems: serverProjection.turnItems,
-        activeProviderThreadId: serverProjection.thread.activeProviderThreadId,
-        runs: serverProjection.runs,
+    const workInput = {
+      latestRun,
+      providerThreads: serverProjection.providerThreads,
+      turnItems: serverProjection.turnItems,
+      activeProviderThreadId: serverProjection.thread.activeProviderThreadId,
+      runs: serverProjection.runs,
+    };
+    return {
+      pendingBackgroundTasks: derivePendingBackgroundWork({
+        ...workInput,
         pullRequests: serverProjection.thread.pullRequests,
       }),
-    ];
-  }, [serverProjection]);
+      liveSubagentTasks: deriveLiveSubagents({ ...workInput, childConversationLive }),
+    };
+  }, [childConversationLive, serverProjection]);
   const activeWorkStartedAt =
     deriveActiveWorkStartedAt(activeActivityRun, activeRuntime, localDispatchStartedAt) ??
     runlessWorkStartedAt;
@@ -7389,7 +7400,20 @@ export default function ChatView(props: ChatViewProps) {
   // the turn; once it settles, the composer stop button is gone, so this
   // banner is the only visible stop affordance. The interrupt path also
   // accepts a completed run while its provider still has background work.
-  const activeBackgroundTasks = !isWorking && activeThread ? pendingBackgroundTasks : [];
+  // While the thread works, the banner names its live subagents without a
+  // second Stop.
+  const hasActiveThread = activeThread !== undefined && activeThread !== null;
+  const composerBackgroundWork = useMemo(
+    () =>
+      hasActiveThread
+        ? presentComposerBackgroundWork({
+            threadWorking: isWorking,
+            pendingTasks: pendingBackgroundTasks,
+            liveSubagents: liveSubagentTasks,
+          })
+        : null,
+    [hasActiveThread, isWorking, liveSubagentTasks, pendingBackgroundTasks],
+  );
   const [stoppingBackgroundWorkKey, setStoppingBackgroundWorkKey] = useState<string | null>(null);
   const isStoppingBackgroundWork =
     stoppingBackgroundWorkKey === `${environmentId}:${activeThreadId}`;
@@ -7586,10 +7610,10 @@ export default function ChatView(props: ChatViewProps) {
   }, [activeGoal, activeThread, isWorking, sendStandaloneCommand]);
 
   const backgroundWorkBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
-    const presentation = presentPendingBackgroundWork(activeBackgroundTasks);
-    if (presentation === null || !activeThread) {
+    if (composerBackgroundWork === null || !activeThread) {
       return null;
     }
+    const { presentation, stoppable } = composerBackgroundWork;
     return {
       id: `background-work:${activeThread.id}`,
       variant: "default",
@@ -7629,7 +7653,7 @@ export default function ChatView(props: ChatViewProps) {
                 </Fragment>
               );
             }),
-      actions: (
+      actions: stoppable ? (
         <Button
           size="xs"
           variant="ghost"
@@ -7638,10 +7662,10 @@ export default function ChatView(props: ChatViewProps) {
         >
           {isStoppingBackgroundWork ? "Stopping..." : "Stop"}
         </Button>
-      ),
+      ) : undefined,
     };
   }, [
-    activeBackgroundTasks,
+    composerBackgroundWork,
     activeThread,
     canOperateThread,
     handleStopBackgroundWork,
