@@ -492,6 +492,7 @@ import {
 } from "./chat/QueuedRunsControl";
 import { useLinkedThreadPullRequest } from "./ThreadStatusIndicators";
 import type { ComposerBannerStackItem } from "./chat/ComposerBannerStack";
+import { composeThreadActivityBanners } from "./chat/composerBannerStack.logic";
 import { useChildConversationLive } from "./chat/useChildConversationLive";
 import { ThreadStatusLine } from "./chat/ThreadStatusLine";
 import { formatRelativeTimeLabel, formatRelativeTimeUntilLabel } from "../timestampFormat";
@@ -7846,11 +7847,11 @@ export default function ChatView(props: ChatViewProps) {
       : null;
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const limitRecoveryItems = limitRecoveryBanner === null ? [] : [limitRecoveryBanner];
-    const backgroundWorkItems = [
-      childInputBannerItem,
-      goalBannerItem,
-      backgroundWorkBannerItem,
-    ].filter((item) => item !== null);
+    const backgroundWorkItems = composeThreadActivityBanners({
+      childInput: childInputBannerItem,
+      goal: goalBannerItem,
+      backgroundWork: backgroundWorkBannerItem,
+    });
     // The user asked for this one, so it leads the notice tier instead of trailing it.
     const usageLimitsItems = usageLimitsBanner === null ? [] : [usageLimitsBanner];
     const projectCloneItems = projectCloneBannerItem === null ? [] : [projectCloneBannerItem];
