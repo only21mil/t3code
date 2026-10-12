@@ -4,8 +4,10 @@
  *
  * Scoped to a run rather than the whole thread: a thread accumulates every
  * subagent it ever spawned, while the pill and its sheet answer "what is this
- * turn doing right now". Statuses come from the v2 projection directly, so
- * this stays a pure fold over `runs` and `subagents`.
+ * turn doing right now". Agents still working from an earlier run, or with no
+ * run at all, belong to that answer too, so they join the roster until they
+ * settle. Statuses come from the v2 projection directly, so this stays a pure
+ * fold over `runs` and `subagents`.
  */
 import * as DateTime from "effect/DateTime";
 import type { OrchestrationV2Subagent, OrchestrationV2ThreadProjection } from "@t3tools/contracts";
@@ -22,7 +24,10 @@ export interface ThreadTurnSubagents {
   /** The run the roster belongs to: the active one, else the most recent one that spawned agents. */
   readonly runId: RunId | null;
   readonly turnActive: boolean;
-  /** Spawn order: startedAt, falling back to updatedAt for agents that never started. */
+  /**
+   * The run's agents plus every live agent from any other run, in spawn order:
+   * startedAt, falling back to updatedAt for agents that never started.
+   */
   readonly subagents: ReadonlyArray<Subagent>;
   readonly liveCount: number;
   readonly settledCount: number;
@@ -52,7 +57,9 @@ export function deriveThreadTurnSubagents(
   );
   const runId = activeRun?.id ?? latestUpdated.runId;
   const subagents = copySorted(
-    projection.subagents.filter((subagent) => subagent.runId === runId),
+    projection.subagents.filter(
+      (subagent) => subagent.runId === runId || isActiveSubagentStatus(subagent.status),
+    ),
     (left, right) => orderKey(left) - orderKey(right) || left.id.localeCompare(right.id),
   );
   if (subagents.length === 0) return null;
@@ -83,8 +90,24 @@ export function resolveSubagentPillSegment(
       accessibilityLabel: `${turn.liveCount} of ${total} agents working`,
     };
   }
+  // Nothing is live, so each agent completed, failed, stopped or went idle.
+  // Only completed ones count as done.
+  const counts = { done: 0, failed: 0, stopped: 0, idle: 0 };
+  for (const subagent of turn.subagents) {
+    if (subagent.status === "completed") counts.done += 1;
+    else if (subagent.status === "failed") counts.failed += 1;
+    else if (subagent.status === "idle") counts.idle += 1;
+    else counts.stopped += 1;
+  }
+  const parts = Object.entries(counts)
+    .filter(([, count]) => count > 0)
+    .map(([outcome, count]) => `${count} ${outcome}`);
+  const firstCount = Object.values(counts).find((count) => count > 0) ?? 0;
+  const noun = firstCount === 1 ? "agent" : "agents";
   return {
-    label: `${total} done`,
-    accessibilityLabel: `${total} ${total === 1 ? "agent" : "agents"} done`,
+    label: parts.join(" · "),
+    accessibilityLabel: parts
+      .map((part, index) => (index === 0 ? part.replace(" ", ` ${noun} `) : part))
+      .join(", "),
   };
 }
