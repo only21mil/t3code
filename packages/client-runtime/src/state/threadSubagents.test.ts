@@ -56,7 +56,7 @@ describe("deriveThreadTurnSubagents", () => {
       runs: [run("run-0", "completed"), activeRun],
       subagents: [
         subagent({ id: "b", startedAt: at("2026-06-20T00:00:05.000Z") }),
-        subagent({ id: "old", runId: RunId.make("run-0") }),
+        subagent({ id: "old", runId: RunId.make("run-0"), status: "completed" }),
         subagent({ id: "a", startedAt: at("2026-06-20T00:00:02.000Z") }),
       ],
     });
@@ -98,6 +98,86 @@ describe("deriveThreadTurnSubagents", () => {
     expect(turn?.liveCount).toBe(1);
     expect(turn?.settledCount).toBe(1);
     expect(turn?.subagents).toHaveLength(3);
+  });
+  it("keeps an earlier run's live agent in a newer active run's roster", () => {
+    const turn = deriveThreadTurnSubagents({
+      runs: [run("run-0", "completed"), activeRun],
+      subagents: [
+        subagent({ id: "current", status: "completed" }),
+        subagent({ id: "older-done", runId: RunId.make("run-0"), status: "completed" }),
+        subagent({
+          id: "older-live",
+          runId: RunId.make("run-0"),
+          status: "running",
+          startedAt: at("2026-06-19T23:59:00.000Z"),
+        }),
+        subagent({ id: "older-waiting", runId: RunId.make("run-0"), status: "waiting" }),
+        subagent({ id: "older-idle", runId: RunId.make("run-0"), status: "idle" }),
+      ],
+    });
+
+    expect(turn?.runId).toBe("run-1");
+    expect(turn?.subagents.map((entry) => entry.id)).toEqual([
+      "older-live",
+      "current",
+      "older-waiting",
+    ]);
+    expect(turn?.liveCount).toBe(2);
+    expect(turn?.settledCount).toBe(1);
+  });
+
+  it("keeps a live agent that has no run", () => {
+    const turn = deriveThreadTurnSubagents({
+      runs: [activeRun],
+      subagents: [
+        subagent({ id: "runless-live", runId: null }),
+        subagent({ id: "runless-done", runId: null, status: "failed" }),
+      ],
+    });
+
+    expect(turn?.runId).toBe("run-1");
+    expect(turn?.subagents.map((entry) => entry.id)).toEqual(["runless-live"]);
+    expect(turn?.liveCount).toBe(1);
+  });
+
+  it("adds still-live agents to the newest settled roster", () => {
+    const turn = deriveThreadTurnSubagents({
+      runs: [run("run-0", "completed"), finishedRun],
+      subagents: [
+        subagent({
+          id: "older-live",
+          runId: RunId.make("run-0"),
+          origin: "provider_native",
+          childThreadId: null,
+          updatedAt: at("2026-06-20T00:00:01.000Z"),
+        }),
+        subagent({
+          id: "recent-failed",
+          status: "failed",
+          startedAt: at("2026-06-20T00:00:03.000Z"),
+          updatedAt: at("2026-06-20T00:00:09.000Z"),
+        }),
+      ],
+    });
+
+    expect(turn?.runId).toBe("run-1");
+    expect(turn?.turnActive).toBe(false);
+    expect(turn?.subagents.map((entry) => entry.id)).toEqual(["older-live", "recent-failed"]);
+    expect(turn?.subagents[0]?.childThreadId).toBeNull();
+    expect(turn?.liveCount).toBe(1);
+    expect(turn?.settledCount).toBe(1);
+  });
+
+  it("still drops an earlier run's settled agents", () => {
+    const turn = deriveThreadTurnSubagents({
+      runs: [run("run-0", "completed"), activeRun],
+      subagents: [
+        subagent({ id: "older-failed", runId: RunId.make("run-0"), status: "failed" }),
+        subagent({ id: "older-interrupted", runId: RunId.make("run-0"), status: "interrupted" }),
+      ],
+    });
+
+    expect(turn).toBeNull();
   });
 });
 
@@ -147,5 +227,59 @@ describe("resolveSubagentPillSegment", () => {
     });
 
     expect(resolveSubagentPillSegment(turn)?.label).toBe("1/1");
+  });
+
+  it("counts an earlier run's live agent in the pill and keeps it after settling", () => {
+    const projection = {
+      runs: [run("run-0", "completed"), run("run-1", "running")],
+      subagents: [
+        subagent({ id: "older-live", runId: RunId.make("run-0") }),
+        subagent({
+          id: "current",
+          status: "completed",
+          updatedAt: at("2026-06-20T00:00:09.000Z"),
+        }),
+      ],
+    };
+
+    expect(resolveSubagentPillSegment(deriveThreadTurnSubagents(projection))?.label).toBe("1/2");
+    expect(
+      resolveSubagentPillSegment(
+        deriveThreadTurnSubagents({
+          ...projection,
+          runs: [run("run-0", "completed"), finishedRun],
+        }),
+      )?.label,
+    ).toBe("1/2");
+  });
+
+  it("does not call failed or stopped agents done", () => {
+    const turn = deriveThreadTurnSubagents({
+      runs: [activeRun],
+      subagents: [
+        subagent({ id: "a", status: "completed" }),
+        subagent({ id: "b", status: "failed" }),
+        subagent({ id: "c", status: "interrupted" }),
+        subagent({ id: "d", status: "cancelled" }),
+        subagent({ id: "e", status: "idle" }),
+      ],
+    });
+
+    expect(resolveSubagentPillSegment(turn)).toEqual({
+      label: "1 done · 1 failed · 2 stopped · 1 idle",
+      accessibilityLabel: "1 agent done, 1 failed, 2 stopped, 1 idle",
+    });
+  });
+
+  it("names a lone failed agent as failed", () => {
+    const turn = deriveThreadTurnSubagents({
+      runs: [activeRun],
+      subagents: [subagent({ id: "a", status: "failed" })],
+    });
+
+    expect(resolveSubagentPillSegment(turn)).toEqual({
+      label: "1 failed",
+      accessibilityLabel: "1 agent failed",
+    });
   });
 });

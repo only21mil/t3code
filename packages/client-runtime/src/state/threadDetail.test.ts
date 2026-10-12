@@ -242,6 +242,79 @@ it("does not notify the agents pill for unrelated projection updates", () => {
   registry.dispose();
 });
 
+it("keeps an earlier run's live agent in the agents pill until it settles", () => {
+  const run = (id: string, ordinal: number, status: "running" | "completed") => ({
+    id: RunId.make(id),
+    threadId: v2Projection.thread.id,
+    ordinal,
+    providerInstanceId: v2Projection.thread.providerInstanceId,
+    modelSelection: v2Projection.thread.modelSelection,
+    providerThreadId: null,
+    userMessageId: MessageId.make(`message-${ordinal}`),
+    rootNodeId: null,
+    activeAttemptId: null,
+    status,
+    requestedAt: v2Now,
+    startedAt: v2Now,
+    completedAt: status === "completed" ? v2Now : null,
+    checkpointId: null,
+    contextHandoffId: null,
+  });
+  const olderLive: OrchestrationV2ThreadProjection["subagents"][number] = {
+    id: NodeId.make("older-subagent"),
+    threadId: v2Projection.thread.id,
+    runId: RunId.make("earlier-run"),
+    parentNodeId: NodeId.make("root"),
+    origin: "app_owned",
+    createdBy: "agent",
+    driver: ProviderDriverKind.make("codex"),
+    providerInstanceId: v2Projection.thread.providerInstanceId,
+    providerThreadId: null,
+    childThreadId: ThreadId.make("thread-older-child"),
+    nativeTaskRef: null,
+    prompt: "Keep working",
+    title: "Older worker",
+    model: null,
+    status: "running",
+    result: null,
+    startedAt: v2Now,
+    completedAt: null,
+    updatedAt: v2Now,
+  };
+  const projection: OrchestrationV2ThreadProjection = {
+    ...v2Projection,
+    runs: [run("earlier-run", 1, "completed"), run("active-run", 2, "running")],
+    subagents: [olderLive],
+  };
+  const source = Atom.make(
+    AsyncResult.success(
+      threadState({ data: Option.some(projection), status: "live", error: Option.none() }),
+    ),
+  );
+  const details = createEnvironmentThreadDetailAtoms(() => source);
+  const registry = AtomRegistry.make();
+  const dispose = registry.mount(details.turnSubagentsAtom(ref));
+  const before = registry.get(details.turnSubagentsAtom(ref));
+  expect(before?.runId).toBe("active-run");
+  expect(before?.subagents.map((subagent) => subagent.id)).toEqual(["older-subagent"]);
+  expect(before?.liveCount).toBe(1);
+
+  const publish = (next: OrchestrationV2ThreadProjection) =>
+    registry.set(
+      source,
+      AsyncResult.success(
+        threadState({ data: Option.some(next), status: "live", error: Option.none() }),
+      ),
+    );
+  publish({ ...projection, turnItems: [...v2Projection.turnItems] });
+  expect(registry.get(details.turnSubagentsAtom(ref))).toBe(before);
+
+  publish({ ...projection, subagents: [{ ...olderLive, status: "completed" }] });
+  expect(registry.get(details.turnSubagentsAtom(ref))).toBeNull();
+  dispose();
+  registry.dispose();
+});
+
 it("keeps worktree and pending requests stable during output updates, then reflects resolution", () => {
   const projection: OrchestrationV2ThreadProjection = {
     ...v2Projection,
