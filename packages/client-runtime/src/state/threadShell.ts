@@ -8,6 +8,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import { isProviderNativeSubagentThread } from "@t3tools/contracts";
+import { subagentConversationIsLive } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
 import { Atom } from "effect/reactivity";
 
 import type { EnvironmentThreadShell } from "./models.ts";
@@ -29,6 +30,15 @@ const EMPTY_THREAD_REFS_BY_PROJECT: ReadonlyMap<
   ProjectId,
   ReadonlyArray<ScopedThreadRef>
 > = new Map();
+const EMPTY_CHILD_CONVERSATION_LIVE: ReadonlyMap<string, boolean> = new Map();
+
+function sameLiveness(left: ReadonlyMap<string, boolean>, right: ReadonlyMap<string, boolean>) {
+  if (left.size !== right.size) return false;
+  for (const [threadId, live] of left) {
+    if (right.get(threadId) !== live) return false;
+  }
+  return true;
+}
 
 export function createEnvironmentThreadShellAtoms(input: {
   readonly catalogValueAtom: Atom.Atom<EnvironmentCatalogState>;
@@ -183,6 +193,29 @@ export function createEnvironmentThreadShellAtoms(input: {
     }).pipe(Atom.withLabel(`environment-child-thread-inputs:${key}`));
   });
 
+  // Reads direct subagent shells only, and keeps the old map until a child's
+  // liveness changes, so streaming in a child does not re-render the parent.
+  const childConversationLiveAtomFamily = Atom.family((key: string) => {
+    const ref = parseThreadKey(key);
+    let previous = EMPTY_CHILD_CONVERSATION_LIVE;
+    return Atom.make((get) => {
+      const next = new Map<string, boolean>();
+      for (const thread of get(environmentThreadsAtom(ref.environmentId))) {
+        if (
+          thread.lineage.parentThreadId !== ref.threadId ||
+          thread.lineage.relationshipToParent !== "subagent"
+        ) {
+          continue;
+        }
+        const live = subagentConversationIsLive(thread);
+        if (live !== null) next.set(thread.id, live);
+      }
+      if (sameLiveness(previous, next)) return previous;
+      previous = next;
+      return next;
+    }).pipe(Atom.withLabel(`environment-child-conversation-live:${key}`));
+  });
+
   const threadShellsForProjectRefsAtomFamily = Atom.family((key: string) => {
     const projectRefs = parseProjectRefCollectionKey(key);
     let previous: ReadonlyArray<EnvironmentThreadShell> = [];
@@ -271,5 +304,11 @@ export function createEnvironmentThreadShellAtoms(input: {
       threadShellsForProjectRefsAtomFamily(projectRefCollectionKey(refs)),
     threadShellAtom: (ref: ScopedThreadRef) => threadShellAtomFamily(threadKey(ref)),
     childThreadInputsAtom: (ref: ScopedThreadRef) => childThreadInputsAtomFamily(threadKey(ref)),
+    /**
+     * Whether each direct subagent conversation of a thread is working, keyed
+     * by child thread id. Children that never ran are absent.
+     */
+    childConversationLiveAtom: (ref: ScopedThreadRef) =>
+      childConversationLiveAtomFamily(threadKey(ref)),
   };
 }

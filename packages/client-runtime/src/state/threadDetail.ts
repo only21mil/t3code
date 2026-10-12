@@ -26,6 +26,7 @@ export function createEnvironmentThreadDetailAtoms<E>(
     environmentId: ScopedThreadRef["environmentId"],
     threadId: ScopedThreadRef["threadId"],
   ) => Atom.Atom<AsyncResult.AsyncResult<EnvironmentThreadState, E>>,
+  childConversationLiveAtom: (ref: ScopedThreadRef) => Atom.Atom<ReadonlyMap<string, boolean>>,
 ) {
   const threadStateValueAtomFamily = Atom.family((key: string) => {
     const ref = parseThreadKey(key);
@@ -103,21 +104,31 @@ export function createEnvironmentThreadDetailAtoms<E>(
     }).pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-queue-count:${key}`));
   });
 
+  // Child liveness reconciles each task with its own conversation; the shell
+  // map keeps its identity until a child starts or stops working.
   const turnSubagentsAtomFamily = Atom.family((key: string) => {
+    const ref = parseThreadKey(key);
     let previous: Pick<OrchestrationV2ThreadProjection, "runs" | "subagents"> | null = null;
+    let previousLive: ReadonlyMap<string, boolean> | null = null;
     let value: ThreadTurnSubagents | null = null;
     return Atom.make((get) => {
       const projection = Option.getOrNull(get(threadStateValueAtomFamily(key)).data);
       if (projection === null) {
         previous = null;
+        previousLive = null;
         value = null;
-      } else if (
+        return value;
+      }
+      const childConversationLive = get(childConversationLiveAtom(ref));
+      if (
         projection.runs !== previous?.runs ||
-        projection.subagents !== previous?.subagents
+        projection.subagents !== previous?.subagents ||
+        childConversationLive !== previousLive
       ) {
         const { runs, subagents } = projection;
         previous = { runs, subagents };
-        value = deriveThreadTurnSubagents(previous);
+        previousLive = childConversationLive;
+        value = deriveThreadTurnSubagents(previous, childConversationLive);
       }
       return value;
     }).pipe(Atom.setIdleTTL(0), Atom.withLabel(`environment-thread-turn-subagents:${key}`));

@@ -181,6 +181,202 @@ describe("deriveThreadTurnSubagents", () => {
   });
 });
 
+describe("deriveThreadTurnSubagents with child conversation liveness", () => {
+  const child = (id: string) => ThreadId.make(id);
+  const live = (entries: ReadonlyArray<readonly [string, boolean]>) => new Map(entries);
+
+  it("settles an earlier task left running once its child conversation finished", () => {
+    const projection = {
+      runs: [run("run-0", "completed"), finishedRun],
+      subagents: [
+        subagent({ id: "stale", runId: RunId.make("run-0"), childThreadId: child("child-a") }),
+        subagent({
+          id: "current",
+          status: "completed",
+          childThreadId: child("child-b"),
+          updatedAt: at("2026-06-20T00:00:09.000Z"),
+        }),
+      ],
+    };
+    const turn = deriveThreadTurnSubagents(projection, live([["child-a", false]]));
+
+    expect(turn?.subagents.map((entry) => entry.id)).toEqual(["current"]);
+    expect(turn?.liveCount).toBe(0);
+    expect(resolveSubagentPillSegment(turn)).toBeNull();
+  });
+
+  it("shows a stale task in the selected run as idle rather than working", () => {
+    const turn = deriveThreadTurnSubagents(
+      {
+        runs: [activeRun],
+        subagents: [subagent({ id: "stale", childThreadId: child("child-a") })],
+      },
+      live([["child-a", false]]),
+    );
+
+    expect(turn?.subagents.map((entry) => entry.status)).toEqual(["idle"]);
+    expect(turn?.liveCount).toBe(0);
+    expect(resolveSubagentPillSegment(turn)?.label).toBe("1 idle");
+  });
+
+  it("shows a running follow-up on a completed task without its old output", () => {
+    const projection = {
+      runs: [run("run-0", "completed"), finishedRun],
+      subagents: [
+        subagent({
+          id: "earlier",
+          runId: RunId.make("run-0"),
+          status: "completed",
+          childThreadId: child("child-a"),
+          progress: "Old progress",
+          result: "Old result",
+          completedAt: at("2026-06-20T00:00:04.000Z"),
+        }),
+        subagent({
+          id: "current",
+          status: "completed",
+          childThreadId: child("child-b"),
+          startedAt: at("2026-06-20T00:00:05.000Z"),
+          updatedAt: at("2026-06-20T00:00:09.000Z"),
+        }),
+      ],
+    };
+
+    expect(deriveThreadTurnSubagents(projection)?.subagents.map((entry) => entry.id)).toEqual([
+      "current",
+    ]);
+    const turn = deriveThreadTurnSubagents(projection, live([["child-a", true]]));
+    expect(turn?.subagents.map((entry) => entry.id)).toEqual(["earlier", "current"]);
+    const row = turn?.subagents[0];
+    expect(row?.id).toBe("earlier");
+    expect(row?.status).toBe("running");
+    expect(row?.childThreadId).toBe("child-a");
+    expect(row?.result).toBeNull();
+    expect(row?.progress).toBeUndefined();
+    expect(row?.startedAt).toBeNull();
+    expect(row?.completedAt).toBeNull();
+    expect(resolveSubagentPillSegment(turn)?.label).toBe("1/2");
+    expect(projection.subagents[0]?.result).toBe("Old result");
+  });
+
+  it("counts one live conversation once when several tasks share the child", () => {
+    const turn = deriveThreadTurnSubagents(
+      {
+        runs: [activeRun],
+        subagents: [
+          subagent({
+            id: "first",
+            status: "completed",
+            result: "First answer",
+            childThreadId: child("child-a"),
+            startedAt: at("2026-06-20T00:00:01.000Z"),
+          }),
+          subagent({
+            id: "second",
+            childThreadId: child("child-a"),
+            progress: "Second progress",
+            startedAt: at("2026-06-20T00:00:02.000Z"),
+          }),
+          subagent({
+            id: "third",
+            childThreadId: child("child-a"),
+            startedAt: at("2026-06-20T00:00:03.000Z"),
+          }),
+        ],
+      },
+      live([["child-a", true]]),
+    );
+
+    expect(turn?.subagents.map((entry) => [entry.id, entry.status])).toEqual([
+      ["first", "completed"],
+      ["second", "idle"],
+      ["third", "running"],
+    ]);
+    expect(turn?.subagents[0]?.result).toBe("First answer");
+    expect(turn?.liveCount).toBe(1);
+    expect(resolveSubagentPillSegment(turn)?.label).toBe("1/3");
+  });
+
+  it("gives a shared child's live work to the newest task when none is marked active", () => {
+    const turn = deriveThreadTurnSubagents(
+      {
+        runs: [finishedRun],
+        subagents: [
+          subagent({
+            id: "first",
+            status: "completed",
+            childThreadId: child("child-a"),
+            startedAt: at("2026-06-20T00:00:01.000Z"),
+          }),
+          subagent({
+            id: "second",
+            status: "failed",
+            childThreadId: child("child-a"),
+            startedAt: at("2026-06-20T00:00:02.000Z"),
+          }),
+        ],
+      },
+      live([["child-a", true]]),
+    );
+
+    expect(turn?.subagents.map((entry) => [entry.id, entry.status])).toEqual([
+      ["first", "completed"],
+      ["second", "running"],
+    ]);
+    expect(turn?.liveCount).toBe(1);
+  });
+
+  it("keeps task status for native, linkless and never-run children", () => {
+    const turn = deriveThreadTurnSubagents(
+      {
+        runs: [activeRun],
+        subagents: [
+          subagent({ id: "native", origin: "provider_native", childThreadId: null }),
+          subagent({ id: "never-ran", childThreadId: child("child-new") }),
+          subagent({ id: "runless", runId: null, childThreadId: child("child-unknown") }),
+          subagent({ id: "failed", status: "failed", childThreadId: child("child-gone") }),
+          subagent({ id: "interrupted", status: "interrupted", childThreadId: child("child-a") }),
+        ],
+      },
+      live([["child-a", false]]),
+    );
+
+    expect(turn?.subagents.map((entry) => [entry.id, entry.status])).toEqual([
+      ["failed", "failed"],
+      ["interrupted", "interrupted"],
+      ["native", "running"],
+      ["never-ran", "running"],
+      ["runless", "running"],
+    ]);
+    expect(turn?.liveCount).toBe(3);
+    expect(turn?.settledCount).toBe(2);
+  });
+
+  it("keeps an earlier run's terminal history out of a later roster", () => {
+    const turn = deriveThreadTurnSubagents(
+      {
+        runs: [run("run-0", "completed"), activeRun],
+        subagents: [
+          subagent({
+            id: "older-done",
+            runId: RunId.make("run-0"),
+            status: "completed",
+            childThreadId: child("child-a"),
+          }),
+          subagent({ id: "current", childThreadId: child("child-b") }),
+        ],
+      },
+      live([
+        ["child-a", false],
+        ["child-b", true],
+      ]),
+    );
+
+    expect(turn?.subagents.map((entry) => entry.id)).toEqual(["current"]);
+    expect(turn?.liveCount).toBe(1);
+  });
+});
+
 describe("resolveSubagentPillSegment", () => {
   it("shows how many of the turn's agents are still working", () => {
     const turn = deriveThreadTurnSubagents({
