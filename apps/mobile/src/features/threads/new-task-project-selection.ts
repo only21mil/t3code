@@ -1,5 +1,6 @@
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { repositoryGroupingKeyOf, type EnvironmentId } from "@t3tools/contracts";
+import { fileBasename } from "@t3tools/shared/path";
 
 import { scopedProjectKey } from "../../lib/scopedEntities";
 import type { HomeProjectScope } from "../home/homeThreadList";
@@ -52,7 +53,7 @@ export function resolveEnvironmentProjectMatch(
     : null;
   // `|| null` (not `??`): a pending-task placeholder project can have an empty
   // workspaceRoot, and an "" basename would match nothing meaningful.
-  const workspaceBasename = selectedProject?.workspaceRoot.split("/").at(-1) || null;
+  const workspaceBasename = fileBasename(selectedProject?.workspaceRoot ?? "") || null;
   // The weaker signals only apply where identity is unknown on at least one
   // side; two known, different repositories never match on a shared basename
   // or title (mirrors the environment list filter in the new-task flow).
@@ -75,7 +76,7 @@ export function resolveEnvironmentProjectMatch(
       ? projectsOnTarget.find(
           (project) =>
             !isKnownMismatch(project) &&
-            project.workspaceRoot.split("/").at(-1) === workspaceBasename,
+            fileBasename(project.workspaceRoot) === workspaceBasename,
         )
       : undefined) ??
     (selectedProject !== null

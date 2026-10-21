@@ -24,6 +24,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { sanitizeNewRefName } from "@t3tools/shared/git";
+import { fileBasename } from "@t3tools/shared/path";
 import { threadContextsOutsideEnvironment } from "@t3tools/shared/composerContextReferences";
 import { resolveNewThreadEnvMode, resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
@@ -370,7 +371,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     : null;
   // `|| null` (not `??`): a pending-task placeholder project can have an empty
   // workspaceRoot, and an "" basename would reject every real host below.
-  const selectedWorkspaceBasename = selectedProject?.workspaceRoot.split("/").at(-1) || null;
+  const selectedWorkspaceBasename = fileBasename(selectedProject?.workspaceRoot ?? "") || null;
   const selectedProjectTitle = selectedProject?.title ?? null;
   const environments = (() => {
     if (isScratchDraft) {
@@ -395,7 +396,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         return projectKey === selectedRepositoryKey;
       }
       return (
-        project.workspaceRoot.split("/").at(-1) === selectedWorkspaceBasename ||
+        fileBasename(project.workspaceRoot) === selectedWorkspaceBasename ||
         (selectedProjectTitle !== null && project.title === selectedProjectTitle)
       );
     };

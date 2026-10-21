@@ -77,6 +77,26 @@ describe("resolveEnvironmentProjectMatch", () => {
     expect(resolveEnvironmentProjectMatch(byTitle, selected)).toBe(byTitle[1]);
   });
 
+  it("matches a Windows target folder before falling back to the first project", () => {
+    const selected = makeProject("source", "mac", { workspaceRoot: "/work/t3code" });
+    const target = [
+      makeProject("other", "windows"),
+      makeProject("clone", "windows", { workspaceRoot: "C:\\work\\t3code\\" }),
+    ];
+    expect(resolveEnvironmentProjectMatch(target, selected)).toBe(target[1]);
+  });
+
+  it("matches a Windows source folder to a POSIX target with a different title", () => {
+    const selected = makeProject("source", "windows", {
+      workspaceRoot: "\\\\server\\share\\t3code",
+    });
+    const target = [
+      makeProject("other", "mac"),
+      makeProject("clone", "mac", { workspaceRoot: "/work/t3code" }),
+    ];
+    expect(resolveEnvironmentProjectMatch(target, selected)).toBe(target[1]);
+  });
+
   it("does not treat a known different repository as a basename or title match", () => {
     const selected = makeProject("t3code", "mac", {
       repositoryKey: "github.com/t3tools/t3code",
