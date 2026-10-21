@@ -1,5 +1,5 @@
-import { spawn } from "node:child_process";
-import { once } from "node:events";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeEvents from "node:events";
 import { act, type ReactNode, type Ref } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
@@ -55,8 +55,8 @@ it("submits consecutive fallback commands without carrying the previous command"
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const container = document.createElement("div");
   const root = createRoot(container);
-  const repl = spawn(process.execPath, ["--interactive"], { stdio: ["pipe", "pipe", "pipe"] });
-  const closed = once(repl, "close");
+  const repl = NodeChildProcess.spawn(process.execPath, ["--interactive"], { stdio: ["pipe", "pipe", "pipe"] });
+  const closed = NodeEvents.once(repl, "close");
   let output = "";
   repl.stdout.setEncoding("utf8").on("data", (chunk: string) => (output += chunk));
   repl.stderr.setEncoding("utf8").on("data", (chunk: string) => (output += chunk));
