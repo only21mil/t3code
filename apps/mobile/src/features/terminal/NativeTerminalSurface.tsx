@@ -161,6 +161,7 @@ const FallbackTerminalSurface = memo(function FallbackTerminalSurface(
             if (text.length > 0) {
               // Terminal Enter is CR. LF is Ctrl+J and raw-mode TUIs can treat it as J.
               props.onInput(`${text}\r`);
+              inputRef.current?.clear();
             }
           }}
         />
