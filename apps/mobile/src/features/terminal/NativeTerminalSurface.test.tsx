@@ -1,5 +1,4 @@
 import * as NodeChildProcess from "node:child_process";
-import * as NodeEvents from "node:events";
 import { act, type ReactNode, type Ref } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
@@ -58,7 +57,10 @@ it("submits consecutive fallback commands without carrying the previous command"
   const repl = NodeChildProcess.spawn(process.execPath, ["--interactive"], {
     stdio: ["pipe", "pipe", "pipe"],
   });
-  const closed = NodeEvents.once(repl, "close");
+  const closed = new Promise<number | null>((resolve, reject) => {
+    repl.once("close", resolve);
+    repl.once("error", reject);
+  });
   let output = "";
   repl.stdout.setEncoding("utf8").on("data", (chunk: string) => (output += chunk));
   repl.stderr.setEncoding("utf8").on("data", (chunk: string) => (output += chunk));
@@ -82,7 +84,7 @@ it("submits consecutive fallback commands without carrying the previous command"
       });
     }
     repl.stdin.end();
-    expect((await closed)[0]).toBe(0);
+    expect(await closed).toBe(0);
     // A real REPL consumes the CR-delimited input. Retaining the first command
     // changes the second expression from 2*3 (6) to 6*72*3 (1296).
     expect(output).toContain("> 42\n> 6\n");
