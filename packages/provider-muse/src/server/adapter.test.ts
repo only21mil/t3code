@@ -30,6 +30,7 @@ import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
@@ -1257,6 +1258,32 @@ describe("MuseAdapterV2", () => {
       yield* fake.emit("turn/completed", { turnId: turn.nativeId, terminal: "cancelled" });
       yield* Fiber.join(interrupt);
       assert.strictEqual((yield* harness.takeEvent("turn.terminal")).status, "interrupted");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  // Muse can hold the ack for an accepted steer until a running tool call ends
+  // (33 s on 2026-10-23, when a 30 s timeout here closed the host and failed the run).
+  it.effect("reports a steer delivered and keeps the host while Muse holds its ack", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakeMuse();
+      const harness = yield* makeHarness(fake);
+      const turn = yield* startConversation(harness, fake);
+      const input = yield* turnInput(harness.providerThread);
+      fake.queueResponse("turn/steer", pendingPromise<Record<string, unknown>>().promise);
+      const steer = yield* harness.runtime.steerTurn!({
+        threadId: THREAD_ID,
+        runId: input.runId,
+        providerThread: harness.providerThread,
+        providerTurnId: turn.providerTurn.id,
+        message: { ...input.message, text: "Delegated task finished" },
+      }).pipe(Effect.forkScoped);
+      yield* fake.takeCall("turn/steer");
+      yield* TestClock.adjust("31 seconds");
+      yield* Fiber.join(steer);
+      assert.strictEqual(fake.closeCount(), 0);
+
+      yield* fake.emit("turn/completed", { turnId: turn.nativeId, terminal: "completed" });
+      assert.strictEqual((yield* harness.takeEvent("turn.terminal")).status, "completed");
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
