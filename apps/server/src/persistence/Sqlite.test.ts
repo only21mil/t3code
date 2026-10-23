@@ -11,6 +11,48 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as SqlitePersistence from "./Sqlite.ts";
 
+// Linux names an open, already-deleted file "<path> (deleted)" in /proc/self/fd.
+const openDeletedTempFiles = () =>
+  NodeFS.readdirSync("/proc/self/fd").flatMap((fd) => {
+    try {
+      const target = NodeFS.readlinkSync(`/proc/self/fd/${fd}`);
+      return target.startsWith(NodeOS.tmpdir()) && target.endsWith(" (deleted)") ? [target] : [];
+    } catch {
+      return [];
+    }
+  });
+
+it.effect.skipIf(process.platform !== "linux")(
+  "keeps a write transaction's statement journal off the temp directory",
+  () => {
+    const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-sqlite-temp-"));
+    const persistence = SqlitePersistence.layerFromPath(
+      NodePath.join(tempDir, "state.sqlite"),
+    ).pipe(Layer.provide(NodeServices.layer));
+
+    return Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`CREATE TABLE journal_probe(id INTEGER PRIMARY KEY, payload TEXT NOT NULL)`;
+      for (let id = 0; id < 64; id++) {
+        yield* sql`INSERT INTO journal_probe VALUES (${id}, ${"x".repeat(4096)})`;
+      }
+      const before = new Set(openDeletedTempFiles());
+      const opened = yield* sql.withTransaction(
+        Effect.gen(function* () {
+          // A multi-row update can fail halfway, so SQLite journals every page
+          // it changes, here well past the 64 KiB it holds in memory by default.
+          yield* sql`UPDATE journal_probe SET payload = payload || 'y'`;
+          return openDeletedTempFiles().filter((target) => !before.has(target));
+        }),
+      );
+      assert.deepEqual(opened, []);
+    }).pipe(
+      Effect.provide(persistence),
+      Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { recursive: true, force: true }))),
+    );
+  },
+);
+
 it.effect("drops planner statistics a database already has", () => {
   const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-sqlite-stats-"));
   const dbPath = NodePath.join(tempDir, "state.sqlite");
