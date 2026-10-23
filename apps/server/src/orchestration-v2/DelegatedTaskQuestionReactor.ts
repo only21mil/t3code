@@ -70,11 +70,12 @@ const make = Effect.gen(function* () {
     },
     (effect, task, request) =>
       effect.pipe(
-        Effect.catchTag("ThreadManagementProviderInstanceDisabledError", () =>
-          Effect.sync(() => {
-            deferred.set(`${task.threadId}:${request.id}`, { task, requestId: request.id });
-          }),
-        ),
+        Effect.catchTags({
+          ThreadManagementProviderInstanceDisabledError: () =>
+            Effect.sync(() => {
+              deferred.set(`${task.threadId}:${request.id}`, { task, requestId: request.id });
+            }),
+        }),
       ),
   );
 
@@ -118,7 +119,8 @@ const make = Effect.gen(function* () {
   });
 
   const retryDeferred = Effect.fnUntraced(function* (parentThreadId?: ThreadId) {
-    for (const [key, { task, requestId }] of [...deferred]) {
+    // A wake refused again is re-added, so iterate a snapshot.
+    for (const [key, { task, requestId }] of Array.from(deferred)) {
       if (parentThreadId !== undefined && task.threadId !== parentThreadId) continue;
       yield* Effect.gen(function* () {
         const request =

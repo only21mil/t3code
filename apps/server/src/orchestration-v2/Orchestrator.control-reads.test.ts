@@ -1003,12 +1003,12 @@ it.effect("wakes the parent once when its delegated task asks a question", () =>
     yield* eventSink.write({
       events: [question, asyncQuestion, answered, approval],
     });
-    const startReactorUntilWake = (beforeWake: Effect.Effect<unknown, unknown>) =>
+    const startReactorUntilWake = (enableAfterStart: boolean) =>
       Effect.scoped(
         Effect.gen(function* () {
           const afterSequence = yield* eventSink.latestSequence();
           yield* reactor.start();
-          yield* beforeWake;
+          if (enableAfterStart) yield* setInstanceEnabled(true);
           yield* eventSink
             .stream({ afterSequence, threadId: parentThreadId, eventType: "message.updated" })
             .pipe(
@@ -1037,7 +1037,7 @@ it.effect("wakes the parent once when its delegated task asks a question", () =>
     );
     // Enabled while the reactor is stopped, so only its startup pass can wake.
     yield* setInstanceEnabled(true);
-    yield* startReactorUntilWake(Effect.void);
+    yield* startReactorUntilWake(false);
     assert.equal(
       (yield* projections.getThreadProjection(parentThreadId)).messages.filter(
         (message) => message.notification !== undefined,
@@ -1173,7 +1173,7 @@ it.effect("wakes the parent once when its delegated task asks a question", () =>
       ).length,
       2,
     );
-    yield* startReactorUntilWake(setInstanceEnabled(true));
+    yield* startReactorUntilWake(true);
     assert.equal(
       (yield* projections.getThreadProjection(parentThreadId)).messages.filter(
         (message) => message.notification !== undefined,
