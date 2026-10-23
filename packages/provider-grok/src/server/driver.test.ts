@@ -170,6 +170,35 @@ it.layer(layerTest)("GrokDriver", (it) => {
     });
   }
 
+  it.effect.skipIf(windowsHost)("finds a configured binary path that starts with ~", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const home = yield* fs.realPath(
+        yield* fs.makeTempDirectoryScoped({ prefix: "t3-grok-home-" }),
+      );
+      const binaryPath = path.join(home, "bin", "grok");
+      yield* fs.makeDirectory(path.dirname(binaryPath), { recursive: true });
+      yield* fs.writeFileString(binaryPath, "#!/bin/sh\n");
+      yield* fs.chmod(binaryPath, 0o755);
+
+      const instance = yield* GrokDriver.create({
+        instanceId: ProviderInstanceId.make("grok-home"),
+        displayName: "Grok test",
+        enabled: false,
+        environment: [],
+        config: { ...GrokDriver.defaultConfig(), binaryPath: "~/bin/grok" },
+      }).pipe(Effect.provideService(HostProcess.HomeDirectory, home));
+
+      expect((yield* instance.snapshot.resolveMaintenance()).update).toEqual(
+        expect.objectContaining({ executable: binaryPath, args: ["update"] }),
+      );
+    }).pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawner),
+      Effect.scoped,
+    ),
+  );
+
   it.effect("stays manual-only when the configured executable does not exist", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
