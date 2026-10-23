@@ -706,17 +706,15 @@ function permissionRuleEquals(
   );
 }
 
-// T3's own rules for a top-level session are full access's lone allow-all or
-// start with a deny, so more rules after an allow-all were written for an agent.
-function extendsFullAccessPermission(permission: PermissionRuleset | undefined): boolean {
-  const [first, ...rest] = permission ?? [];
-  return (
-    first !== undefined &&
-    rest.length > 0 &&
-    first.permission === "*" &&
-    first.pattern === "*" &&
-    first.action === "allow"
-  );
+function isAllowAllRule(rule: PermissionRuleset[number] | undefined): boolean {
+  return rule?.permission === "*" && rule.pattern === "*" && rule.action === "allow";
+}
+
+// A full-access session starts with a lone allow-all, and OpenCode appends
+// updated rules after the existing ones. Ending anywhere else means the rules
+// last written were an agent's.
+function holdsAgentPermission(permission: PermissionRuleset | undefined): boolean {
+  return isAllowAllRule(permission?.[0]) && !isAllowAllRule(permission?.at(-1));
 }
 
 function samePermissionRules(left: PermissionRuleset, right: PermissionRuleset): boolean {
@@ -2840,7 +2838,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             nextAdmissionGeneration: 1,
             agentPermission:
               nativeSession.parentID === undefined &&
-              extendsFullAccessPermission(nativeSession.permission),
+              holdsAgentPermission(nativeSession.permission),
           };
           threads.set(nativeSession.id, state);
           return state;
@@ -2981,7 +2979,10 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               rule.action === "ask" ? { ...rule, action: "allow" as const } : rule,
             ),
           ];
-          if (!samePermissionRules(permission, nativeSession.permission ?? [])) {
+          // Updates append, and these rules start with an allow-all that
+          // shadows everything before them, so an equal tail is already in force.
+          const current = nativeSession.permission ?? [];
+          if (!samePermissionRules(permission, current.slice(-permission.length))) {
             yield* writePermission(permission);
           }
           state.agentPermission = true;

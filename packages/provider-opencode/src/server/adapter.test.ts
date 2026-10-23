@@ -48,6 +48,7 @@ import {
   OPENCODE_PROVIDER,
   reconcileOpenCodePromptAdmissionStatus,
 } from "./adapter.ts";
+import { openCodeToolDecision } from "../testing.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
 const encodeUnknownJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
@@ -118,36 +119,6 @@ function runtimePolicy(
 function permissionAction(rules: ReturnType<typeof openCodePermissionRules>, permission: string) {
   return rules.findLast((rule) => rule.permission === "*" || rule.permission === permission)
     ?.action;
-}
-
-// OpenCode 1.19.4's own rules: a tool whose last rule denies "*" is never
-// offered to the model (session/llm/request.ts), and a call to an offered tool
-// takes the last match across the session's rules and the server's "always"
-// grants (permission/index.ts, util/wildcard.ts).
-function openCodeWildcard(input: string, pattern: string) {
-  let escaped = pattern
-    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-    .replace(/\*/g, ".*")
-    .replace(/\?/g, ".");
-  if (escaped.endsWith(" .*")) escaped = `${escaped.slice(0, -3)}( .*)?`;
-  return new RegExp(`^${escaped}$`, "s").test(input);
-}
-
-function openCodeToolDecision(
-  rules: PermissionRuleset,
-  approved: PermissionRuleset,
-  tool: string,
-  pattern: string,
-) {
-  const permission = ["edit", "write", "apply_patch"].includes(tool) ? "edit" : tool;
-  const offered = rules.findLast((rule) => openCodeWildcard(permission, rule.permission));
-  if (offered?.pattern === "*" && offered.action === "deny") return "hidden";
-  return (
-    [...rules, ...approved].findLast(
-      (rule) =>
-        openCodeWildcard(permission, rule.permission) && openCodeWildcard(pattern, rule.pattern),
-    )?.action ?? "ask"
-  );
 }
 
 function providerTurn(input: {
@@ -2247,8 +2218,15 @@ describe("OpenCodeAdapterV2", () => {
       const build: PermissionRuleset = [{ permission: "*", pattern: "*", action: "allow" }];
       // Another session on the same OpenCode server answered "always" for shell.
       const approved: PermissionRuleset = [{ permission: "bash", pattern: "*", action: "allow" }];
-      const sessions = new Map<string, { readonly id: string; readonly permission?: unknown }>();
-      const prompts: Array<{ readonly agent: unknown; readonly variant: unknown }> = [];
+      const sessions = new Map<
+        string,
+        { readonly id: string; readonly permission?: PermissionRuleset }
+      >();
+      const prompts: Array<{
+        readonly agent: unknown;
+        readonly variant: unknown;
+        readonly permission: unknown;
+      }> = [];
       // Stands in for OpenCode's tool executors: what it would have spawned or written.
       const ran: Array<ReadonlyArray<string>> = [];
       const client = {
@@ -2275,7 +2253,7 @@ describe("OpenCodeAdapterV2", () => {
           }),
         },
         session: {
-          create: async (input: { readonly permission?: unknown }) => {
+          create: async (input: { readonly permission?: PermissionRuleset }) => {
             const nativeSession = {
               id: "native-review",
               permission: input.permission,
@@ -2287,8 +2265,16 @@ describe("OpenCodeAdapterV2", () => {
           get: async ({ sessionID }: { readonly sessionID: string }) => ({
             data: sessions.get(sessionID),
           }),
-          update: async (input: { readonly sessionID: string; readonly permission?: unknown }) => {
-            const nativeSession = { ...sessions.get(input.sessionID)!, ...input };
+          update: async (input: {
+            readonly sessionID: string;
+            readonly permission: PermissionRuleset;
+          }) => {
+            const existing = sessions.get(input.sessionID)!;
+            // OpenCode appends updated rules after the session's own.
+            const nativeSession = {
+              ...existing,
+              permission: [...(existing.permission ?? []), ...input.permission],
+            };
             sessions.set(input.sessionID, nativeSession);
             return { data: nativeSession };
           },
@@ -2297,11 +2283,9 @@ describe("OpenCodeAdapterV2", () => {
             readonly agent?: string;
             readonly variant?: string;
           }) => {
-            prompts.push({ agent: input.agent, variant: input.variant });
-            const rules = [
-              ...(input.agent === "review" ? review : build),
-              ...((sessions.get(input.sessionID)?.permission as PermissionRuleset) ?? []),
-            ];
+            const permission = sessions.get(input.sessionID)?.permission ?? [];
+            prompts.push({ agent: input.agent, variant: input.variant, permission });
+            const rules = [...(input.agent === "review" ? review : build), ...permission];
             // The redirect a reviewer once wrote outside its scope, an edit, a
             // nested task, a T3 MCP write, and the read it needs.
             const calls = [
@@ -2353,11 +2337,16 @@ describe("OpenCodeAdapterV2", () => {
         options: [],
       });
 
-      assert.deepEqual(prompts, [
-        { agent: "review", variant: "high" },
-        { agent: "review", variant: "high" },
-        { agent: undefined, variant: undefined },
-      ]);
+      assert.deepEqual(
+        prompts.map(({ agent, variant }) => ({ agent, variant })),
+        [
+          { agent: "review", variant: "high" },
+          { agent: "review", variant: "high" },
+          { agent: undefined, variant: undefined },
+        ],
+      );
+      // The resumed turn finds the agent's rules already in force.
+      assert.deepEqual(prompts[1]?.permission, prompts[0]?.permission);
       assert.deepEqual(ran, [
         ["read"],
         ["read"],
