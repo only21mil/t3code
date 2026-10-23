@@ -4,6 +4,7 @@ import { Children, Fragment, memo, useState, type ReactNode } from "react";
 
 import { cn } from "../../lib/utils";
 import { GitHubIcon } from "../Icons";
+import { splitExternalLinkText } from "./MarkdownExternalLink.logic";
 
 const MARKDOWN_LINK_FAVICON_CLASS_NAME = "block size-full shrink-0 select-none";
 
@@ -44,16 +45,10 @@ const MarkdownLinkFavicon = memo(function MarkdownLinkFavicon({ host }: { host: 
   );
 });
 
-function leadingExternalLinkTextLength(text: string): number {
-  const protocol = /^(?:https?:\/\/)/i.exec(text)?.[0];
-  if (protocol) return protocol.length;
-  return Math.min(text.length, 1);
-}
-
-function breakableExternalLinkText(text: string): ReactNode[] {
-  return Array.from(text, (character, index) => (
-    <Fragment key={`${index}:${character}`}>
-      {character}
+function breakableExternalLinkText(graphemes: string[]): ReactNode[] {
+  return graphemes.map((grapheme, index) => (
+    <Fragment key={`${index}:${grapheme}`}>
+      {grapheme}
       <wbr />
     </Fragment>
   ));
@@ -69,14 +64,14 @@ export function MarkdownExternalLinkContent({
   children: ReactNode;
 }) {
   if (plainText) {
-    const leadingLength = leadingExternalLinkTextLength(plainText);
+    const { leading, breakable } = splitExternalLinkText(plainText);
     return (
       <>
         <span className="whitespace-nowrap">
           <MarkdownLinkFavicon host={host} />
-          {plainText.slice(0, leadingLength)}
+          {leading}
         </span>
-        {breakableExternalLinkText(plainText.slice(leadingLength))}
+        {breakableExternalLinkText(breakable)}
       </>
     );
   }
@@ -85,14 +80,14 @@ export function MarkdownExternalLinkContent({
   const firstChild = childNodes[0];
 
   if (typeof firstChild === "string" && firstChild.length > 0) {
-    const leadingLength = leadingExternalLinkTextLength(firstChild);
+    const { leading, breakable } = splitExternalLinkText(firstChild);
     return (
       <>
         <span className="whitespace-nowrap">
           <MarkdownLinkFavicon host={host} />
-          {firstChild.slice(0, leadingLength)}
+          {leading}
         </span>
-        {breakableExternalLinkText(firstChild.slice(leadingLength))}
+        {breakableExternalLinkText(breakable)}
         {childNodes.slice(1)}
       </>
     );
