@@ -354,7 +354,7 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
         Schema.decodeUnknownEffect(schema)(data).pipe(
           Effect.mapError((cause) => protocolError("Invalid Muse protocol response", cause)),
         );
-      const request = (
+      const send = (
         method: string,
         params: Record<string, unknown>,
         command = true,
@@ -382,7 +382,14 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
                 : `Muse ${method} failed`,
               cause,
             ),
-        }).pipe(
+        });
+      const request = (
+        method: string,
+        params: Record<string, unknown>,
+        command = true,
+        commandId?: string,
+      ) =>
+        send(method, params, command, commandId).pipe(
           Effect.timeout(options.requestTimeoutMs ?? 30_000),
           Effect.catchTags({
             TimeoutError: (cause) =>
@@ -1840,30 +1847,57 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
             : undefined;
           const startModel = yield* resolveModel(args.modelSelection);
           const permissionProfile = musePermissionProfile(args.runtimePolicy.runtimeMode);
-          const result = yield* request(
-            requestedId ? "session/resume" : "session/start",
-            requestedId
-              ? { excludeItems: true, ...(config ? { config } : {}), permissionProfile }
-              : {
-                  workspaceRoot: cwd,
-                  ...(config ? { config } : {}),
-                  ...(startModel ? { modelId: startModel } : {}),
-                  providerId: "meta",
-                  approvalMode: museApprovalMode(args.runtimePolicy.runtimeMode),
-                  permissionProfile,
-                },
-          ).pipe(
-            Effect.catch((error) => {
-              missingNativeSession =
-                requestedId !== undefined &&
-                error.payload instanceof MspError &&
-                (error.payload.kind === "sessionNotFound" || error.payload.kind === "notFound");
-              return Effect.fail(error);
-            }),
-            Effect.flatMap((value) => decode(MuseSessionResult, value)),
-          );
-          if (result.session.sessionId !== nativeSessionId)
-            return yield* protocolError("Muse returned a different session identity");
+          const open = Effect.gen(function* () {
+            const result = yield* request(
+              requestedId ? "session/resume" : "session/start",
+              requestedId
+                ? { excludeItems: true, ...(config ? { config } : {}), permissionProfile }
+                : {
+                    workspaceRoot: cwd,
+                    ...(config ? { config } : {}),
+                    ...(startModel ? { modelId: startModel } : {}),
+                    providerId: "meta",
+                    approvalMode: museApprovalMode(args.runtimePolicy.runtimeMode),
+                    permissionProfile,
+                  },
+            ).pipe(
+              Effect.catch((error) => {
+                missingNativeSession =
+                  requestedId !== undefined &&
+                  error.payload instanceof MspError &&
+                  (error.payload.kind === "sessionNotFound" || error.payload.kind === "notFound");
+                return Effect.fail(error);
+              }),
+              Effect.flatMap((value) => decode(MuseSessionResult, value)),
+            );
+            if (result.session.sessionId !== nativeSessionId)
+              return yield* protocolError("Muse returned a different session identity");
+            return result;
+          });
+          let result = yield* open;
+          // Muse Code 1.4.12 never starts session MCP servers on a host whose resume replays
+          // queued work, and MSP cannot reload them. Closing the host cancels one replayed
+          // item, so resume on fresh hosts until one comes back idle.
+          if (config)
+            for (let relaunch = 0; result.session.activeTurnId; relaunch++) {
+              if (relaunch === 5) {
+                yield* Effect.logWarning(
+                  "Muse kept replaying queued work; T3 tools are unavailable",
+                );
+                break;
+              }
+              yield* Effect.logWarning("Muse replayed queued work without T3 tools; relaunching");
+              const replaying = host;
+              yield* eventPermit.withPermits(1)(
+                Effect.sync(() => {
+                  hostEpoch++;
+                  wake = undefined;
+                }),
+              );
+              yield* Effect.tryPromise(() => replaying.close()).pipe(Effect.ignore);
+              yield* launchHost();
+              result = yield* open;
+            }
           if (requestedId)
             yield* request("session/setApprovalMode", {
               mode: museApprovalMode(args.runtimePolicy.runtimeMode),
@@ -2214,10 +2248,29 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
             )
               return yield* protocolError("This Muse turn cannot be steered");
             const parts = yield* prompt(args.message);
-            const result = yield* request("turn/steer", {
+            // Muse refuses a steer it will not take within milliseconds, but acks an
+            // accepted one only once its records are on disk, which a slow disk can
+            // hold past 30 s. An accepted steer survives the turn (Muse runs it as a
+            // new turn after a Stop), so an ack still pending after the wait means
+            // delivered, not a dead host. Muse also gives up on the ack itself after
+            // 30 s and still applies the steer, so a retry of that error would steer
+            // twice.
+            const ack = yield* send("turn/steer", {
               expectedTurnId: turn.nativeId,
               input: parts,
-            }).pipe(Effect.flatMap((value) => decode(MuseTurnStartResult, value)));
+            }).pipe(
+              Effect.timeoutOption(options.requestTimeoutMs ?? 30_000),
+              Effect.catchIf(
+                (error) =>
+                  error.payload instanceof MspError &&
+                  error.payload.code === -32603 &&
+                  error.payload.kind === "internal" &&
+                  error.payload.message.includes("runtime command acknowledgement timed out"),
+                () => Effect.succeedNone,
+              ),
+            );
+            if (Option.isNone(ack)) return;
+            const result = yield* decode(MuseTurnStartResult, ack.value);
             if (result.turnId !== turn.nativeId)
               return yield* protocolError("Muse steering targeted a different turn");
           },
