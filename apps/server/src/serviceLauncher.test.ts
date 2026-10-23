@@ -1,5 +1,7 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off - observes the children the launcher spawns with Node built-ins.
 import type * as NodeChildProcess from "node:child_process";
+// @effect-diagnostics-next-line nodeBuiltinImport:off - holds the launcher's backup delete open.
+import type * as NodeFSP from "node:fs/promises";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -33,10 +35,32 @@ vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof NodeChildProcess>();
   const spawn = (...args: Parameters<typeof actual.spawn>) => {
     const child = actual.spawn(...args);
+    if (child.send !== undefined) vi.spyOn(child, "send");
     spawnedChildren.push(child);
     return child;
   };
   return { ...actual, spawn: spawn as typeof actual.spawn };
+});
+
+// Stands in for a filesystem where deleting a database backup takes longer than the server waits.
+const heldBackupDiscard = vi.hoisted(() => ({
+  release: undefined as Promise<void> | undefined,
+  started: undefined as (() => void) | undefined,
+}));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof NodeFSP>();
+  const rm: typeof actual.rm = async (target, options) => {
+    if (
+      heldBackupDiscard.release !== undefined &&
+      /[\\/]db-backup[\\/][^\\/.]+$/.test(String(target))
+    ) {
+      heldBackupDiscard.started?.();
+      await heldBackupDiscard.release;
+    }
+    return actual.rm(target, options);
+  };
+  return { ...actual, rm };
 });
 
 const writeSparseFile = (filePath: string, size: number) =>
@@ -303,6 +327,87 @@ if (context.update?.status === "pending") {
       const state = yield* Effect.promise(() => readServiceState(statePath));
       assert.equal(state.activeVersion, "1.1.0");
       assert.equal(state.update?.status, "committed");
+    }),
+  );
+
+  it.effect("sends committed to the trial without waiting for the backup delete", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-launcher-discard-" });
+      const statePath = path.join(root, "runtime", "service-state.json");
+      const databasePath = path.join(root, "userdata", "state.sqlite");
+      yield* fs.makeDirectory(path.dirname(databasePath), { recursive: true });
+      yield* fs.writeFileString(databasePath, "database");
+      const encodedDatabasePath = JSON.stringify(databasePath);
+      const childSource = `
+const context = JSON.parse(process.env.T3_SERVICE_LAUNCHER_CONTEXT);
+if (context.update?.status === "pending") {
+  process.on("message", (message) => {
+    if (message.type === "committed") process.exit(0);
+  });
+  process.send({ type: "prepared", updateId: context.update.id });
+} else if (context.update === undefined) {
+  process.send({ type: "request-update", targetVersion: "1.1.0", dbPath: ${encodedDatabasePath} });
+  setInterval(() => {}, 1_000);
+} else {
+  process.exit(0);
+}
+`;
+      for (const version of ["1.0.0", "1.1.0"]) {
+        yield* writeFakeRuntime(
+          fs,
+          path,
+          path.join(root, "runtime", "versions", version),
+          childSource,
+        );
+      }
+      yield* Effect.promise(() =>
+        writeServiceState(statePath, {
+          protocol: SERVICE_LAUNCHER_PROTOCOL,
+          activeVersion: "1.0.0",
+        }),
+      );
+
+      const release = Promise.withResolvers<void>();
+      const discardStarted = Promise.withResolvers<void>();
+      heldBackupDiscard.release = release.promise;
+      heldBackupDiscard.started = discardStarted.resolve;
+      const launcher = new Launcher(root, yield* Effect.promise(() => readServiceState(statePath)));
+      const running = launcher.run().then(
+        () => Promise.reject(new Error("launcher unexpectedly completed")),
+        () => Promise.resolve(),
+      );
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(() => {
+          heldBackupDiscard.release = undefined;
+          heldBackupDiscard.started = undefined;
+          release.resolve();
+          return running;
+        }),
+      );
+
+      yield* Effect.promise(() => discardStarted.promise);
+      const state = yield* Effect.promise(() => readServiceState(statePath));
+      assert.equal(state.update?.status, "committed");
+      const trial = spawnedChildren.at(-1)!;
+      assert.deepInclude(
+        vi.mocked(trial.send).mock.calls.map(([message]) => message),
+        { type: "committed", updateId: state.update?.id },
+      );
+      yield* Effect.promise(
+        () =>
+          new Promise<void>((resolve) => {
+            if (trial.exitCode !== null) resolve();
+            else trial.once("exit", () => resolve());
+          }),
+      );
+
+      release.resolve();
+      yield* Effect.promise(() => running);
+      const updateId = state.update?.id;
+      assert.isDefined(updateId);
+      assert.isFalse(yield* fs.exists(path.join(root, "runtime", "db-backup", updateId)));
     }),
   );
 
