@@ -1,3 +1,9 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
   CommandId,
@@ -5,6 +11,7 @@ import {
   type OrchestrationV2Run,
   type OrchestrationV2StoredEvent,
   type OrchestrationV2ThreadProjection,
+  type OrchestrationV2ThreadShellSnapshot,
   ProjectId,
   ProviderInstanceId,
   RunId,
@@ -17,6 +24,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerSettings from "../serverSettings.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -146,6 +154,60 @@ it.effect(
     }).pipe(Effect.provide(layerTest));
   },
 );
+
+it.effect("lists a project's threads on the database reader, off the event loop", () => {
+  const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-thread-list-"));
+  const persistence = SqlitePersistence.layerFromPath(NodePath.join(tempDir, "state.sqlite")).pipe(
+    Layer.provide(NodeServices.layer),
+  );
+  const connections: Array<unknown> = [];
+  const layerTest = ThreadManagementService.layer.pipe(
+    Layer.provide(Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({})),
+    Layer.provide(
+      Layer.effect(
+        Orchestrator.OrchestratorV2,
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          return Orchestrator.OrchestratorV2.of({
+            getShellSnapshot: () =>
+              sql
+                .withTransaction(
+                  Effect.flatMap(Effect.currentSpan, (span) =>
+                    Effect.sync(() => connections.push(span.attributes.get("db.connection"))),
+                  ),
+                )
+                .pipe(
+                  Effect.orDie,
+                  Effect.as({
+                    schemaVersion: 1,
+                    snapshotSequence: 0,
+                    threads: [],
+                    archivedThreads: [],
+                  } as unknown as OrchestrationV2ThreadShellSnapshot),
+                ),
+          } as unknown as Orchestrator.OrchestratorV2["Service"]);
+        }),
+      ),
+    ),
+    Layer.provide(ServerSettings.layerTest()),
+    Layer.provide(layerReceiptsTest),
+    Layer.provide(persistence),
+  );
+
+  return Effect.gen(function* () {
+    const service = yield* ThreadManagementService.ThreadManagementService;
+    yield* service.listProjectThreads({
+      projectId: ProjectId.make("project:thread-management:list"),
+      includeSubagents: true,
+    });
+    // Orchestrators list threads often, and every active shell is read; the
+    // writer runs on the main thread and would block every client meanwhile.
+    expect(connections).toEqual(["reader"]);
+  }).pipe(
+    Effect.provide(layerTest),
+    Effect.ensuring(Effect.sync(() => NodeFS.rmSync(tempDir, { recursive: true, force: true }))),
+  );
+});
 
 it.effect("uses thread-not-found only after a projection loads outside the project", () => {
   const projectId = ProjectId.make("project:thread-management:requested");
