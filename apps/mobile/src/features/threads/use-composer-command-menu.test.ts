@@ -55,7 +55,7 @@ describe("mobile slash commands", () => {
           item,
           allowInteractionMode,
         }),
-      ).toEqual({ text: "/plan ", cursor: 6, interactionMode: null });
+      ).toEqual({ text: "/plan ", cursor: 6, interactionMode: null, openModelPicker: false });
     },
   );
 
@@ -114,7 +114,7 @@ describe("mobile slash commands", () => {
         item,
         allowInteractionMode: true,
       }),
-    ).toEqual({ text: "", cursor: 0, interactionMode: "plan" });
+    ).toEqual({ text: "", cursor: 0, interactionMode: "plan", openModelPicker: false });
 
     expect(
       resolveComposerCommandSelection({
@@ -123,6 +123,6 @@ describe("mobile slash commands", () => {
         item,
         allowInteractionMode: false,
       }),
-    ).toEqual({ text: "/plan ", cursor: 6, interactionMode: null });
+    ).toEqual({ text: "/plan ", cursor: 6, interactionMode: null, openModelPicker: false });
   });
 });

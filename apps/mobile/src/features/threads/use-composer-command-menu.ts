@@ -138,8 +138,16 @@ export function resolveComposerCommandSelection(input: {
   readonly text: string;
   readonly cursor: number;
   readonly interactionMode: ProviderInteractionMode | null;
+  readonly openModelPicker: boolean;
 } {
   const { draftMessage, trigger, item } = input;
+  if (item.type === "slash-command" && item.command === "model") {
+    return {
+      ...replaceTextRange(draftMessage, trigger.rangeStart, trigger.rangeEnd, ""),
+      interactionMode: null,
+      openModelPicker: true,
+    };
+  }
   if (
     input.allowInteractionMode &&
     item.type === "slash-command" &&
@@ -148,6 +156,7 @@ export function resolveComposerCommandSelection(input: {
     return {
       ...replaceTextRange(draftMessage, trigger.rangeStart, trigger.rangeEnd, ""),
       interactionMode: item.command,
+      openModelPicker: false,
     };
   }
 
@@ -164,6 +173,7 @@ export function resolveComposerCommandSelection(input: {
   return {
     ...replaceTextRange(draftMessage, trigger.rangeStart, trigger.rangeEnd, replacement),
     interactionMode: null,
+    openModelPicker: false,
   };
 }
 
@@ -184,6 +194,7 @@ export function useComposerCommandMenu({
   enabled = true,
   onChangeDraftMessage,
   onUpdateInteractionMode,
+  onOpenModelPicker,
   onUsageLimits,
 }: {
   readonly draftMessage: string;
@@ -202,6 +213,7 @@ export function useComposerCommandMenu({
   readonly enabled?: boolean;
   readonly onChangeDraftMessage: (value: string) => void;
   readonly onUpdateInteractionMode?: (mode: ProviderInteractionMode) => void;
+  readonly onOpenModelPicker?: () => void;
   readonly onUsageLimits?: () => void;
 }) {
   const [selection, setSelection] = useState(() => composerSelectionAtEnd(draftMessage));
@@ -608,6 +620,9 @@ export function useComposerCommandMenu({
     });
     setSelection({ start: result.cursor, end: result.cursor });
     onChangeDraftMessage(result.text);
+    if (result.openModelPicker) {
+      onOpenModelPicker?.();
+    }
     if (result.interactionMode !== null) {
       onUpdateInteractionMode?.(result.interactionMode);
     }

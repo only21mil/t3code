@@ -575,6 +575,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
       selectedProviderStatus?.showInteractionModeToggle === false
         ? undefined
         : props.onUpdateInteractionMode,
+    onOpenModelPicker: () => openSettings(),
     offersUsageLimits: usageLimitsOffered,
     onUsageLimits:
       usageLimitsOffered && draftAttachments.length === 0 ? openUsageLimits : undefined,
