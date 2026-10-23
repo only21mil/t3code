@@ -2225,11 +2225,23 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
             // Muse refuses a steer it will not take within milliseconds, but can hold
             // the ack for an accepted one until a running tool call ends. An accepted
             // steer survives the turn (Muse runs it as a new turn after a Stop), so an
-            // ack still pending after the wait means delivered, not a dead host.
+            // ack still pending after the wait means delivered, not a dead host. Muse
+            // also gives up on the ack itself after 30 s and still applies the steer,
+            // so a retry of that error would steer twice.
             const ack = yield* send("turn/steer", {
               expectedTurnId: turn.nativeId,
               input: parts,
-            }).pipe(Effect.timeoutOption(options.requestTimeoutMs ?? 30_000));
+            }).pipe(
+              Effect.timeoutOption(options.requestTimeoutMs ?? 30_000),
+              Effect.catchIf(
+                (error) =>
+                  error.payload instanceof MspError &&
+                  error.payload.code === -32603 &&
+                  error.payload.kind === "internal" &&
+                  error.payload.message.includes("runtime command acknowledgement timed out"),
+                () => Effect.succeedNone,
+              ),
+            );
             if (Option.isNone(ack)) return;
             const result = yield* decode(MuseTurnStartResult, ack.value);
             if (result.turnId !== turn.nativeId)
