@@ -165,6 +165,21 @@ describe("settings search targets", () => {
       expect(getSettingsSearchTargetScope(id)!.scope).toBeNull();
     }
   });
+
+  it.each([
+    ["writing style", "source-control-writing-style", true],
+    ["change request templates", "follow-change-request-templates", true],
+    ["github token", "github-accounts", false],
+  ])(
+    "opens the %s result in project scopes only when projects can override it",
+    (query, id, projectScoped) => {
+      const result = searchSettings(query).find((item) => item.id === id)!;
+      const target = getSettingsSearchTargetScope(result.targetId ?? result.id)!;
+      expect(isSettingsSearchScopeAvailable(target.scope, "environment")).toBe(true);
+      expect(isSettingsSearchScopeAvailable(target.scope, "project")).toBe(projectScoped);
+      expect(isSettingsSearchScopeAvailable(target.scope, "checkout")).toBe(projectScoped);
+    },
+  );
 });
 
 describe("auto-settlement search availability", () => {

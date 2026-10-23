@@ -850,6 +850,7 @@ export const SETTINGS_SEARCH_ITEMS = [
       "repository conventions conventional commits custom instructions change descriptions request titles",
     ],
     environmentOnly: true,
+    scope: "project-defaults",
   },
   {
     id: "follow-change-request-templates",
@@ -857,6 +858,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/source-control",
     searchTerms: ["repository pr pull request description structure"],
     environmentOnly: true,
+    scope: "project-defaults",
   },
   {
     id: "source-control-writer-model",
