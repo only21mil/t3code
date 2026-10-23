@@ -38,35 +38,27 @@ const make = Effect.gen(function* () {
   // are retried when settings change or the parent switches provider.
   const deferred = new Map<
     string,
-    {
-      readonly task: OrchestrationV2Subagent;
-      readonly childThreadId: ThreadId;
-      readonly requestId: RuntimeRequestId;
-    }
+    { readonly task: OrchestrationV2Subagent; readonly requestId: RuntimeRequestId }
   >();
 
-  const wakeParent = Effect.fnUntraced(function* (
-    task: OrchestrationV2Subagent,
-    request: OrchestrationV2RuntimeRequest,
-  ) {
-    const childThreadId = task.childThreadId;
-    if (childThreadId === null) return;
-    const key = `${task.threadId}:${request.id}`;
-    deferred.delete(key);
-    const label = reportLabel(task.title?.trim() || task.prompt);
-    const situation =
-      request.responseCapability.type === "message"
-        ? `Delegated task ${task.id} asked a question and is still working.`
-        : `Delegated task ${task.id} is blocked on a question and cannot continue until it is answered.`;
-    yield* threads
-      .dispatch({
+  const wakeParent = Effect.fnUntraced(
+    function* (task: OrchestrationV2Subagent, request: OrchestrationV2RuntimeRequest) {
+      if (task.childThreadId === null) return;
+      const key = `${task.threadId}:${request.id}`;
+      deferred.delete(key);
+      const label = reportLabel(task.title?.trim() || task.prompt);
+      const situation =
+        request.responseCapability.type === "message"
+          ? `Delegated task ${task.id} asked a question and is still working.`
+          : `Delegated task ${task.id} is blocked on a question and cannot continue until it is answered.`;
+      yield* threads.dispatch({
         type: "message.dispatch",
         commandId: CommandId.make(`server:delegated-task-question:${key}`),
         threadId: task.threadId,
         messageId: MessageId.make(`message:delegated-task-question:${key}`),
-        text: `${situation} Read it with t3_pending_request_read using threadId ${childThreadId} and requestId ${request.id}. Answer it with t3_pending_request_respond when the answer follows from the task or the user's instructions; otherwise ask the user, then answer it. If it is no longer pending, it was answered or dismissed.`,
+        text: `${situation} Read it with t3_pending_request_read using threadId ${task.childThreadId} and requestId ${request.id}. Answer it with t3_pending_request_respond when the answer follows from the task or the user's instructions; otherwise ask the user, then answer it. If it is no longer pending, it was answered or dismissed.`,
         notification: {
-          source: { kind: "delegated_task", taskIds: [task.id], childThreadId },
+          source: { kind: "delegated_task", taskIds: [task.id], childThreadId: task.childThreadId },
           outcome: "updated",
           summary: `Delegated task${label === undefined ? "" : ` "${label}"`} has a question`,
         },
@@ -74,15 +66,17 @@ const make = Effect.gen(function* () {
         dispatchMode: { type: "queue_after_active" },
         createdBy: "agent",
         creationSource: "server",
-      })
-      .pipe(
+      });
+    },
+    (effect, task, request) =>
+      effect.pipe(
         Effect.catchTag("ThreadManagementProviderInstanceDisabledError", () =>
           Effect.sync(() => {
-            deferred.set(key, { task, childThreadId, requestId: request.id });
+            deferred.set(`${task.threadId}:${request.id}`, { task, requestId: request.id });
           }),
         ),
-      );
-  });
+      ),
+  );
 
   const wakeForQuestion = Effect.fnUntraced(function* (
     child: OrchestrationV2AppThread,
@@ -124,10 +118,13 @@ const make = Effect.gen(function* () {
   });
 
   const retryDeferred = Effect.fnUntraced(function* (parentThreadId?: ThreadId) {
-    for (const [key, { task, childThreadId, requestId }] of [...deferred]) {
+    for (const [key, { task, requestId }] of [...deferred]) {
       if (parentThreadId !== undefined && task.threadId !== parentThreadId) continue;
       yield* Effect.gen(function* () {
-        const request = yield* projections.getRuntimeRequest(childThreadId, requestId);
+        const request =
+          task.childThreadId === null
+            ? undefined
+            : yield* projections.getRuntimeRequest(task.childThreadId, requestId);
         const parent = yield* projections.getThread(task.threadId);
         if (
           request?.status !== "pending" ||
