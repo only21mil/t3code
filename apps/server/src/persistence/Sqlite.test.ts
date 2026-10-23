@@ -13,11 +13,13 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlitePersistence from "./Sqlite.ts";
 
 // Linux names an open, already-deleted file "<path> (deleted)" in /proc/self/fd.
+// SQLite names its temp files "etilqs_*" and, without TMPDIR, puts them in
+// /var/tmp while os.tmpdir() is /tmp, so match the name, not the directory.
 const openDeletedTempFiles = () =>
   NodeFS.readdirSync("/proc/self/fd").flatMap((fd) => {
     try {
       const target = NodeFS.readlinkSync(`/proc/self/fd/${fd}`);
-      return target.startsWith(NodeOS.tmpdir()) && target.endsWith(" (deleted)") ? [target] : [];
+      return target.includes("/etilqs_") && target.endsWith(" (deleted)") ? [target] : [];
     } catch {
       return [];
     }
