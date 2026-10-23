@@ -59,6 +59,41 @@ describe("mobile slash commands", () => {
     },
   );
 
+  it.each([
+    { draftMessage: "/", rangeStart: 0, rangeEnd: 1, text: "", cursor: 0 },
+    {
+      draftMessage: "Before /mo after",
+      rangeStart: 7,
+      rangeEnd: 10,
+      text: "Before  after",
+      cursor: 7,
+    },
+  ])("opens the model picker without inserting a command into $draftMessage", (input) => {
+    const items = buildComposerSlashCommandItems({
+      query: "mo",
+      atMessageStart: input.rangeStart === 0,
+      hasThread: true,
+      allowInteractionMode: false,
+      selectedProviderStatus: antigravity,
+    });
+    const item = items[0];
+    if (!item) throw new Error("Expected the T3 model command");
+
+    expect(
+      resolveComposerCommandSelection({
+        draftMessage: input.draftMessage,
+        trigger: input,
+        item,
+        allowInteractionMode: false,
+      }),
+    ).toEqual({
+      text: input.text,
+      cursor: input.cursor,
+      interactionMode: null,
+      openModelPicker: true,
+    });
+  });
+
   it("still applies the T3 plan command for supported providers", () => {
     const items = buildComposerSlashCommandItems({
       query: "plan",
