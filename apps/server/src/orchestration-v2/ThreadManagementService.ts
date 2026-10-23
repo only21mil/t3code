@@ -35,6 +35,7 @@ import {
   ThreadId,
   type TurnItemId,
 } from "@t3tools/contracts";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { threadTranscriptHeader } from "@t3tools/shared/threadTranscript";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -727,6 +728,9 @@ const make = Effect.gen(function* () {
 
   const listProjectThreads: ThreadManagementServiceShape["listProjectThreads"] = (input) =>
     orchestrator.getShellSnapshot({ projectId: input.projectId, location: "active" }).pipe(
+      // Agents list threads often and each call reads every active shell; the
+      // writer runs on the event loop, so read on the reader worker instead.
+      NodeSqliteClient.readOnly,
       Effect.mapError(
         (cause) =>
           new ThreadManagementProjectThreadsListError({
