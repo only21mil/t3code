@@ -1,5 +1,7 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off - observes the children the launcher spawns with Node built-ins.
 import type * as NodeChildProcess from "node:child_process";
+// @effect-diagnostics-next-line nodeBuiltinImport:off - holds the launcher's backup delete open.
+import type * as NodeFSP from "node:fs/promises";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -28,15 +30,45 @@ import {
 } from "./cloud/serviceProtocol.ts";
 
 const spawnedChildren = vi.hoisted((): Array<NodeChildProcess.ChildProcess> => []);
+// Fake children report test milestones over IPC; the launcher ignores message types it does not know.
+const childReports = vi.hoisted(() => ({
+  onMessage: undefined as ((message: unknown) => void) | undefined,
+}));
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof NodeChildProcess>();
   const spawn = (...args: Parameters<typeof actual.spawn>) => {
     const child = actual.spawn(...args);
+    if (child.send !== undefined) vi.spyOn(child, "send");
+    child.on("message", (message) => childReports.onMessage?.(message));
     spawnedChildren.push(child);
     return child;
   };
   return { ...actual, spawn: spawn as typeof actual.spawn };
+});
+
+// Stands in for a filesystem where deleting a database backup takes longer than the server waits.
+// Holds only the first backup delete after it is armed.
+const heldBackupDiscard = vi.hoisted(() => ({
+  release: undefined as Promise<void> | undefined,
+  started: undefined as (() => void) | undefined,
+  finished: undefined as (() => void) | undefined,
+}));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof NodeFSP>();
+  const rm: typeof actual.rm = async (target, options) => {
+    const release = heldBackupDiscard.release;
+    if (release === undefined || !/[\\/]db-backup[\\/][^\\/.]+$/.test(String(target))) {
+      return actual.rm(target, options);
+    }
+    heldBackupDiscard.release = undefined;
+    heldBackupDiscard.started?.();
+    await release;
+    await actual.rm(target, options);
+    heldBackupDiscard.finished?.();
+  };
+  return { ...actual, rm };
 });
 
 const writeSparseFile = (filePath: string, size: number) =>
@@ -303,6 +335,242 @@ if (context.update?.status === "pending") {
       const state = yield* Effect.promise(() => readServiceState(statePath));
       assert.equal(state.activeVersion, "1.1.0");
       assert.equal(state.update?.status, "committed");
+    }),
+  );
+
+  it.effect("sends committed to the trial without waiting for the backup delete", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-launcher-discard-" });
+      const statePath = path.join(root, "runtime", "service-state.json");
+      const databasePath = path.join(root, "userdata", "state.sqlite");
+      yield* fs.makeDirectory(path.dirname(databasePath), { recursive: true });
+      yield* fs.writeFileString(databasePath, "database");
+      const encodedDatabasePath = JSON.stringify(databasePath);
+      const childSource = `
+const context = JSON.parse(process.env.T3_SERVICE_LAUNCHER_CONTEXT);
+if (context.update?.status === "pending") {
+  process.on("message", (message) => {
+    if (message.type === "committed") process.exit(0);
+  });
+  process.send({ type: "prepared", updateId: context.update.id });
+} else if (context.update === undefined) {
+  process.send({ type: "request-update", targetVersion: "1.1.0", dbPath: ${encodedDatabasePath} });
+  setInterval(() => {}, 1_000);
+} else {
+  process.exit(0);
+}
+`;
+      for (const version of ["1.0.0", "1.1.0"]) {
+        yield* writeFakeRuntime(
+          fs,
+          path,
+          path.join(root, "runtime", "versions", version),
+          childSource,
+        );
+      }
+      yield* Effect.promise(() =>
+        writeServiceState(statePath, {
+          protocol: SERVICE_LAUNCHER_PROTOCOL,
+          activeVersion: "1.0.0",
+        }),
+      );
+
+      const release = Promise.withResolvers<void>();
+      const discardStarted = Promise.withResolvers<void>();
+      heldBackupDiscard.release = release.promise;
+      heldBackupDiscard.started = discardStarted.resolve;
+      const launcher = new Launcher(root, yield* Effect.promise(() => readServiceState(statePath)));
+      const running = launcher.run().then(
+        () => Promise.reject(new Error("launcher unexpectedly completed")),
+        () => Promise.resolve(),
+      );
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(() => {
+          heldBackupDiscard.release = undefined;
+          heldBackupDiscard.started = undefined;
+          release.resolve();
+          return running;
+        }),
+      );
+
+      yield* Effect.promise(() => discardStarted.promise);
+      const state = yield* Effect.promise(() => readServiceState(statePath));
+      assert.equal(state.update?.status, "committed");
+      const trial = spawnedChildren.at(-1)!;
+      assert.deepInclude(
+        vi.mocked(trial.send).mock.calls.map(([message]) => message),
+        { type: "committed", updateId: state.update?.id },
+      );
+      yield* Effect.promise(
+        () =>
+          new Promise<void>((resolve) => {
+            if (trial.exitCode !== null) resolve();
+            else trial.once("exit", () => resolve());
+          }),
+      );
+
+      release.resolve();
+      yield* Effect.promise(() => running);
+      const updateId = state.update?.id;
+      assert.isDefined(updateId);
+      assert.isFalse(yield* fs.exists(path.join(root, "runtime", "db-backup", updateId)));
+    }),
+  );
+
+  it.effect("waits for a committed backup delete when stopped during it", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-launcher-stop-" });
+      const statePath = path.join(root, "runtime", "service-state.json");
+      const databasePath = path.join(root, "userdata", "state.sqlite");
+      yield* fs.makeDirectory(path.dirname(databasePath), { recursive: true });
+      yield* fs.writeFileString(databasePath, "database");
+      const encodedDatabasePath = JSON.stringify(databasePath);
+      const childSource = `
+const context = JSON.parse(process.env.T3_SERVICE_LAUNCHER_CONTEXT);
+if (context.update?.status === "pending") {
+  process.send({ type: "prepared", updateId: context.update.id });
+} else if (context.update === undefined) {
+  process.send({ type: "request-update", targetVersion: "1.1.0", dbPath: ${encodedDatabasePath} });
+}
+setInterval(() => {}, 1_000);
+`;
+      for (const version of ["1.0.0", "1.1.0"]) {
+        yield* writeFakeRuntime(
+          fs,
+          path,
+          path.join(root, "runtime", "versions", version),
+          childSource,
+        );
+      }
+      yield* Effect.promise(() =>
+        writeServiceState(statePath, {
+          protocol: SERVICE_LAUNCHER_PROTOCOL,
+          activeVersion: "1.0.0",
+        }),
+      );
+
+      const release = Promise.withResolvers<void>();
+      const discardStarted = Promise.withResolvers<void>();
+      let deleted = false;
+      heldBackupDiscard.release = release.promise;
+      heldBackupDiscard.started = discardStarted.resolve;
+      heldBackupDiscard.finished = () => {
+        deleted = true;
+      };
+      const launcher = new Launcher(root, yield* Effect.promise(() => readServiceState(statePath)));
+      const deletedWhenDone = launcher.run().then(() => deleted);
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(() => {
+          heldBackupDiscard.release = undefined;
+          heldBackupDiscard.started = undefined;
+          heldBackupDiscard.finished = undefined;
+          release.resolve();
+          return deletedWhenDone.catch(() => undefined);
+        }),
+      );
+
+      yield* Effect.promise(() => discardStarted.promise);
+      // The servers stop without waiting for the delete; the launcher itself does not finish first.
+      yield* Effect.promise(() => launcher.stop("SIGTERM"));
+      release.resolve();
+      assert.isTrue(yield* Effect.promise(() => deletedWhenDone));
+      const state = yield* Effect.promise(() => readServiceState(statePath));
+      assert.equal(state.update?.status, "committed");
+      assert.deepEqual(yield* fs.readDirectory(path.join(root, "runtime", "db-backup")), []);
+    }),
+  );
+
+  it.effect("a restarted launcher removes a backup whose delete a newer update interrupted", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-service-launcher-orphan-" });
+      const statePath = path.join(root, "runtime", "service-state.json");
+      const backupRoot = path.join(root, "runtime", "db-backup");
+      const databasePath = path.join(root, "userdata", "state.sqlite");
+      yield* fs.makeDirectory(path.dirname(databasePath), { recursive: true });
+      yield* fs.writeFileString(databasePath, "database");
+      const encodedDatabasePath = JSON.stringify(databasePath);
+      // 1.1.0 commits and at once asks for 1.2.0; the 1.2.0 trial only reports that it started.
+      const childSource = `
+const context = JSON.parse(process.env.T3_SERVICE_LAUNCHER_CONTEXT);
+const dbPath = ${encodedDatabasePath};
+if (context.update === undefined) {
+  process.send({ type: "request-update", targetVersion: "1.1.0", dbPath });
+} else if (context.update.status === "pending" && context.childVersion === "1.1.0") {
+  process.on("message", (message) => {
+    if (message.type === "committed") {
+      process.send({ type: "request-update", targetVersion: "1.2.0", dbPath });
+    } else if (message.type === "update-accepted") {
+      process.send({ type: "test-update-accepted" });
+    }
+  });
+  process.send({ type: "prepared", updateId: context.update.id });
+} else if (context.update.status === "pending") {
+  process.send({ type: "test-trial-started" });
+}
+setInterval(() => {}, 1_000);
+`;
+      for (const version of ["1.0.0", "1.1.0", "1.2.0"]) {
+        yield* writeFakeRuntime(
+          fs,
+          path,
+          path.join(root, "runtime", "versions", version),
+          childSource,
+        );
+      }
+      yield* Effect.promise(() =>
+        writeServiceState(statePath, {
+          protocol: SERVICE_LAUNCHER_PROTOCOL,
+          activeVersion: "1.0.0",
+        }),
+      );
+
+      const release = Promise.withResolvers<void>();
+      const discardStarted = Promise.withResolvers<void>();
+      const secondUpdateAccepted = Promise.withResolvers<void>();
+      const secondTrialStarted = Promise.withResolvers<void>();
+      heldBackupDiscard.release = release.promise;
+      heldBackupDiscard.started = discardStarted.resolve;
+      childReports.onMessage = (message) => {
+        const type = (message as { readonly type?: unknown } | null)?.type;
+        if (type === "test-update-accepted") secondUpdateAccepted.resolve();
+        if (type === "test-trial-started") secondTrialStarted.resolve();
+      };
+      const first = new Launcher(root, yield* Effect.promise(() => readServiceState(statePath)));
+      const firstRun = first.run();
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(async () => {
+          childReports.onMessage = undefined;
+          heldBackupDiscard.release = undefined;
+          heldBackupDiscard.started = undefined;
+          release.resolve();
+          await first.stop("SIGTERM");
+          await firstRun.catch(() => undefined);
+        }),
+      );
+
+      yield* Effect.promise(() => discardStarted.promise);
+      yield* Effect.promise(() => secondUpdateAccepted.promise);
+      // The first launcher's delete never runs from here on, as if it had been killed.
+      yield* Effect.promise(() => first.stop("SIGTERM"));
+      const [orphanId, ...others] = yield* fs.readDirectory(backupRoot);
+      assert.deepEqual(others, []);
+      const pendingState = yield* Effect.promise(() => readServiceState(statePath));
+      const pending = pendingState.update;
+      assert.equal(pending?.status, "pending");
+      assert.notEqual(pending?.id, orphanId);
+
+      const second = new Launcher(root, pendingState);
+      const secondRun = second.run();
+      yield* Effect.promise(() => secondTrialStarted.promise);
+      yield* Effect.promise(() => second.stop("SIGTERM"));
+      yield* Effect.promise(() => secondRun);
+      assert.deepEqual(yield* fs.readDirectory(backupRoot), [pending?.id]);
     }),
   );
 
