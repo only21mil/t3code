@@ -759,8 +759,11 @@ function PullRequestSurfaceIcon({
 }
 
 // Module-level so React only runs this callback ref on mount and unmount;
-// a fresh function would re-attach and re-focus on every render.
+// a fresh function would re-attach and re-focus on every render. The launcher
+// also appears without user action, when the last browser tab closes, so it
+// leaves focus with whatever the person is typing in.
 function focusOnMount(node: HTMLDivElement | null) {
+  if (surfaceShortcutTargetsTypingContext(document.activeElement)) return;
   node?.focus();
 }
 
