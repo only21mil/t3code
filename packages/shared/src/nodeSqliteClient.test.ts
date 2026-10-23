@@ -211,6 +211,71 @@ it.effect("reports a transaction blocked by another writer as a lock timeout", (
   }).pipe(Effect.provide(NodeServices.layer)),
 );
 
+const withWriterWorker = <A, E>(
+  use: (
+    sql: SqlClient.SqlClient,
+    other: NodeSqlite.DatabaseSync,
+  ) => Effect.Effect<A, E, SqlClient.SqlClient>,
+) =>
+  Effect.gen(function* () {
+    const { filename, other } = yield* makeTempDatabase;
+    return yield* Effect.gen(function* () {
+      return yield* use(yield* SqlClient.SqlClient, other);
+    }).pipe(Effect.provide(SqliteClient.layer({ filename, writerWorker: true })));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
+
+it.effect("keeps the event loop running while a write waits for another connection's lock", () =>
+  withWriterWorker((sql, other) =>
+    Effect.gen(function* () {
+      yield* sql`PRAGMA busy_timeout = 5000`;
+      yield* Effect.sync(() => other.exec("BEGIN IMMEDIATE"));
+      const write = yield* Effect.forkChild(sql`UPDATE counters SET value = 1 WHERE id = 1`, {
+        startImmediately: true,
+      });
+      // A writer on the main thread would hold the event loop for the whole
+      // busy timeout, so this commit could only run after the write failed.
+      yield* Effect.sync(() => other.exec("COMMIT"));
+      yield* Fiber.join(write);
+      assert.deepEqual(yield* sql`SELECT value FROM counters WHERE id = 1`.values, [[1]]);
+    }),
+  ),
+);
+
+it.effect("fails a write transaction whose writer stops, then starts a new writer", () =>
+  withWriterWorker((sql) =>
+    Effect.gen(function* () {
+      const startedBefore = startedWorkers.length;
+      const error = yield* sql
+        .withTransaction(
+          Effect.gen(function* () {
+            yield* sql`UPDATE counters SET value = 5 WHERE id = 1`;
+            yield* Effect.promise(() => startedWorkers.at(-1)!.terminate());
+            yield* sql`UPDATE counters SET value = 6 WHERE id = 1`;
+          }),
+        )
+        .pipe(Effect.flip);
+
+      assert.equal(error._tag, "SqlError");
+      assert.include(String(error.reason.cause), "Database writer exited");
+      assert.deepEqual(yield* sql`SELECT value FROM counters WHERE id = 1`.values, [[0]]);
+      assert.equal(startedWorkers.length, startedBefore + 1);
+    }),
+  ),
+);
+
+it.effect("keeps connection settings on a replacement writer", () =>
+  withWriterWorker((sql) =>
+    Effect.gen(function* () {
+      yield* sql`PRAGMA synchronous = NORMAL`;
+      yield* sql`PRAGMA busy_timeout = 1234`;
+      yield* Effect.promise(() => startedWorkers.at(-1)!.terminate());
+
+      assert.deepEqual(yield* sql`PRAGMA synchronous`.values, [[1]]);
+      assert.deepEqual(yield* sql`PRAGMA busy_timeout`.values, [[1234]]);
+    }),
+  ),
+);
+
 it.effect("lets the writer commit while a read-only transaction is open", () =>
   withReaderClient((sql) =>
     Effect.gen(function* () {

@@ -46,6 +46,12 @@ export interface SqliteClientConfig {
    * Ignored for in-memory databases.
    */
   readonly checkpointWorker?: boolean | undefined;
+  /**
+   * Runs the read-write connection on a worker thread, so its file I/O and
+   * lock waits never block the event loop. Ignored for in-memory and
+   * read-only databases.
+   */
+  readonly writerWorker?: boolean | undefined;
 }
 
 // SqlClient masks transaction acquisition, so readOnly carries the caller's interruption policy.
@@ -514,6 +520,15 @@ const CHECKPOINT_FRAMES = 1000;
 const CHECKPOINT_IDLE_MS = 100;
 const CHECKPOINT_BACKPRESSURE_FRAMES = 10 * CHECKPOINT_FRAMES;
 
+// PRAGMAs whose assignment writes the database file rather than connection state.
+const mutatingPragmasWithValues = new Set([
+  "application_id",
+  "auto_vacuum",
+  "journal_mode",
+  "schema_version",
+  "user_version",
+]);
+
 const readSafeSqliteInteger = (value: unknown) => {
   const number = typeof value === "bigint" ? Number(value) : value;
   return typeof number === "number" && Number.isSafeInteger(number) ? number : undefined;
@@ -639,28 +654,64 @@ parentPort.on("message", (request) => {
 });
 `;
 
+/**
+ * The writer connection as the checkpoint coordinator sees it, whether it runs
+ * on the main thread or on the writer worker.
+ */
+interface CheckpointWriter {
+  readonly unsupported: string | undefined;
+  readonly isTransaction: boolean;
+  readonly sqliteVersion: () => string;
+  /** Only read after the version check: older SQLite runs NOOP as PASSIVE. */
+  readonly walFrames: () => unknown;
+  readonly journalSizeLimit: () => unknown;
+  /** Once this completes, `walFrames` reflects the writer. */
+  readonly setAutocheckpoint: (frames: number) => Effect.Effect<void, SqlError>;
+}
+
+const databaseCheckpointWriter = (db: NodeSqlite.DatabaseSync): CheckpointWriter => {
+  let frames: NodeSqlite.StatementSync | undefined;
+  let sizeLimit: NodeSqlite.StatementSync | undefined;
+  return {
+    unsupported:
+      typeof db.isTransaction !== "boolean" || typeof db.setAuthorizer !== "function"
+        ? "Node SQLite lacks transaction-state or statement-authorizer support"
+        : undefined,
+    get isTransaction() {
+      return db.isTransaction;
+    },
+    sqliteVersion: () => String(db.prepare("SELECT sqlite_version() AS version").get()?.version),
+    walFrames: () => (frames ??= db.prepare("PRAGMA wal_checkpoint(NOOP)")).get(),
+    journalSizeLimit: () =>
+      (sizeLimit ??= db.prepare("PRAGMA journal_size_limit")).get()?.journal_size_limit,
+    setAutocheckpoint: (frames) =>
+      Effect.try({
+        try: () => db.exec(`PRAGMA wal_autocheckpoint = ${frames};`),
+        catch: (cause) => failed(cause, "Failed to execute statement", "execute"),
+      }),
+  };
+};
+
 const startCheckpointWorker = Effect.fnUntraced(function* (
   filename: string,
-  writer: NodeSqlite.DatabaseSync,
+  writer: CheckpointWriter,
 ) {
   const warn = (reason: string) =>
     Effect.logWarning(
       "SQLite checkpoint worker unavailable; checkpoints run on the main connection",
       { reason },
     );
-  if (typeof writer.isTransaction !== "boolean" || typeof writer.setAuthorizer !== "function") {
-    yield* warn("Node SQLite lacks transaction-state or statement-authorizer support");
+  if (writer.unsupported !== undefined) {
+    yield* warn(writer.unsupported);
     return undefined;
   }
-  const version = String(writer.prepare("SELECT sqlite_version() AS version").get()?.version);
+  const version = writer.sqliteVersion();
   const [major = 0, minor = 0] = version.split(".").map(Number);
   // Older SQLite treats NOOP as PASSIVE, which would checkpoint on the writer.
   if (major < 3 || (major === 3 && minor < 51)) {
     yield* warn(`SQLite ${version} has no NOOP checkpoint`);
     return undefined;
   }
-  const frames = writer.prepare("PRAGMA wal_checkpoint(NOOP)");
-  const sizeLimit = writer.prepare("PRAGMA journal_size_limit");
   let worker: NodeWorkerThreads.Worker;
   try {
     worker = new NodeWorkerThreads.Worker(checkpointWorkerSource, {
@@ -712,9 +763,7 @@ const startCheckpointWorker = Effect.fnUntraced(function* (
     if (stopped) return;
     stopped = true;
     truncate = undefined;
-    try {
-      writer.exec(`PRAGMA wal_autocheckpoint = ${CHECKPOINT_FRAMES};`);
-    } catch {}
+    runFork(Effect.ignore(writer.setAutocheckpoint(CHECKPOINT_FRAMES)));
     wake();
     runFork(warn(reason));
   };
@@ -733,7 +782,7 @@ const startCheckpointWorker = Effect.fnUntraced(function* (
   };
   const observe = () => {
     try {
-      const state = frames.get();
+      const state = writer.walFrames() as { log?: unknown; checkpointed?: unknown } | undefined;
       const nextLog = readSafeSqliteInteger(state?.log);
       const nextCheckpointed = readSafeSqliteInteger(state?.checkpointed);
       if (nextLog === undefined || nextCheckpointed === undefined)
@@ -762,7 +811,7 @@ const startCheckpointWorker = Effect.fnUntraced(function* (
         type: "check",
         id: inFlight,
         generation,
-        journalSizeLimit: readSafeSqliteInteger(sizeLimit.get()?.journal_size_limit),
+        journalSizeLimit: readSafeSqliteInteger(writer.journalSizeLimit()),
         force: force || gated(),
       });
     } catch (cause) {
@@ -825,22 +874,23 @@ const startCheckpointWorker = Effect.fnUntraced(function* (
       return worker.terminate();
     }),
   );
-  writer.exec("PRAGMA wal_autocheckpoint = 0;");
+  yield* Effect.orDie(writer.setAutocheckpoint(0));
   observe();
   worker.unref();
 
   const runWithAdmission = <A, E>(
-    execute: () => Exit.Exit<A, E>,
+    execute: Effect.Effect<A, E>,
     admitted?: Waiter,
   ): Effect.Effect<A, E> =>
     Effect.suspend(() => {
       if (!gated()) {
         // Release the election after executing; its successor must see the new WAL state.
-        try {
-          return execute();
-        } finally {
-          if (admitted !== undefined) release(admitted);
-        }
+        return admitted === undefined
+          ? execute
+          : Effect.ensuring(
+              execute,
+              Effect.sync(() => release(admitted)),
+            );
       }
       if (admitted !== undefined) release(admitted);
       const waiter: Waiter = { resume: () => {}, cancelled: false };
@@ -869,6 +919,451 @@ const startCheckpointWorker = Effect.fnUntraced(function* (
       );
     });
   return { check, runWithAdmission };
+});
+
+// Evaluated source, like the reader's. Statements run in arrival order on one
+// connection, so transactions and their ordering are the same as on the main thread.
+const writerWorkerSource = `
+const { parentPort, workerData } = require("node:worker_threads");
+const { DatabaseSync } = require("node:sqlite");
+const describe = (operation, error) => ({
+  operation,
+  message: String(error && error.message ? error.message : error),
+  code: error && error.code,
+  errcode: error && error.errcode,
+  errstr: error && error.errstr,
+});
+let db;
+try {
+  const next = new DatabaseSync(workerData.filename, { allowExtension: workerData.allowExtension });
+  try {
+    for (const setting of workerData.settings) next.exec(setting);
+    const sqliteVersion = String(next.prepare("SELECT sqlite_version() AS version").get().version);
+    db = next;
+    parentPort.postMessage({
+      type: "ready",
+      sqliteVersion,
+      tracksTransactions: typeof next.isTransaction === "boolean",
+    });
+  } catch (error) {
+    next.close();
+    throw error;
+  }
+} catch (error) {
+  parentPort.postMessage({ type: "unavailable", message: describe("open", error).message });
+}
+const statements = new Map();
+const prepare = (sql, cached) => {
+  if (!cached) return db.prepare(sql);
+  let statement = statements.get(sql);
+  if (statement === undefined) {
+    statement = db.prepare(sql);
+    if (statements.size >= workerData.prepareCacheSize) statements.delete(statements.keys().next().value);
+  } else {
+    statements.delete(sql);
+  }
+  statements.set(sql, statement);
+  return statement;
+};
+// While the checkpoint worker owns checkpoints, report the WAL after each
+// statement outside a transaction so the main thread can gate writes on it.
+let observeWal = false;
+let walFrames;
+let journalSizeLimit;
+const walState = () => {
+  if (!observeWal || db.isTransaction) return undefined;
+  try {
+    walFrames ??= db.prepare("PRAGMA wal_checkpoint(NOOP)");
+    journalSizeLimit ??= db.prepare("PRAGMA journal_size_limit");
+    return { frames: walFrames.get(), journalSizeLimit: journalSizeLimit.get().journal_size_limit };
+  } catch {
+    return { frames: undefined, journalSizeLimit: undefined };
+  }
+};
+const setAutocheckpoint = (frames) => {
+  db.exec("PRAGMA wal_autocheckpoint = " + frames + ";");
+  observeWal = frames === 0;
+};
+if (db !== undefined && workerData.autocheckpoint !== undefined) setAutocheckpoint(workerData.autocheckpoint);
+const execute = ({ id, sql, params, cached, values, raw, safeIntegers }) => {
+  let operation = "prepare";
+  try {
+    const statement = prepare(sql, cached);
+    operation = "execute";
+    statement.setReadBigInts(safeIntegers);
+    if (statement.columns().length > 0) {
+      statement.setReturnArrays(values);
+      return { id, rows: statement.all(...params) };
+    }
+    const result = statement.run(...params);
+    return { id, rows: raw ? result : [] };
+  } catch (error) {
+    return { id, error: describe(operation, error) };
+  }
+};
+parentPort.on("message", (request) => {
+  if (request.close) {
+    let error;
+    try {
+      if (db !== undefined) db.close();
+    } catch (cause) {
+      error = describe("close", cause);
+    }
+    db = undefined;
+    parentPort.postMessage({ closed: true, error });
+    return;
+  }
+  if (db === undefined) {
+    parentPort.postMessage({
+      id: request.id,
+      error: { operation: "open", message: "database writer is unavailable" },
+      isTransaction: false,
+    });
+    return;
+  }
+  let reply;
+  if (request.autocheckpoint === undefined) {
+    reply = execute(request);
+  } else {
+    try {
+      setAutocheckpoint(request.autocheckpoint);
+      reply = { id: request.id, rows: [] };
+    } catch (error) {
+      reply = { id: request.id, error: describe("execute", error) };
+    }
+  }
+  reply.isTransaction = db.isTransaction;
+  reply.wal = walState();
+  parentPort.postMessage(reply);
+});
+`;
+
+type WriterStartup =
+  | { readonly type: "ready"; readonly sqliteVersion: string; readonly tracksTransactions: boolean }
+  | { readonly type: "unavailable"; readonly message: string };
+
+type WriterClosed = {
+  readonly closed: true;
+  readonly error?: { readonly message: string; readonly errcode?: unknown };
+};
+
+type WriterReply = ReaderReply & {
+  readonly isTransaction: boolean;
+  readonly wal?: { readonly frames: unknown; readonly journalSizeLimit: unknown };
+};
+
+interface WriterThread {
+  readonly worker: NodeWorkerThreads.Worker;
+  readonly started: Promise<WriterStartup>;
+  readonly pending: Map<
+    number,
+    {
+      readonly sql: string;
+      readonly resume: (result: Effect.Effect<ReadonlyArray<any>, SqlError>) => void;
+    }
+  >;
+  ready: boolean;
+  stopped: string | undefined;
+  inTransaction: boolean;
+}
+
+// ROLLBACK and ROLLBACK TO SAVEPOINT. A stopped worker already discarded the
+// transaction, so there is nothing left for them to undo.
+const isRollback = (sql: string) => /^\s*ROLLBACK\b/i.test(sql);
+// COMMIT, END or a plain ROLLBACK end the outer transaction, whatever their result.
+const endsWriteTransaction = (sql: string) =>
+  /^\s*(?:COMMIT|END)\b/i.test(sql) || /^\s*ROLLBACK(?:\s+TRANSACTION)?\s*;?\s*$/i.test(sql);
+const pragmaAssignment = /^\s*PRAGMA\s+([\w.]+)\s*=/i;
+
+/**
+ * The read-write connection on a worker thread. Each statement waits for its
+ * reply without blocking the event loop, and cannot be interrupted once sent,
+ * as a synchronous statement could not be.
+ *
+ * If the worker stops, its in-flight statements fail and an open transaction
+ * keeps failing until it ends; SQLite discarded its uncommitted changes with the
+ * connection. The next statement outside that transaction starts a new worker.
+ */
+const startWriterWorker = Effect.fnUntraced(function* (options: SqliteClientConfig) {
+  const runFork = Effect.runForkWith(yield* Effect.context<never>());
+  let current: WriterThread | undefined;
+  // The worker an open transaction runs on. Its statements must not move to a replacement.
+  let transactionThread: WriterThread | undefined;
+  let autocheckpoint: number | undefined;
+  // PRAGMA assignments such as busy_timeout last only as long as the connection,
+  // so a replacement worker replays them before it takes statements.
+  const settings = new Map<string, string>();
+  let wal: WriterReply["wal"];
+  let closing = false;
+  let nextRequestId = 0;
+
+  const stoppedFailure = (message: string) =>
+    failed(new Error(message), readerFailureMessages.execute, "execute");
+
+  const start = (): WriterThread => {
+    const worker = new NodeWorkerThreads.Worker(writerWorkerSource, {
+      eval: true,
+      workerData: {
+        filename: options.filename,
+        allowExtension: options.allowExtension ?? false,
+        prepareCacheSize: options.prepareCacheSize ?? 200,
+        settings: [...settings.values()],
+        autocheckpoint,
+      },
+    });
+    let announce: (startup: WriterStartup) => void = () => {};
+    const thread: WriterThread = {
+      worker,
+      started: new Promise<WriterStartup>((resolve) => {
+        announce = resolve;
+      }),
+      pending: new Map(),
+      ready: false,
+      stopped: undefined,
+      inTransaction: false,
+    };
+    const stop = (message: string) => {
+      if (thread.stopped !== undefined) return;
+      thread.stopped = message;
+      thread.inTransaction = false;
+      announce({ type: "unavailable", message });
+      if (current === thread) current = undefined;
+      for (const { sql, resume } of thread.pending.values()) {
+        if (transactionThread === thread && endsWriteTransaction(sql))
+          transactionThread = undefined;
+        resume(isRollback(sql) ? Effect.succeed([]) : Effect.fail(stoppedFailure(message)));
+      }
+      thread.pending.clear();
+      if (thread.ready && !closing) {
+        runFork(
+          Effect.logWarning("SQLite writer worker stopped; the next statement starts a new one", {
+            reason: message,
+          }),
+        );
+      }
+    };
+    worker.on("message", (message: WriterStartup | WriterReply | WriterClosed) => {
+      if ("closed" in message) return;
+      if ("type" in message) {
+        if (message.type === "ready") thread.ready = true;
+        else void worker.terminate();
+        announce(message);
+        if (thread.pending.size === 0) worker.unref();
+        return;
+      }
+      const request = thread.pending.get(message.id);
+      if (request === undefined) return;
+      thread.pending.delete(message.id);
+      if (thread.pending.size === 0) worker.unref();
+      thread.inTransaction = message.isTransaction;
+      transactionThread = message.isTransaction ? thread : undefined;
+      if (message.wal !== undefined) wal = message.wal;
+      if ("rows" in message) {
+        request.resume(Effect.succeed(message.rows));
+        return;
+      }
+      const { operation, message: text, ...codes } = message.error;
+      request.resume(
+        Effect.fail(
+          failed(
+            Object.assign(new Error(text), codes),
+            readerFailureMessages[operation],
+            operation,
+          ),
+        ),
+      );
+    });
+    worker.on("error", (cause) => stop(`Database writer failed: ${cause.message}`));
+    worker.on("exit", (code) => stop(`Database writer exited with code ${code}`));
+    current = thread;
+    return thread;
+  };
+
+  const post = (thread: WriterThread, sql: string, message: object) =>
+    Effect.callback<ReadonlyArray<any>, SqlError>((resume) => {
+      if (thread.stopped !== undefined) {
+        resume(Effect.fail(stoppedFailure(thread.stopped)));
+        return;
+      }
+      const id = nextRequestId++;
+      thread.pending.set(id, { sql, resume });
+      if (thread.pending.size === 1) thread.worker.ref();
+      try {
+        // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node workers do not accept a target origin.
+        thread.worker.postMessage({ id, ...message });
+      } catch (cause) {
+        thread.pending.delete(id);
+        if (thread.pending.size === 0) thread.worker.unref();
+        resume(Effect.fail(failed(cause, readerFailureMessages.execute, "execute")));
+      }
+    });
+
+  const send = (sql: string, message: object) =>
+    Effect.uninterruptible(
+      Effect.suspend(() => {
+        const bound = transactionThread;
+        if (bound?.stopped !== undefined) {
+          if (endsWriteTransaction(sql)) transactionThread = undefined;
+          return isRollback(sql) ? Effect.succeed([]) : Effect.fail(stoppedFailure(bound.stopped));
+        }
+        let thread = bound ?? current;
+        if (thread === undefined) {
+          try {
+            thread = start();
+          } catch (cause) {
+            return Effect.fail(failed(cause, readerFailureMessages.open, "open"));
+          }
+        }
+        const target = thread;
+        if (target.ready) return post(target, sql, message);
+        return Effect.flatMap(
+          Effect.promise(() => target.started),
+          (startup): Effect.Effect<ReadonlyArray<any>, SqlError> =>
+            startup.type === "ready"
+              ? post(target, sql, message)
+              : Effect.fail(failed(new Error(startup.message), readerFailureMessages.open, "open")),
+        );
+      }),
+    );
+
+  const request = (input: ReaderRequest) =>
+    Effect.withFiber<ReadonlyArray<any>, SqlError>((fiber) =>
+      send(input.sql, {
+        ...input,
+        cached: input.cached && !hasLargeBinding(input.params),
+        safeIntegers: Boolean(Context.get(fiber.context, Client.SafeIntegers)),
+      }),
+    ).pipe(
+      Effect.tap(() =>
+        Effect.sync(() => {
+          const setting = input.params.length === 0 ? pragmaAssignment.exec(input.sql) : null;
+          const name = setting?.[1]?.toLowerCase();
+          // Assignments stored in the database file already apply to the next connection.
+          if (name !== undefined && !mutatingPragmasWithValues.has(name)) {
+            settings.set(name, input.sql);
+          }
+        }),
+      ),
+    );
+
+  const close = (thread: WriterThread) =>
+    Effect.callback<WriterClosed["error"]>((resume) => {
+      if (thread.stopped !== undefined) {
+        resume(Effect.succeed(undefined));
+        return;
+      }
+      thread.worker.on("message", (message: WriterStartup | WriterReply | WriterClosed) => {
+        if ("closed" in message) resume(Effect.succeed(message.error));
+      });
+      thread.worker.once("exit", () => resume(Effect.succeed(undefined)));
+      thread.worker.ref();
+      // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node workers do not accept a target origin.
+      thread.worker.postMessage({ close: true });
+    });
+
+  let first: WriterThread;
+  try {
+    first = start();
+  } catch (cause) {
+    yield* Effect.logWarning("SQLite writer worker unavailable; writes run on the main thread", {
+      reason: String(cause),
+    });
+    return undefined;
+  }
+  // Pending statements are ahead of the close in the worker's queue, so they finish first.
+  yield* Effect.addFinalizer(() =>
+    Effect.suspend(() => {
+      closing = true;
+      const thread = current;
+      current = undefined;
+      if (thread === undefined) return Effect.void;
+      return close(thread).pipe(
+        Effect.ensuring(Effect.promise(() => thread.worker.terminate())),
+        Effect.flatMap((error) =>
+          error === undefined
+            ? Effect.void
+            : Effect.die(
+                failed(
+                  Object.assign(new Error(error.message), error),
+                  "Failed to close database",
+                  "close",
+                ),
+              ),
+        ),
+      );
+    }),
+  );
+  const startup = yield* Effect.promise(() => first.started);
+  if (startup.type !== "ready") {
+    yield* Effect.logWarning("SQLite writer worker unavailable; writes run on the main thread", {
+      reason: startup.message,
+    });
+    return undefined;
+  }
+
+  const checkpointWriter: CheckpointWriter = {
+    unsupported: startup.tracksTransactions
+      ? undefined
+      : "Node SQLite lacks transaction-state support",
+    // A statement in flight counts as a transaction: the checkpoint coordinator
+    // treats both as the writer being busy.
+    get isTransaction() {
+      return current !== undefined && (current.inTransaction || current.pending.size > 0);
+    },
+    sqliteVersion: () => startup.sqliteVersion,
+    walFrames: () => wal?.frames,
+    journalSizeLimit: () => wal?.journalSizeLimit,
+    setAutocheckpoint: (frames) =>
+      Effect.suspend(() => {
+        autocheckpoint = frames;
+        return Effect.asVoid(send("PRAGMA wal_autocheckpoint", { autocheckpoint: frames }));
+      }),
+  };
+  return {
+    filename: options.filename,
+    checkpointWorker: options.checkpointWorker,
+    request,
+    checkpointWriter,
+  };
+});
+
+const makeWorkerConnection = Effect.fnUntraced(function* (
+  writer: NonNullable<Effect.Success<ReturnType<typeof startWriterWorker>>>,
+) {
+  // Started after the writer, so it stops before the writer closes.
+  const checkpoint = writer.checkpointWorker
+    ? yield* startCheckpointWorker(writer.filename, writer.checkpointWriter)
+    : undefined;
+  // Without SQL classification every statement passes the admission gate, which
+  // already lets statements inside a transaction through.
+  const run = (input: ReaderRequest) =>
+    checkpoint === undefined
+      ? writer.request(input)
+      : checkpoint.runWithAdmission(
+          Effect.ensuring(writer.request(input), Effect.sync(checkpoint.check)),
+        );
+  return identity<Connection>({
+    execute(sql, params, rowTransform) {
+      const effect = run({ sql, params, cached: true, values: false, raw: false });
+      return rowTransform ? Effect.map(effect, rowTransform) : effect;
+    },
+    executeRaw(sql, params) {
+      return run({ sql, params, cached: true, values: false, raw: true });
+    },
+    executeValues(sql, params) {
+      return run({ sql, params, cached: true, values: true, raw: false });
+    },
+    executeValuesUnprepared(sql, params) {
+      return run({ sql, params: params ?? [], cached: false, values: true, raw: false });
+    },
+    executeUnprepared(sql, params, rowTransform) {
+      const effect = run({ sql, params: params ?? [], cached: false, values: false, raw: false });
+      return rowTransform ? Effect.map(effect, rowTransform) : effect;
+    },
+    executeStream(_sql, _params) {
+      return Stream.die(new UnsupportedNodeSqliteOperationError());
+    },
+  });
 });
 
 const make = Effect.fn("makeWithDatabase")(function* (
@@ -908,7 +1403,7 @@ const make = Effect.fn("makeWithDatabase")(function* (
     // Started after the close finalizer, so the worker stops before the writer closes.
     const checkpoint =
       options.checkpointWorker && isFileDatabase
-        ? yield* startCheckpointWorker(options.filename, db)
+        ? yield* startCheckpointWorker(options.filename, databaseCheckpointWriter(db))
         : undefined;
 
     const statementReaderCache = new WeakMap<NodeSqlite.StatementSync, boolean>();
@@ -920,13 +1415,6 @@ const make = Effect.fn("makeWithDatabase")(function* (
       NodeSqlite.StatementSync,
       CheckpointClassification
     >();
-    const mutatingPragmasWithValues = new Set([
-      "application_id",
-      "auto_vacuum",
-      "journal_mode",
-      "schema_version",
-      "user_version",
-    ]);
     const mutatesPragma = (name: string | null, value: string | null) => {
       const pragma = name?.toLowerCase();
       if (pragma === undefined) return false;
@@ -1061,7 +1549,7 @@ const make = Effect.fn("makeWithDatabase")(function* (
           return result;
         };
         return checkpoint !== undefined && classification?.backpressure
-          ? checkpoint.runWithAdmission(execute)
+          ? checkpoint.runWithAdmission(Effect.suspend(execute))
           : execute();
       });
 
@@ -1102,7 +1590,12 @@ const make = Effect.fn("makeWithDatabase")(function* (
   });
 
   const semaphore = yield* Semaphore.make(1);
-  const connection = yield* makeConnection;
+  const writerWorker =
+    options.writerWorker && isFileDatabase && options.readonly !== true
+      ? yield* startWriterWorker(options)
+      : undefined;
+  const connection =
+    writerWorker === undefined ? yield* makeConnection : yield* makeWorkerConnection(writerWorker);
   const acquireReader =
     options.readerWorker && isFileDatabase ? yield* makeReader(options) : undefined;
   const readerSemaphore = yield* Semaphore.make(1);
