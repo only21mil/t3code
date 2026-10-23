@@ -2182,25 +2182,47 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
         compactThread: (args) => start(args, true).pipe(commands.withPermits(1)),
         steerTurn: Effect.fn("MuseAdapter.steerTurn")(
           function* (args) {
-            const turn = active;
-            if (
-              !turn ||
-              turn.providerTurn.id !== args.providerTurnId ||
-              !validateThread(args.providerThread) ||
-              turn.compact
-            )
-              return yield* protocolError("This Muse turn cannot be steered");
-            const parts = yield* prompt(args.message);
-            const result = yield* request("turn/steer", {
-              expectedTurnId: turn.nativeId,
-              input: parts,
+            // Muse acknowledges a steer only at its next tool boundary, so a long
+            // tool call holds the ack. Send in command order, then wait outside the
+            // lock with no timeout: Stop stays available, and a host that dies
+            // rejects the pending ack itself.
+            const { turn, ack } = yield* Effect.gen(function* () {
+              const turn = active;
+              if (
+                !turn ||
+                turn.providerTurn.id !== args.providerTurnId ||
+                !validateThread(args.providerThread) ||
+                turn.compact
+              )
+                return yield* protocolError("This Muse turn cannot be steered");
+              const parts = yield* prompt(args.message);
+              const ack = host.connection.command(
+                "turn/steer",
+                {
+                  ...(nativeSessionId ? { sessionId: nativeSessionId } : {}),
+                  expectedTurnId: turn.nativeId,
+                  input: parts,
+                },
+                { maxAttempts: 1 },
+              );
+              ack.catch(() => {});
+              return { turn, ack };
+            }).pipe(commands.withPermits(1));
+            const result = yield* Effect.tryPromise({
+              try: () => ack,
+              catch: (cause) =>
+                protocolError(
+                  cause instanceof Error && cause.message
+                    ? `Muse turn/steer failed: ${cause.message}`
+                    : "Muse turn/steer failed",
+                  cause,
+                ),
             }).pipe(Effect.flatMap((value) => decode(MuseTurnStartResult, value)));
             if (result.turnId !== turn.nativeId)
               return yield* protocolError("Muse steering targeted a different turn");
           },
           (effect, args) =>
             effect.pipe(
-              commands.withPermits(1),
               Effect.mapError(
                 (cause) =>
                   new ProviderAdapter.ProviderAdapterSteerRunError({

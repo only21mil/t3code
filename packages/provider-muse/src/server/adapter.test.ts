@@ -30,6 +30,7 @@ import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
@@ -1257,6 +1258,65 @@ describe("MuseAdapterV2", () => {
       yield* fake.emit("turn/completed", { turnId: turn.nativeId, terminal: "cancelled" });
       yield* Fiber.join(interrupt);
       assert.strictEqual((yield* harness.takeEvent("turn.terminal")).status, "interrupted");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  // Muse acknowledges a steer at the next tool boundary, so a long tool call
+  // delays the ack (33 s on 2026-10-23, when a 30 s timeout here failed the run).
+  it.effect("keeps the turn and host alive while Muse holds a steer until its tool finishes", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakeMuse();
+      const harness = yield* makeHarness(fake);
+      const turn = yield* startConversation(harness, fake);
+      const input = yield* turnInput(harness.providerThread);
+      const ack = pendingPromise<Record<string, unknown>>();
+      fake.queueResponse("turn/steer", ack.promise);
+      const steer = yield* harness.runtime.steerTurn!({
+        threadId: THREAD_ID,
+        runId: input.runId,
+        providerThread: harness.providerThread,
+        providerTurnId: turn.providerTurn.id,
+        message: { ...input.message, text: "Delegated task finished" },
+      }).pipe(Effect.forkScoped);
+      yield* fake.takeCall("turn/steer");
+      yield* TestClock.adjust("2 minutes");
+      assert.strictEqual(fake.closeCount(), 0);
+
+      ack.resolve({ turnId: turn.nativeId });
+      yield* Fiber.join(steer);
+      yield* fake.emit("turn/completed", { turnId: turn.nativeId, terminal: "completed" });
+      assert.strictEqual((yield* harness.takeEvent("turn.terminal")).status, "completed");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("lets Stop reach Muse while a steer waits for its acknowledgement", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakeMuse();
+      const harness = yield* makeHarness(fake);
+      const turn = yield* startConversation(harness, fake);
+      const input = yield* turnInput(harness.providerThread);
+      const ack = pendingPromise<Record<string, unknown>>();
+      fake.queueResponse("turn/steer", ack.promise);
+      yield* harness.runtime.steerTurn!({
+        threadId: THREAD_ID,
+        runId: input.runId,
+        providerThread: harness.providerThread,
+        providerTurnId: turn.providerTurn.id,
+        message: { ...input.message, text: "Delegated task finished" },
+      }).pipe(Effect.ignore, Effect.forkScoped);
+      yield* fake.takeCall("turn/steer");
+
+      const interrupt = yield* harness.runtime
+        .interruptTurn({
+          providerThread: harness.providerThread,
+          providerTurnId: turn.providerTurn.id,
+        })
+        .pipe(Effect.forkScoped);
+      assert.strictEqual((yield* fake.takeCall("turn/interrupt")).params.turnId, turn.nativeId);
+      yield* fake.emit("turn/completed", { turnId: turn.nativeId, terminal: "cancelled" });
+      yield* Fiber.join(interrupt);
+      assert.strictEqual((yield* harness.takeEvent("turn.terminal")).status, "interrupted");
+      ack.reject(new Error("turn ended"));
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
