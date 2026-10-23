@@ -1334,8 +1334,7 @@ const makeWorkerConnection = Effect.fnUntraced(function* (
   const checkpoint = writer.checkpointWorker
     ? yield* startCheckpointWorker(writer.filename, writer.checkpointWriter)
     : undefined;
-  // Without SQL classification every statement passes the admission gate, which
-  // already lets statements inside a transaction through.
+  // Without SQL classification the gate holds reads too, except while the writer is busy.
   const run = (input: ReaderRequest) =>
     checkpoint === undefined
       ? writer.request(input)
