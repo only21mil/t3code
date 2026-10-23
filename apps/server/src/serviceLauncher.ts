@@ -370,6 +370,30 @@ async function discardDatabaseBackup(baseDir: string, updateId: string): Promise
   await syncDirectory(NodePath.dirname(backupDir));
 }
 
+/**
+ * A committed update's backup is deleted after the reply, and a newer update can replace the
+ * state that names it meanwhile, so a launcher killed mid-delete leaves a backup no state
+ * points at. Only a pending update can still restore from its backup.
+ */
+async function discardBackupsExcept(
+  baseDir: string,
+  keepUpdateId: string | undefined,
+): Promise<void> {
+  const backupRoot = NodePath.join(baseDir, "runtime", "db-backup");
+  const entries = await NodeFSP.readdir(backupRoot).catch((cause: unknown) => {
+    if ((cause as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw cause;
+  });
+  const unused = entries.filter((entry) => entry !== keepUpdateId);
+  if (unused.length === 0) return;
+  for (const entry of unused) {
+    await NodeFSP.rm(NodePath.join(backupRoot, entry), { recursive: true, force: true }).catch(
+      () => undefined,
+    );
+  }
+  await syncDirectory(backupRoot);
+}
+
 export async function readServiceState(filePath: string): Promise<ServiceState> {
   const contents = await NodeFSP.readFile(filePath, "utf8");
   const state = parseServiceState(contents);
@@ -477,7 +501,8 @@ export class Launcher {
   /**
    * Deleting a committed update's backup can outlast the trial server's wait for `committed`
    * (about a minute for a large reflinked database on btrfs), so it runs after the reply. Each
-   * update has its own backup directory, so later updates never touch it; only exit waits.
+   * update has its own backup directory, so later updates never touch it; only exit waits. A
+   * launcher killed mid-delete leaves the directory for the next start's recovery.
    */
   #committedBackupDiscard: Promise<void> = Promise.resolve();
   readonly #backupSpaceProbe: Partial<BackupSpaceProbe> | undefined;
@@ -579,10 +604,11 @@ export class Launcher {
       await NodeFSP.rm(restartPending, { force: true }).catch(() => undefined);
     }
     const update = this.#state.update;
+    await discardBackupsExcept(
+      this.#baseDir,
+      update?.status === "pending" ? update.id : undefined,
+    ).catch(() => undefined);
     if (update?.status !== "pending") {
-      if (update !== undefined) {
-        await discardDatabaseBackup(this.#baseDir, update.id).catch(() => undefined);
-      }
       await this.#startChild(this.#state.activeVersion, "active", update);
       return;
     }
