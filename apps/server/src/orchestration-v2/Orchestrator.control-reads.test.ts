@@ -15,24 +15,29 @@ import {
   RunAttemptId,
   RunId,
   RuntimeRequestId,
+  type ServerSettings as ServerSettingsValue,
   ThreadId,
   TurnItemId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as PubSub from "effect/PubSub";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as DelegatedTaskQuestionReactor from "./DelegatedTaskQuestionReactor.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
+import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 
@@ -45,6 +50,7 @@ const adapter = {
   planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" as const }),
   openSession: () => Effect.die("No provider process needed for metadata controls"),
 } as ProviderAdapter.ProviderAdapterV2["Service"];
+const backupInstanceId = ProviderInstanceId.make("codex-backup");
 const layerDatabase = SqlitePersistence.layerMemory;
 const layerTest = Layer.mergeAll(
   layerDatabase,
@@ -52,8 +58,34 @@ const layerTest = Layer.mergeAll(
   EffectOutbox.layer.pipe(Layer.provide(layerDatabase)),
   ProviderReplayHarness.layerWithRegistry(
     { name: "control-reads" },
-    ProviderAdapterRegistry.layerFromAdapters([adapter]),
+    ProviderAdapterRegistry.layerFromAdapters([
+      adapter,
+      { ...adapter, instanceId: backupInstanceId },
+    ]),
     { databaseLayer: layerDatabase, runEffectWorker: false },
+  ),
+);
+const layerSettingsWithChanges = Layer.effect(
+  ServerSettings.ServerSettingsService,
+  Effect.gen(function* () {
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const changes = yield* PubSub.unbounded<ServerSettingsValue>();
+    return ServerSettings.ServerSettingsService.of({
+      ...settings,
+      updateSettings: (patch) =>
+        settings.updateSettings(patch).pipe(Effect.tap((next) => PubSub.publish(changes, next))),
+      subscribeChanges: PubSub.subscribe(changes).pipe(Effect.map(Stream.fromSubscription)),
+    });
+  }),
+).pipe(Layer.provide(ServerSettings.layerTest()));
+const layerQuestionTest = DelegatedTaskQuestionReactor.layer.pipe(
+  Layer.provideMerge(ThreadManagementService.layer),
+  Layer.provideMerge(
+    Layer.mergeAll(
+      layerTest,
+      layerSettingsWithChanges,
+      CommandReceiptStore.layer.pipe(Layer.provide(layerDatabase)),
+    ),
   ),
 );
 
@@ -880,12 +912,23 @@ it.effect("wakes the parent once when its delegated task asks a question", () =>
     const orchestrator = yield* Orchestrator.OrchestratorV2;
     const projections = yield* ProjectionStore.ProjectionStoreV2;
     const reactor = yield* DelegatedTaskQuestionReactor.DelegatedTaskQuestionReactor;
+    const settings = yield* ServerSettings.ServerSettingsService;
     const parentThreadId = ThreadId.make("thread:question-parent");
+    const projectId = ProjectId.make("project:question");
+    const setInstanceEnabled = (enabled: boolean) =>
+      settings.updateSettings({
+        projectSettingsOverrides: {
+          [projectId]: {
+            providerInstances: { [instanceId]: { enabled }, [backupInstanceId]: { enabled: true } },
+          },
+        },
+      });
+    yield* setInstanceEnabled(true);
     yield* orchestrator.dispatch({
       type: "thread.create",
       commandId: CommandId.make("create-question-parent"),
       threadId: parentThreadId,
-      projectId: ProjectId.make("project:question"),
+      projectId,
       title: "Parent",
       modelSelection,
       runtimeMode: "full-access",
@@ -960,6 +1003,24 @@ it.effect("wakes the parent once when its delegated task asks a question", () =>
     yield* eventSink.write({
       events: [question, asyncQuestion, answered, approval],
     });
+    const startReactorUntilWake = (beforeWake: Effect.Effect<unknown, unknown>) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const afterSequence = yield* eventSink.latestSequence();
+          yield* reactor.start();
+          yield* beforeWake;
+          yield* eventSink
+            .stream({ afterSequence, threadId: parentThreadId, eventType: "message.updated" })
+            .pipe(
+              Stream.filter(
+                (stored) =>
+                  stored.event.type === "message.updated" &&
+                  stored.event.payload.notification !== undefined,
+              ),
+              Stream.runHead,
+            );
+        }),
+      );
 
     yield* reactor.handle(question);
     assert.isFalse(
@@ -967,7 +1028,16 @@ it.effect("wakes the parent once when its delegated task asks a question", () =>
         (message) => message.notification !== undefined,
       ),
     );
+    yield* setInstanceEnabled(false);
     yield* reactor.handle(asyncQuestion);
+    assert.isFalse(
+      (yield* projections.getThreadProjection(parentThreadId)).messages.some(
+        (message) => message.notification !== undefined,
+      ),
+    );
+    // Enabled while the reactor is stopped, so only its startup pass can wake.
+    yield* setInstanceEnabled(true);
+    yield* startReactorUntilWake(Effect.void);
     assert.equal(
       (yield* projections.getThreadProjection(parentThreadId)).messages.filter(
         (message) => message.notification !== undefined,
@@ -1095,7 +1165,15 @@ it.effect("wakes the parent once when its delegated task asks a question", () =>
       "live",
     );
     yield* eventSink.write({ events: [terminalQuestion] });
+    yield* setInstanceEnabled(false);
     yield* reactor.handle(terminalQuestion);
+    assert.equal(
+      (yield* projections.getThreadProjection(parentThreadId)).messages.filter(
+        (message) => message.notification !== undefined,
+      ).length,
+      2,
+    );
+    yield* startReactorUntilWake(setInstanceEnabled(true));
     assert.equal(
       (yield* projections.getThreadProjection(parentThreadId)).messages.filter(
         (message) => message.notification !== undefined,
@@ -1205,7 +1283,41 @@ it.effect("wakes the parent once when its delegated task asks a question", () =>
       taskIds: [followup.delegatedTaskId],
       childThreadId: task.childThreadId!,
     });
-  }).pipe(Effect.provide(DelegatedTaskQuestionReactor.layer.pipe(Layer.provideMerge(layerTest)))),
+    const switchQuestion = requestEvent(
+      "event:switch-question",
+      "request:switch-question",
+      "message",
+      "user_input",
+      followup,
+    );
+    const switchQuestionWakes = projections
+      .getThreadRecords(parentThreadId, ["messages"])
+      .pipe(
+        Effect.map(
+          ({ messages }) =>
+            messages.filter((message) =>
+              message.text.includes(`requestId ${switchQuestion.payload.id}.`),
+            ).length,
+        ),
+      );
+    yield* eventSink.write({ events: [switchQuestion] });
+    yield* setInstanceEnabled(false);
+    yield* reactor.handle(switchQuestion);
+    assert.equal(yield* switchQuestionWakes, 0);
+    const switchCommandId = CommandId.make("switch-question-parent");
+    yield* orchestrator.dispatch({
+      type: "thread.model-selection.set",
+      commandId: switchCommandId,
+      threadId: parentThreadId,
+      modelSelection: { ...modelSelection, instanceId: backupInstanceId },
+    });
+    for (const { event } of yield* eventSink
+      .readByCommandId({ commandId: switchCommandId })
+      .pipe(Stream.runCollect)) {
+      yield* reactor.handle(event);
+    }
+    assert.equal(yield* switchQuestionWakes, 1);
+  }).pipe(Effect.provide(layerQuestionTest)),
 );
 
 it.effect.each([false, true])("rejects thread.create for an existing id (deleted: %s)", (deleted) =>
