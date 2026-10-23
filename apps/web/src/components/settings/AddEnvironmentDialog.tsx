@@ -259,6 +259,14 @@ export function AddEnvironmentDialog({
     setIsAddingSavedBackend(false);
   };
 
+  const handleSavedBackendRemoteFieldKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+    if (event.key === "Enter" && savedBackendHost.trim().length > 0) {
+      event.preventDefault();
+      void handleAddSavedBackend();
+    }
+  };
+
   const handleSavedBackendSshFieldKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.nativeEvent.isComposing || event.keyCode === 229) return;
     if (event.key === "Enter" && savedBackendSshHost.trim().length > 0) {
@@ -384,6 +392,7 @@ export function AddEnvironmentDialog({
           <Input
             value={savedBackendHost}
             onChange={(event) => handleSavedBackendHostChange(event.target.value)}
+            onKeyDown={handleSavedBackendRemoteFieldKeyDown}
             placeholder="backend.example.com"
             disabled={isAddingSavedBackend}
             spellCheck={false}
@@ -394,6 +403,7 @@ export function AddEnvironmentDialog({
           <Input
             value={savedBackendPairingCode}
             onChange={(event) => setSavedBackendPairingCode(event.target.value)}
+            onKeyDown={handleSavedBackendRemoteFieldKeyDown}
             placeholder="PAIRCODE"
             disabled={isAddingSavedBackend}
             spellCheck={false}
