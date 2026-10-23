@@ -422,6 +422,22 @@ export function routesAfterRemoving(
   });
 }
 
+/**
+ * The route order a settings list shows while a drag reorder is saving. Once a
+ * route is added or removed, the pending order no longer lists exactly the
+ * saved routes, and showing it would hide the new route.
+ */
+export function displayedRouteOrder(
+  pending: ReadonlyArray<string> | null,
+  savedIds: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  return pending !== null &&
+    pending.length === savedIds.length &&
+    savedIds.every((id) => pending.includes(id))
+    ? pending
+    : savedIds;
+}
+
 export function removedWithRelay(entry: ConnectionCatalogEntry): boolean {
   return routesAfterRemoving(connectionRoutes(entry), RELAY_ROUTE_ID).length === 0;
 }

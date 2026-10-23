@@ -14,6 +14,7 @@ import {
   connectionRouteKind,
   connectionRouteLabel,
   credentialConnectionId,
+  displayedRouteOrder,
   insertRoute,
   entryWithRoutes,
   mergeLearnedRoutes,
@@ -86,6 +87,15 @@ describe("connection routes", () => {
   it("keeps a user's order when a saved route is replaced", () => {
     const repaired = direct("lan", "http://192.168.1.11:3773/");
     expect(upsertRoute([RELAY, LAN], repaired)).toEqual([RELAY, repaired]);
+  });
+
+  it("shows a pending reorder only while it lists exactly the saved routes", () => {
+    expect(displayedRouteOrder(["tailnet", "lan"], ["lan", "tailnet"])).toEqual(["tailnet", "lan"]);
+    // Reordered to [tailnet, lan], removed lan, then added public.
+    expect(displayedRouteOrder(["tailnet", "lan"], ["tailnet", "public"])).toEqual([
+      "tailnet",
+      "public",
+    ]);
   });
 });
 

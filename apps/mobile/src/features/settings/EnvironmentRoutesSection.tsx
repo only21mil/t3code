@@ -9,6 +9,7 @@ import {
   connectionRouteKind,
   connectionRouteLabel,
   connectionRoutes,
+  displayedRouteOrder,
   isLearned,
 } from "@t3tools/client-runtime/connection";
 import { type EnvironmentId, sessionGrantsScope } from "@t3tools/contracts";
@@ -64,12 +65,7 @@ export function EnvironmentRoutesSection({
   const saved = entry === undefined ? [] : connectionRoutes(entry);
   const savedIds = saved.map((route) => connectionRouteId(route.target));
   const [pending, setPending] = useState<ReadonlyArray<string> | null>(null);
-  const order =
-    pending !== null &&
-    pending.length === savedIds.length &&
-    pending.some((id, index) => id !== savedIds[index])
-      ? pending
-      : savedIds;
+  const order = displayedRouteOrder(pending, savedIds);
   const [drag, setDrag] = useState<{ readonly id: string; readonly translation: number } | null>(
     null,
   );
