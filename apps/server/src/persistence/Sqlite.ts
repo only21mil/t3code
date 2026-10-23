@@ -64,6 +64,9 @@ export const layerFromPath = Effect.fn("makeSqlitePersistenceLive")(function* (d
       // Checkpoints sync the database, with F_FULLFSYNC on macOS. Run them off
       // the event loop so a slow flush cannot stall clients.
       checkpointWorker: true,
+      // Writes, their lock waits, and their file I/O block on a slow disk. On
+      // the main thread that froze every socket; on a worker it delays writes.
+      writerWorker: true,
       spanAttributes: {
         "db.name": path.basename(dbPath),
         "service.name": "t3code-server",
