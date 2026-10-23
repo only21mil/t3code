@@ -1395,6 +1395,32 @@ describe("MuseAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
+  // Muse can hold the ack for an accepted steer until a running tool call ends
+  // (33 s on 2026-10-23, when a 30 s timeout here closed the host and failed the run).
+  it.effect("reports a steer delivered and keeps the host while Muse holds its ack", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakeMuse();
+      const harness = yield* makeHarness(fake);
+      const turn = yield* startConversation(harness, fake);
+      const input = yield* turnInput(harness.providerThread);
+      fake.queueResponse("turn/steer", pendingPromise<Record<string, unknown>>().promise);
+      const steer = yield* harness.runtime.steerTurn!({
+        threadId: THREAD_ID,
+        runId: input.runId,
+        providerThread: harness.providerThread,
+        providerTurnId: turn.providerTurn.id,
+        message: { ...input.message, text: "Delegated task finished" },
+      }).pipe(Effect.forkScoped);
+      yield* fake.takeCall("turn/steer");
+      yield* TestClock.adjust("31 seconds");
+      yield* Fiber.join(steer);
+      assert.strictEqual(fake.closeCount(), 0);
+
+      yield* fake.emit("turn/completed", { turnId: turn.nativeId, terminal: "completed" });
+      assert.strictEqual((yield* harness.takeEvent("turn.terminal")).status, "completed");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
   it.effect("resumes the requested native session and reads the same session snapshot", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakeMuse();

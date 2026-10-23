@@ -354,7 +354,7 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
         Schema.decodeUnknownEffect(schema)(data).pipe(
           Effect.mapError((cause) => protocolError("Invalid Muse protocol response", cause)),
         );
-      const request = (
+      const send = (
         method: string,
         params: Record<string, unknown>,
         command = true,
@@ -382,7 +382,14 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
                 : `Muse ${method} failed`,
               cause,
             ),
-        }).pipe(
+        });
+      const request = (
+        method: string,
+        params: Record<string, unknown>,
+        command = true,
+        commandId?: string,
+      ) =>
+        send(method, params, command, commandId).pipe(
           Effect.timeout(options.requestTimeoutMs ?? 30_000),
           Effect.catchTags({
             TimeoutError: (cause) =>
@@ -2214,10 +2221,16 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
             )
               return yield* protocolError("This Muse turn cannot be steered");
             const parts = yield* prompt(args.message);
-            const result = yield* request("turn/steer", {
+            // Muse refuses a steer it will not take within milliseconds, but can hold
+            // the ack for an accepted one until a running tool call ends. An accepted
+            // steer survives the turn (Muse runs it as a new turn after a Stop), so an
+            // ack still pending after the wait means delivered, not a dead host.
+            const ack = yield* send("turn/steer", {
               expectedTurnId: turn.nativeId,
               input: parts,
-            }).pipe(Effect.flatMap((value) => decode(MuseTurnStartResult, value)));
+            }).pipe(Effect.timeoutOption(options.requestTimeoutMs ?? 30_000));
+            if (Option.isNone(ack)) return;
+            const result = yield* decode(MuseTurnStartResult, ack.value);
             if (result.turnId !== turn.nativeId)
               return yield* protocolError("Muse steering targeted a different turn");
           },
