@@ -474,6 +474,12 @@ export class Launcher {
   #stopping = false;
   #done = false;
   readonly #completion = Promise.withResolvers<void>();
+  /**
+   * Deleting a committed update's backup can outlast the trial server's wait for `committed`
+   * (about a minute for a large reflinked database on btrfs), so it runs after the reply. Each
+   * update has its own backup directory, so later updates never touch it; only exit waits.
+   */
+  #committedBackupDiscard: Promise<void> = Promise.resolve();
   readonly #backupSpaceProbe: Partial<BackupSpaceProbe> | undefined;
   readonly #environment: Readonly<NodeJS.ProcessEnv>;
 
@@ -503,6 +509,7 @@ export class Launcher {
     } finally {
       process.off("SIGTERM", onSigterm);
       process.off("SIGINT", onSigint);
+      await this.#committedBackupDiscard;
     }
   }
 
@@ -765,8 +772,11 @@ export class Launcher {
     await writeServiceState(this.#statePath, next);
     this.#state = next;
     child.role = "active";
-    await discardDatabaseBackup(this.#baseDir, committed.id).catch(() => undefined);
+    // A failed send exits the launcher, and the next start discards this backup.
     await sendMessage(child.process, { type: "committed", updateId: committed.id });
+    this.#committedBackupDiscard = this.#committedBackupDiscard.then(() =>
+      discardDatabaseBackup(this.#baseDir, committed.id).catch(() => undefined),
+    );
   }
 
   async #handlePreparedTimeout(child: ManagedChild): Promise<void> {
