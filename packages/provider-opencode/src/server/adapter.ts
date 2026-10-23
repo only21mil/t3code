@@ -386,6 +386,8 @@ interface OpenCodeThreadState {
   parentSubagent: OpenCodeSubagentContext | null;
   nextChildTurnOrdinal: number;
   nextAdmissionGeneration: number;
+  /** The native session holds rules written for a selected agent. */
+  agentPermission: boolean;
 }
 
 interface OpenCodeRequestOwner {
@@ -701,6 +703,29 @@ function permissionRuleEquals(
     left.permission === right.permission &&
     left.pattern === right.pattern &&
     left.action === right.action
+  );
+}
+
+// T3's own rules for a top-level session are full access's lone allow-all or
+// start with a deny, so more rules after an allow-all were written for an agent.
+function extendsFullAccessPermission(permission: PermissionRuleset | undefined): boolean {
+  const [first, ...rest] = permission ?? [];
+  return (
+    first !== undefined &&
+    rest.length > 0 &&
+    first.permission === "*" &&
+    first.pattern === "*" &&
+    first.action === "allow"
+  );
+}
+
+function samePermissionRules(left: PermissionRuleset, right: PermissionRuleset): boolean {
+  return (
+    left.length === right.length &&
+    left.every((rule, index) => {
+      const other = right[index];
+      return other !== undefined && permissionRuleEquals(rule, other);
+    })
   );
 }
 
@@ -1415,6 +1440,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               parentSubagent: context,
               nextChildTurnOrdinal: 1,
               nextAdmissionGeneration: 1,
+              agentPermission: false,
             });
             yield* emitProviderEvent({
               type: "app_thread.created",
@@ -2812,6 +2838,9 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             parentSubagent: subagentsByChildSessionId.get(nativeSession.id) ?? null,
             nextChildTurnOrdinal: 1,
             nextAdmissionGeneration: 1,
+            agentPermission:
+              nativeSession.parentID === undefined &&
+              extendsFullAccessPermission(nativeSession.permission),
           };
           threads.set(nativeSession.id, state);
           return state;
@@ -2904,6 +2933,58 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             runtimeRequests: state === undefined ? [] : [...state.runtimeRequests.values()],
             providerPayload: nativeMessages,
           };
+        });
+
+        // OpenCode checks the agent's rules before the session's and takes the
+        // last match, so full access's allow-all would override every deny the
+        // selected agent declares. Full access only means T3 never asks: replay
+        // the agent's rules after it with their asks allowed. A denied tool then
+        // never reaches the model, so an earlier "always" grant cannot run it.
+        const applyAgentPermission = Effect.fn("OpencodeAdapter.applyAgentPermission")(function* (
+          state: OpenCodeThreadState,
+          runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy,
+          agent: string | undefined,
+        ) {
+          const sessionId = state.nativeSessionId;
+          const rules = openCodePermissionRules(runtimePolicy);
+          if (rules.some((rule) => rule.action !== "allow")) return;
+          const writePermission = (permission: PermissionRuleset) =>
+            sdkCall("session.update", { sessionID: sessionId, permission }, () =>
+              client.session.update({ sessionID: sessionId, permission }),
+            );
+          if (agent === undefined) {
+            if (state.agentPermission) {
+              yield* writePermission(rules);
+              state.agentPermission = false;
+            }
+            return;
+          }
+          const nativeSession = unwrapData(
+            "session.get",
+            yield* sdkCall("session.get", { sessionID: sessionId }, () =>
+              client.session.get({ sessionID: sessionId }),
+            ),
+          );
+          // Task sessions keep the restrictions their agent added when the task started.
+          if (nativeSession.parentID !== undefined) return;
+          const agents = unwrapData(
+            "app.agents",
+            yield* sdkCall("app.agents", {}, (signal) => client.app.agents(undefined, { signal })),
+          );
+          const selected = agents.find((entry) => entry.name === agent);
+          if (selected === undefined) {
+            return yield* protocolError(`OpenCode agent '${agent}' is not available`);
+          }
+          const permission = [
+            ...rules,
+            ...selected.permission.map((rule) =>
+              rule.action === "ask" ? { ...rule, action: "allow" as const } : rule,
+            ),
+          ];
+          if (!samePermissionRules(permission, nativeSession.permission ?? [])) {
+            yield* writePermission(permission);
+          }
+          state.agentPermission = true;
         });
 
         // Native commands wait for generation, unlike promptAsync. A user-message
@@ -3120,6 +3201,10 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                   `OpenCode model '${turnInput.modelSelection.model}' must use provider/model format`,
                 );
               }
+              const agent =
+                getModelSelectionStringOptionValue(turnInput.modelSelection, "agent") ??
+                (turnInput.runtimePolicy.interactionMode === "plan" ? "plan" : undefined);
+              yield* applyAgentPermission(state, turnInput.runtimePolicy, agent);
               const isCompaction =
                 turnInput.message.text.trim() === "/compact" &&
                 turnInput.message.attachments.length === 0;
@@ -3243,9 +3328,6 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               ]
                 .filter(Boolean)
                 .join("\n\n");
-              const agent =
-                getModelSelectionStringOptionValue(turnInput.modelSelection, "agent") ??
-                (turnInput.runtimePolicy.interactionMode === "plan" ? "plan" : undefined);
               const variant = getModelSelectionStringOptionValue(
                 turnInput.modelSelection,
                 "variant",
