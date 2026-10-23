@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
   applyWslEnableSelection,
   selectQrEndpointOption,
+  tailscaleServePreviewUrl,
   togglePairingScopeSelection,
 } from "./ConnectionsSettings.logic";
 
@@ -121,5 +122,18 @@ describe("selectQrEndpointOption", () => {
     expect(selectQrEndpointOption(options, "tailscale-ip:gone", "nope")?.id).toBe(
       "tailscale-ip:http://100.84.12.7:4780",
     );
+  });
+});
+
+describe("tailscaleServePreviewUrl", () => {
+  it.each([
+    { base: "https://box.tail123.ts.net:8443/", port: 443, expected: "https://box.tail123.ts.net" },
+    {
+      base: "https://box.tail123.ts.net/",
+      port: 8443,
+      expected: "https://box.tail123.ts.net:8443",
+    },
+  ])("previews port $port from $base", ({ base, port, expected }) => {
+    expect(tailscaleServePreviewUrl(base, port)).toBe(expected);
   });
 });

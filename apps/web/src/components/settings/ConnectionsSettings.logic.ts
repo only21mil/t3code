@@ -377,6 +377,20 @@ export function isTailscaleHttpsEndpoint(endpoint: AdvertisedEndpoint): boolean 
   return endpoint.id.startsWith("tailscale-magicdns:");
 }
 
+/**
+ * The advertised MagicDNS URL already carries the saved Serve port, so the
+ * setup preview always rewrites it. Setting 443 on an https URL clears it.
+ */
+export function tailscaleServePreviewUrl(httpBaseUrl: string, port: number): string {
+  try {
+    const url = new URL(httpBaseUrl);
+    url.port = String(port);
+    return url.toString().replace(/\/$/u, "");
+  } catch {
+    return httpBaseUrl;
+  }
+}
+
 export function endpointDefaultPreferenceKey(endpoint: AdvertisedEndpoint): string {
   if (endpoint.id.startsWith("desktop-loopback:")) {
     return "desktop-core:loopback:http";

@@ -118,6 +118,7 @@ import {
   selectPairingEndpoint,
   isTailscaleHttpsEndpoint,
   endpointDefaultPreferenceKey,
+  tailscaleServePreviewUrl,
 } from "./ConnectionsSettings.logic";
 import {
   type AccessSectionPresentation,
@@ -345,16 +346,10 @@ export function ConnectionsSettings() {
   const pendingTailscaleServeBaseUrl = (() => {
     if (!pendingTailscaleServeEndpoint) return null;
     if (!isTailscaleServePortValid) return pendingTailscaleServeEndpoint.httpBaseUrl;
-    if (parsedTailscaleServePort === DEFAULT_TAILSCALE_SERVE_PORT) {
-      return pendingTailscaleServeEndpoint.httpBaseUrl;
-    }
-    try {
-      const url = new URL(pendingTailscaleServeEndpoint.httpBaseUrl);
-      url.port = String(parsedTailscaleServePort);
-      return url.toString().replace(/\/$/u, "");
-    } catch {
-      return pendingTailscaleServeEndpoint.httpBaseUrl;
-    }
+    return tailscaleServePreviewUrl(
+      pendingTailscaleServeEndpoint.httpBaseUrl,
+      parsedTailscaleServePort,
+    );
   })();
 
   const handleDesktopServerExposureChange = async (checked: boolean) => {
