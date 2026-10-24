@@ -53,5 +53,10 @@
     "live_path": "/home/victor/.local/lib/sats-stall-watchdog/sats_stall_asks.py",
     "frozen_path": "tests/preimage/live-20261023/sats_stall_asks.py",
     "sha256": "406e3fd97579e823f67d27f4e02f4b81cab11a720f39df8ff5bb7e2af16a0a22"
+  },
+  {
+    "live_path": "/home/victor/.local/lib/sats-stall-watchdog/sats_stall_asks.py (needs-victor fix, installed 2026-10-23 22:55:52 CDT from /home/victor/work/needs-victor-fix-20261023/candidate; its .bak-needs-victor-20261023T225552 is 406e3fd9)",
+    "frozen_path": "tests/preimage/live-20261023-needs-victor/sats_stall_asks.py",
+    "sha256": "cb8a6cc0f676ab0062b31ecbde7a59c2137e3bb9cb197b9fd066dd603925ad94"
   }
 ]

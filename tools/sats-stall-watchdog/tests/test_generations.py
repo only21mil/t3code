@@ -274,6 +274,31 @@ class EventTests(Generations):
         self.assertFalse(any(asks.keeps_done(text) for text in ('Phase 2 running.', 'Phase 1 is DONE; phase 2 is running.',
                                                                 'The objective is not DONE.', 'Nothing is DONE yet.')))
 
+    def test_SOL1_r2_progress_and_qualified_restatements_after_a_done_led_line_send_no_done(self):
+        # Round-2 probes (Sol, DeepSeek): after a DONE-led progress line, each final reply here is progress, a part, or
+        # a negated, reopened, conditional or quoted claim, so the generation ends with no DONE. Only an exact
+        # whole-work restatement as the last sentence keeps a DONE (the Kimi test above).
+        progress = ('Phase 1 is DONE, now starting phase 2.', 'Phase 2 running. Phase 1 is DONE.',
+                    'It is DONE except the last check still fails.', 'Phase 2 is still running while phase 1 is DONE.',
+                    'I cannot say the objective is DONE yet.', 'Review reopened the work. The objective is DONE.',
+                    'The objective was DONE until review reopened it.', 'The objective is DONE if CI passes.',
+                    'If CI passes, the objective is DONE.', 'The objective is DONE once the review votes.',
+                    'Assuming the vote lands, the research stays DONE.', 'The objective is DONE, pending the second vote.',
+                    'Restate it as `The research stays DONE.`', '`The objective is DONE.`',
+                    'Template for the notice:\n```\nThe research stays DONE.\n```', 'The objective is not DONE.')
+        threads = {}
+        for n, text in enumerate(progress):
+            with self.subTest(text=text):
+                self.assertFalse(asks.keeps_done(text))
+            threads['p%d' % n] = thread('p%d' % n, build(('user_message', 'brief', T0), ('assistant_message', 'DONE with phase 1, starting phase 2.', T0 + 1),
+                                                         ('assistant_message', text, T0 + 2)))
+        self.tick(FakeT3(PROJECTS, threads), now=LATER, max_notices=50)
+        self.assertEqual(sorted(self.sent_events()), sorted(('p%d' % n, 'generation-1-START', 'start') for n in range(len(progress))))
+        for text in ('Those are late notices. The objective is DONE and settled.', 'Stale background scans stopped. The research stays DONE.',
+                     '**The objective is DONE.**', 'The work remains DONE.'):
+            with self.subTest(kept=text):
+                self.assertTrue(asks.keeps_done(text))
+
     def test_DSH2_single_read_message_after_a_done_reply_opens_a_generation(self):
         # DeepSeek's single-read probe: one read holds the DONE reply and Victor's follow-up. The follow-up closes
         # generation 1, whose DONE is claimed first for the DONE reply's own run, and opens generation 2 with its own

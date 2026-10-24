@@ -10,7 +10,10 @@ turn. Sats gets START, BLOCKED (NEEDS-VICTOR included), DONE and URGENT. START,
 DONE and URGENT go at most once per generation; BLOCKED goes once per ask, keyed
 on the ask's decision ID when its ask lines carry one, else on its marker lines,
 so a new ask sends while a re-wake repeating or rewording the same ask does not
-(notice-package-20261023 item 6). FAILED and CANCELED keep
+(notice-package-20261023 item 6). An ask whose decision IDs, or else marker
+lines, were all carried by asks already noticed in the generation is a
+restatement and sends nothing (the live needs-victor fix, cb8a6cc0, whose
+'BLOCKED:<digest>' rows this module reads as its own). FAILED and CANCELED keep
 their own event state in the key and reach Sats with the BLOCKED kind. Status,
 replies, milestones, stalls and prose asks send nothing.
 
@@ -23,21 +26,25 @@ event state, ask) is a unique row, claimed in the transaction that commits the
 scan, before any send.
 
 A generation's DONE is its final reply when that reply leads with DONE, or its
-last reply that does, when every reply after it restates the DONE ("The research
-stays DONE."). It is claimed a minute after that reply's turn ends; any other
-later reply supersedes it as progress.
+last reply that does, when every reply after it restates the DONE: its last
+sentence is exactly a whole-work DONE ("The research stays DONE.", DONE_KEPT_RE)
+and no part of it names ongoing or reopened work. It is claimed a minute after
+that reply's turn ends; any other later reply supersedes it as progress.
 Threads known before this round start from a baseline generation 0, so their
 history sends nothing.
 
 An ask is an assistant message in a top-level thread of an allowed project
 that carries a NEEDS-VICTOR line or a decision ID, or, as the final message of
 a thread that is not running, asks Victor a question or for approval. It is
-open until a later user message answers it or the thread is settled or
-archived after it was written. A NEEDS-VICTOR marker, a BLOCKED line, a bold
-**BLOCKED** in a final message or a "decision for you" line is a BLOCKED, each
-ask its own (notice-package-20261023 items 5 and 6); markers count inside fenced
-and inline code too. A final message that leads with FAILED or CANCELED is that
-event. Other asks stay local records. Assistant text is read
+open until a later reply answers it (answers()) or the thread is settled or
+archived after it was written. A delegated-task completion, a server or
+provider wake and a system notice are artifacts, not replies (cb8a6cc0). A
+NEEDS-VICTOR marker, a BLOCKED line, a bold **BLOCKED** in a final message or a
+"decision for you" line is a BLOCKED, each ask its own (notice-package-20261023
+items 5 and 6); markers count inside fenced and inline code too. A line that only
+names the markers, listing them or calling them markers or lines, or quoting the
+decision phrase, asks nothing (LIVE-2). A final message that leads with FAILED or
+CANCELED is that event. Other asks stay local records. Assistant text is read
 in memory; only the notice line and the per-event evidence file carry an
 excerpt, never the watchdog log.
 
@@ -46,9 +53,12 @@ is posted inside the turn, so a marker ask waits while its turn runs, then the
 send's thread_notice check under the hook's occurrence lock decides: delivered
 records the event without a send, queued or in flight waits, anything else
 claims the event for the generation (t3-terminal-notice-20261020). A delivered
-notice covers only the asks it carried: the turn's one ask, or with several
-asks those whose decision ID or marker words its message holds; each other ask
-of the turn still sends its own BLOCKED.
+notice covers only the asks it carried: the turn's one ask; with several asks,
+those whose complete decision ID its message names, or, when it names none, the
+one ask whose line and the message hold each other as an unbroken phrase of
+three or more words besides the marker words, matching no other ask of the
+turn. Each other ask of the turn still sends its own BLOCKED, so a generic
+notice ("BLOCKED: needs Victor") covers none.
 """
 from __future__ import annotations
 from contextlib import contextmanager
@@ -86,9 +96,17 @@ INLINE_BLOCKED_RE = re.compile(r'(\*\*|__)BLOCKED\1')
 TERMINAL_LINE_RE = re.compile(r'^[ \t>*_-]*(?:[A-Za-z0-9:_%./-]{3,200}[ \t]+)?[*_]*(FAILED|CANCEL+ED)\b')
 # A reply whose first line leads with DONE, in the same notice shape, is the generation's own DONE.
 DONE_LINE_RE = re.compile(r'^[ \t>*_-]*(?:[A-Za-z0-9:_%./-]{3,200}[ \t]+)?[*_]*(DONE)\b')
-# A later reply whose last sentence restates that DONE keeps it: "The objective is DONE and settled.", "The
-# research stays DONE." (Kimi, mini 3e9f5d46). Any other later reply is progress and supersedes it.
-DONE_KEPT_RE = re.compile(r'\b(?:is|are|was|were|stays|remains|still)[ \t]+[*_]*DONE\b')
+# A later reply keeps that DONE only when its last sentence, outside code, is a whole-work restatement and nothing
+# more: "The objective is DONE and settled.", "The research stays DONE." (Kimi, mini 3e9f5d46). The sentence is
+# the whole work (objective, research, work, task, job, project, goal, lane, brief, package or everything), then
+# is, stays or remains (still or now allowed), an upper-case DONE and at most "and settled". A phase or part
+# ("Phase 1 is DONE."), a continuation, exception, condition or negation in that sentence, a code span in it, and a
+# reply that names ongoing or reopened work anywhere (ONGOING_RE) are progress and supersede it (SOL-1).
+DONE_KEPT_RE = re.compile(r'^[ \t>*_-]*(?i:(?:the|this|our|my)[ \t]+)?(?i:objective|research|work|task|job|project|goal|lane|brief|package|everything)'
+                          r'[ \t]+(?i:is|stays|remains)(?:[ \t]+(?i:still|now))?[ \t]+[*_]*DONE[*_]*(?:[ \t]+(?i:and)[ \t]+(?i:settled))?'
+                          r'[ \t]*[.!]?[*_]*[ \t]*$')
+ONGOING_RE = re.compile(r'\b(?:running|start(?:s|ing)?|pending|waiting|in[ \t]+progress|next|continu\w*|re-?open\w*|resum\w*|'
+                        r'restart\w*|remaining|not[ \t]+yet|still[ \t]+(?:fail\w*|run\w*|open|pending|wait\w*|work\w*)|until|unless|except|todo)\b', re.I)
 # URGENT is a line that leads with the token and names one of Victor's three cases on that line.
 URGENT_RE = re.compile(r'^[ \t>*_-]*(?:\d+[.)][ \t]*)?[*_]*URGENT\b.*?(?i:\b(?:security|data[ -]at[ -]risk|destructive))', re.M)
 # Event state -> the hook's --kind. URGENT rides its own urgent kind (sats-completion-notify MILESTONE_KINDS and
@@ -106,6 +124,14 @@ DECISION_FOR_RE = re.compile(r'\bdecisions?[*_]{0,2}[ \t]+for[ \t]+' + _WHO +
                              r"[ \t]+(?:an?[ \t]+|your[ \t]+|victor'?s[ \t]+)?decisions?[ \t]+(?:from|by)[ \t]+" + _WHO +
                              r'|\bdecisions?[ \t]+(?:from|by)[ \t]+' + _WHO + r'[*_]{0,2}[ \t]+(?:is[ \t]+|are[ \t]+)?(?:needed|required|pending)\b',
                              re.I)
+# Prose that only names the markers is no ask (LIVE-2, 2026-10-23 23:05 CT: the bullet "NEEDS-VICTOR, BLOCKED, and
+# decision markers anywhere, including fenced and inline code." in a status sent a false BLOCKED). A marker token
+# that a list of marker names joined by and/or follows, or a noun for the marker itself ("NEEDS-VICTOR lines count
+# anywhere"), names it. A quoted or coded decision phrase does too. "NEEDS-VICTOR, BLOCKED: need the key" still asks.
+_QUOTE = '[*_`\'"“”‘’]*'
+_NAME = r'(?:NEEDS-VICTOR|BLOCKED|DECISION-[A-Z0-9_-]*|DECISION|[Dd]ecisions?(?:[ \t]+for[ \t]+(?:you|Victor))?|DONE|FAILED|CANCEL+ED|START|URGENT)\b'
+MENTION_LIST_RE = re.compile(r'(?:' + _QUOTE + r'[ \t]*(?:,|/|&|\band\b|\bor\b)(?:[ \t]*(?:and|or)\b)?[ \t]*' + _QUOTE + _NAME + r')*' + _QUOTE)
+MENTION_NOUN_RE = re.compile(r'[:]?' + _QUOTE + r'[ \t]+(?:markers?|lines?|tokens?|labels?|tags?|prefix(?:es)?|keywords?|forms?|shapes?|prose)\b', re.I)
 FENCE_RE = re.compile(r'^[ \t]*```.*?^[ \t]*```[^\n]*$', re.M | re.S)
 INLINE_CODE_RE = re.compile(r'`[^`\n]*`')
 NEXT_STEPS_RE = re.compile(r'^[ \t>#*_]*next steps\b', re.I | re.M)
@@ -157,33 +183,55 @@ def one_line(text, limit):
     return text if len(text) <= limit else text[:limit - 3] + '...'
 
 
+def names_markers(rest):
+    """True when `rest`, the text right after a marker token, makes the token a name: a list of marker names joined by
+    and/or follows it ("…, BLOCKED, and decision markers"), or a noun for the marker ("… lines count anywhere")."""
+    listed = MENTION_LIST_RE.match(rest)
+    return bool(MENTION_NOUN_RE.match(rest[listed.end():]) or re.search(r'\b(?:and|or)\b|&', listed.group(0)))
+
+
+def marker_ask(line):
+    """True for a NEEDS-VICTOR line that asks, not one that only names the markers (names_markers)."""
+    found = re.search(r'NEEDS-VICTOR', line)
+    return found is not None and not names_markers(line[found.end():])
+
+
 def decision_for(line):
     """True for a line that asks Victor for a decision ("**Decision for you:**"), unless a negation earlier in its
-    sentence cancels it ("That needs no decision from Victor")."""
-    return any(not NEGATION_RE.search(re.split(r'[.!?;]\s', line[:m.start()])[-1]) for m in DECISION_FOR_RE.finditer(line))
+    sentence cancels it ("That needs no decision from Victor") or the phrase is only named: quoted or coded
+    ('"Decision for you:" prose'), or followed by a noun for it or a list of marker names (names_markers)."""
+    def asks(m):
+        before, after = line[:m.start()], line[m.end():]
+        quoted = re.search('[`\'"“‘][*_]*$', before) and re.match('[:*_]{0,3}[`\'"”’]', after)
+        return not quoted and not names_markers(after) and not NEGATION_RE.search(re.split(r'[.!?;]\s', before)[-1])
+    return any(asks(m) for m in DECISION_FOR_RE.finditer(line))
 
 
 def blocked_lines(text):
     """A final message's BLOCKED lines: the notice shape or "Closed as BLOCKED", else lines with a bold BLOCKED
     that are not table rows. A negation before the token, in its line or sentence, disqualifies it."""
     lines = [found.group(0).strip(' \t>*_`-') for found in BLOCKED_LINE_RE.finditer(text)
-             if not NEGATION_RE.search(found.group(0)[:found.start(1) - found.start()])]
+             if not NEGATION_RE.search(found.group(0)[:found.start(1) - found.start()])
+             and not names_markers(text[found.end(1):found.end()])]
     if not lines:
         for line in text.splitlines():
             found = INLINE_BLOCKED_RE.search(line)
-            if found and not line.lstrip().startswith('|') and not NEGATION_RE.search(re.split(r'[.!?;]\s', line[:found.start()])[-1]):
+            if (found and not line.lstrip().startswith('|') and not NEGATION_RE.search(re.split(r'[.!?;]\s', line[:found.start()])[-1])
+                    and not names_markers(line[found.end():])):
                 lines.append(line.strip(' \t>*_`-'))
     return lines
 
 
 def keeps_done(text):
-    """True for a reply whose last sentence restates the generation's DONE, outside code, without a negation."""
-    rows = [row for row in FENCE_RE.sub('', text).splitlines() if row.strip()] if isinstance(text, str) else []
+    """True for a reply that restates the generation's DONE and says nothing else about the work: its last sentence
+    outside fenced code is exactly a whole-work DONE (DONE_KEPT_RE) with no code span, and no part of the reply
+    names ongoing or reopened work (ONGOING_RE)."""
+    body = FENCE_RE.sub('', text) if isinstance(text, str) else ''
+    rows = [row for row in body.splitlines() if row.strip()]
     if not rows:
         return False
     sentence = [part for part in re.split(r'(?<=[.!?;])\s+', rows[-1].strip()) if part.strip()][-1]
-    found = DONE_KEPT_RE.search(sentence)
-    return found is not None and not NEGATION_RE.search(sentence[:found.start()])
+    return '`' not in sentence and DONE_KEPT_RE.match(sentence) is not None and not ONGOING_RE.search(body)
 
 
 def classify(text, final):
@@ -192,11 +240,12 @@ def classify(text, final):
     Markers count in any assistant message, inside fenced and inline code too. Prose counts only in a final
     message, outside code and outside a trailing Next steps offer list. The event is BLOCKED for a NEEDS-VICTOR
     marker, a BLOCKED line or bold BLOCKED of a final message, or a "decision for you" line; FAILED or CANCELED
-    for a final message that leads with one; else None, and a DECISION- ID alone or a prose ask stays local."""
+    for a final message that leads with one; else None, and a DECISION- ID alone or a prose ask stays local. A marker,
+    BLOCKED or decision line that only names the markers (names_markers, LIVE-2) is none of these."""
     if not isinstance(text, str) or not text.strip():
         return None
     body = FENCE_RE.sub('', text)
-    markers = [line.strip(' \t>*_`-') for line in MARKER_RE.findall(text)]
+    markers = [line.strip(' \t>*_`-') for line in MARKER_RE.findall(text) if marker_ask(line)]
     event = 'BLOCKED' if markers else None
     if not markers and final:
         head = next((line for line in body.splitlines() if line.strip()), '')
@@ -375,6 +424,36 @@ class AskState:
                 return legacy
         return None
 
+    def restated(self, ask):
+        """The event of an earlier ask of the same generation when this BLOCKED ask only restates asks already
+        noticed there, else None. Its decision IDs, or without one its marker lines, all appear among the noticed
+        asks, so a re-wake that merges or repeats them sends nothing (the live needs-victor fix, cb8a6cc0: "A restated
+        ask sends nothing"). Noticed is an ask its own event carried: the event's source, its per-ask key, or a
+        round-4 'sent' record. An ask an older one-per-generation event only bound was never shown to Victor and
+        still sends, which the needs-victor fix counted as noticed. Its 'BLOCKED:<digest>' events carry their source
+        like any other."""
+        host, thread_id, generation = ask['host'], ask['thread_id'], ask['generation']
+        own = identities(ask, ids_only=bool(decision_ids(ask)))
+        if not own:
+            return None
+        noticed, boundaries = [], None
+        for _, prior in self.rows('asks', 'ask-'):
+            if (prior.get('host') != host or prior.get('thread_id') != thread_id or prior.get('ask_id') == ask.get('ask_id')
+                    or prior.get('state') not in ('bound', 'sent') or not blocked_ask(prior)):
+                continue
+            number = prior.get('generation')
+            if number is None:  # a record stored before generations: its generation by position
+                boundaries = spans(self, host + ':' + thread_id) if boundaries is None else boundaries
+                number = generation_at(boundaries, prior['position'])
+            value = self.event(prior['event_id']) if prior.get('event_id') else None
+            if number == generation and (prior['state'] == 'sent' or value is not None and (
+                    value.get('source') == prior.get('ask_id') or value.get('ask') == ask_key(prior))):
+                noticed.append((prior.get('position', -1), identities(prior), value))
+        if not own <= set().union(*(seen for _, seen, _ in noticed)):
+            return None
+        return next((value for _, seen, value in sorted(noticed, key=lambda row: row[0]) if value is not None and own & seen),
+                    None) or self.event(event_key(host, thread_id, generation, 'BLOCKED'))
+
     def put_event(self, value):
         self.db.execute('UPDATE events SET data=? WHERE id=?', (json.dumps(value, separators=(',', ':')), value['event_id']))
 
@@ -431,6 +510,12 @@ def decision_ids(ask):
     return sorted({found for line in asking for found in DECISION_ID_RE.findall(line)})
 
 
+def identities(ask, ids_only=False):
+    """What an ask asks: 'decision:<ID>' for each decision ID on its ask lines, and each marker line unless ids_only."""
+    ids = {'decision:' + found for found in decision_ids(ask)}
+    return ids if ids_only else ids | {str(line) for line in ask.get('markers') or []}
+
+
 def ask_key(ask):
     """A BLOCKED event's per-ask key: the ask's decision ID when its ask lines carry one, so a re-wake that rewords
     the same decision is the same notice (SOL-4), else its own marker lines. A new ask is its own notice, while a
@@ -445,26 +530,45 @@ def ask_identity(host, thread_id, message_id):
     return 'ask-' + hashlib.sha256('|'.join((host, thread_id, message_id)).encode()).hexdigest()[:40]
 
 
-def words(text, thread_id):
-    """The lower-case words of a notice or marker line, without the thread id's own words."""
+# Words that only name the notice's kind. A phrase needs three other words to name an ask: "mcp:t1 BLOCKED: needs
+# Victor" names none (NEW-1).
+NOTICE_WORDS = frozenset(('needs', 'need', 'needed', 'victor', 'blocked', 'closed', 'as', 'decision', 'decisions'))
+
+
+def phrase(text, thread_id):
+    """A notice's or ask line's words in order, lower case, without decision IDs, paths or the thread id's words."""
     own = set(re.findall(r'[a-z0-9]+', thread_id.lower()))
-    return {word for word in re.findall(r'[a-z0-9]+', text.lower()) if word not in own}
+    text = ' '.join(token for token in DECISION_ID_RE.sub(' ', text).split() if '/' not in token)
+    return [word for word in re.findall(r'[a-z0-9]+', text.lower()) if word not in own]
 
 
-def notice_carries(message, ask):
-    """True when a thread's own notice message carries this ask: it names one of the ask's decision IDs, or the
-    words of the message and of one of the ask's marker lines contain each other, at least three of them
-    ("mcp:<id> BLOCKED review round cap, decision needed" carries "BLOCKED review round cap, decision needed /x")."""
+def holds(longer, shorter):
+    """True when the word list `shorter`, with three or more words besides NOTICE_WORDS, runs unbroken in `longer`."""
+    size = len(shorter)
+    if sum(word not in NOTICE_WORDS for word in shorter) < 3:
+        return False
+    return any(longer[start:start + size] == shorter for start in range(len(longer) - size + 1))
+
+
+def notice_carries(message, ask, others=()):
+    """True when a thread's own notice message carries this ask and no other ask of its turn (`others`, SOL-2).
+
+    A message that names decision IDs carries exactly the asks with one of those IDs, matched as complete IDs
+    (DECISION-PUSH-20 never carries DECISION-PUSH-2). A message without one carries the ask when the message and one
+    of the ask's lines hold each other as an unbroken phrase ("mcp:<id> rotate the hub key" carries "NEEDS-VICTOR
+    rotate the hub key /y") and no line of another ask of the turn matches it too. A generic message ("BLOCKED:
+    needs Victor") carries none."""
     if not isinstance(message, str) or not message.strip():
         return False
-    if any(found in message for found in decision_ids(ask)):
-        return True
-    notice = words(re.sub(r'^\s*\S*:\S*\s+', '', message), ask['thread_id'])  # without its leading "<thread>" token
-    for line in ask.get('markers') or []:
-        marker = words(str(line), ask['thread_id'])
-        if min(len(notice), len(marker)) >= 3 and (notice <= marker or marker <= notice):
-            return True
-    return False
+    named = set(DECISION_ID_RE.findall(message))
+    if named:
+        return bool(named & set(decision_ids(ask)))
+    notice = phrase(re.sub(r'^\s*\S*:\S*\s+', '', message), ask['thread_id'])  # without its leading "<thread>" token
+
+    def matches(record):
+        lines = [phrase(str(line), ask['thread_id']) for line in record.get('markers') or []]
+        return any(holds(line, notice) or holds(notice, line) for line in lines)
+    return matches(ask) and not any(matches(other) for other in others)
 
 
 def blocked_ask(ask):
@@ -476,13 +580,15 @@ def blocked_ask(ask):
 
 def notice_covers(state, send, ask):
     """True when the thread's delivered notice for this ask's turn carried this ask (SOL-2): it is the turn's only
-    open ask, or the notice's message carries it (notice_carries). Every other ask of the turn sends its own."""
-    turn = {ask_key(prior) for _, prior in state.rows('asks', 'ask-')
-            if prior.get('host') == ask['host'] and prior.get('thread_id') == ask['thread_id'] and prior.get('run') == ask['run']
-            and prior.get('state') in ('pending', 'attempting', 'bound') and blocked_ask(prior)}
-    if turn <= {ask_key(ask)}:
+    open ask, or the notice's message carries it and no other ask of the turn (notice_carries). Every other ask of
+    the turn sends its own."""
+    own = ask_key(ask)
+    others = [prior for _, prior in state.rows('asks', 'ask-')
+              if prior.get('host') == ask['host'] and prior.get('thread_id') == ask['thread_id'] and prior.get('run') == ask['run']
+              and prior.get('state') in ('pending', 'attempting', 'bound') and blocked_ask(prior) and ask_key(prior) != own]
+    if not others:
         return True
-    return notice_carries(send.notice_message(ask) if hasattr(send, 'notice_message') else None, ask)
+    return notice_carries(send.notice_message(ask) if hasattr(send, 'notice_message') else None, ask, others)
 
 
 def event_key(host, thread_id, generation, state, ask=''):
@@ -502,6 +608,16 @@ def event(host, thread_id, generation, state, position, at, status='pending', de
     if ask:
         value['ask'] = ask
     return value
+
+
+def answers(item):
+    """True for a timeline item that answers an earlier ask: a user message from a person, or one an agent relays
+    through MCP (Sats passing on Victor's reply). A delegated-task completion, a server or provider wake or
+    continuation, and a system notice are artifacts that leave the ask open (the live needs-victor fix, cb8a6cc0)."""
+    if item.get('type') != 'user_message' or item.get('delegatedCompletion') is not None:
+        return False
+    created = item.get('createdBy')
+    return created != 'system' and not (created == 'agent' and item.get('creationSource') in ('server', 'provider'))
 
 
 def closed(state, thread, number, record, position):
@@ -596,7 +712,7 @@ def find_asks(client, host, thread_id, meta, items, emit):
             raise Gap('ask-text-truncated')
         line = URGENT_RE.search(FENCE_RE.sub('', text)) if isinstance(text, str) else None
         at = timestamp(item.get('updatedAt'))
-        if line and at is not None and not any(later.get('type') == 'user_message' for later in items[index + 1:]) and not (
+        if line and at is not None and not any(answers(later) for later in items[index + 1:]) and not (
                 settled_at is not None and settled_at >= at):
             urgent.append({'position': item['position'], 'at': at, 'excerpt': mask(one_line(line.group(0).strip(' \t>*_-'), EXCERPT_LIMIT))})
         head = next((row for row in FENCE_RE.sub('', text).splitlines() if row.strip()), '') if isinstance(text, str) else ''
@@ -620,7 +736,7 @@ def find_asks(client, host, thread_id, meta, items, emit):
                'turn': run if item.get('runId') else None, 'event': verdict[3],
                'kind': verdict[0], 'excerpt': verdict[1], 'markers': verdict[2], 'position': item['position'],
                'ask_id': ask_identity(host, thread_id, message_id)}
-        answered = any(later.get('type') == 'user_message' for later in items[index + 1:])
+        answered = any(answers(later) for later in items[index + 1:])
         (overridden if answered or (settled_at is not None and settled_at >= at) else found).append(ask)
     return found, overridden, urgent, done
 
@@ -876,7 +992,7 @@ def tick_host(client, host, state, emit, send, scope, now, max_notices=10, evide
         settled_at = timestamp(meta.get('settledAt')) if meta.get('settled') or meta.get('archived') else None
         if (meta.get('settled') or meta.get('archived')) and settled_at is None:
             settled_at = float('inf')
-        replies = [i['position'] for i in items if i.get('type') == 'user_message']
+        replies = [i['position'] for i in items if answers(i)]
         local = []
         with state.transaction():
             # Reconcile asks and events stored on an earlier tick: a later reply or settle closes them before any send.
@@ -961,7 +1077,7 @@ def tick_host(client, host, state, emit, send, scope, now, max_notices=10, evide
                 settled_at = timestamp(meta.get('settledAt')) if meta.get('settled') or meta.get('archived') else None
                 if (meta.get('settled') or meta.get('archived')) and settled_at is None:
                     settled_at = float('inf')
-                refreshed[tid] = ([i['position'] for i in items if i.get('type') == 'user_message'], settled_at, complete)
+                refreshed[tid] = ([i['position'] for i in items if answers(i)], settled_at, complete)
                 if not complete:
                     emit('gap', host=host, reason='ask-reconcile-partial')
         return refreshed[tid]
@@ -1001,7 +1117,7 @@ def tick_host(client, host, state, emit, send, scope, now, max_notices=10, evide
             continue
         slot = ask_key(ask) if ask['event'] == 'BLOCKED' else ''
         key = event_key(host, tid, ask['generation'], ask['event'], slot)
-        value = state.event(key) or (state.sent_before_per_ask(host, tid, ask['generation'], slot) if slot else None)
+        value = state.event(key) or (state.sent_before_per_ask(host, tid, ask['generation'], slot) or state.restated(ask) if slot else None)
         key = value['event_id'] if value else key
         if value is None:
             if key in looked:

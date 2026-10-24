@@ -399,6 +399,23 @@ class ScanTests(Harness):
                     itemId='item:late%d' % len(archived['items']))
         archived['items'].append(item)
 
+    def test_agent_artifacts_after_an_ask_leave_it_open(self):
+        # canon 4a02910 (needs-victor fix 2026-10-23): a delegated completion or server wake is not Victor's answer.
+        # Ported from the per-message canon suite: here each deferred ask's own BLOCKED sends once, read back from
+        # its evidence because the hook plan carries no message id.
+        artifacts = [{'createdBy': 'agent', 'creationSource': 'server', 'delegatedCompletion': {'taskIds': ['t']}},
+                     {'createdBy': 'agent', 'creationSource': 'server'}, {'createdBy': 'agent', 'creationSource': 'provider'},
+                     {'createdBy': 'system', 'creationSource': 'server'}]
+        for fields in artifacts:
+            self.assertFalse(asks.answers(dict(type='user_message', **fields)), fields)
+        for fields in ({'createdBy': 'user', 'creationSource': 'web'}, {'createdBy': 'agent', 'creationSource': 'mcp'}, {}):
+            self.assertTrue(asks.answers(dict(type='user_message', **fields)), fields)
+        client, archived = self.deferred_asks(2)
+        self.append(archived, 'user_message', 'child task finished', T0 + 400)
+        archived['items'][-1].update(createdBy='agent', creationSource='server')
+        self.assertEqual(self.tick(client, seed=['t9'], now=T0 + 3900)[0], 2)
+        self.assertEqual(sorted(self.evidence(p)['message_id'] for p in self.sent), ['message:2', 'message:3'])
+
     def test_reply_during_backoff_closes_every_deferred_ask_in_the_thread(self):
         for count in (2, 3):
             with self.subTest(asks=count):
@@ -886,6 +903,44 @@ class ThreadNoticeTests(Harness):
         self.assertFalse(asks.notice_carries('mcp:t9 NEEDS-VICTOR rotate the key', ask))
         self.assertFalse(asks.notice_carries(None, ask))
 
+    def test_SOL2_r2_complete_decision_ids_and_a_phrase_of_one_ask_only(self):
+        # Round-2 probes. Sol: a notice naming DECISION-PUSH-20 also carried the DECISION-PUSH-2 ask (substring match).
+        # DeepSeek (NEW-1): a generic "BLOCKED: needs Victor" notice carried every ask by marker words. A phrase that
+        # both asks of the turn hold carries neither. Each ask a delivered notice did not carry sends its own BLOCKED.
+        self.transport()
+        turns = {'t1': ('NEEDS-VICTOR DECISION-PUSH-2 approve the T05 push /x', 'NEEDS-VICTOR DECISION-PUSH-20 approve the T06 push /y',
+                        'mcp:t1 BLOCKED DECISION-PUSH-20'),
+                 't2': ('NEEDS-VICTOR: BLOCKED, needs Victor to pick route A or B for T01 /x',
+                        'NEEDS-VICTOR: BLOCKED, needs Victor to rotate the hub key /y', 'mcp:t2 BLOCKED: needs Victor'),
+                 't3': ('NEEDS-VICTOR approve the T05 push to main /x', 'NEEDS-VICTOR approve the T05 push to staging /y',
+                        'mcp:t3 approve the T05 push')}
+        threads = {}
+        for tid, (first, second, message) in turns.items():
+            threads[tid] = thread(tid, build(('user_message', 'brief', T0), ('assistant_message', first, T0 + 1),
+                                             ('assistant_message', second, T0 + 2)))
+            self.proof(tid, 'blocker', self.UUID)
+            self.payload(tid, 'blocker', message)
+        client = FakeT3(PROJECTS, threads)
+        for _ in range(3):
+            self.tick(client)
+        state = asks.AskState(self.directory)
+        try:
+            statuses = {tid: [(e['position'], e['status']) for e in state.events('fd:' + tid) if e['state'] == 'BLOCKED'] for tid in turns}
+        finally:
+            state.close()
+        self.assertEqual(statuses, {'t1': [(1, 'sent'), (2, 'thread-notice')], 't2': [(1, 'sent'), (2, 'sent')],
+                                    't3': [(1, 'sent'), (2, 'sent')]})
+        self.assertEqual(self.hooked(), ['t1', 't2', 't2', 't3', 't3'])
+        ask = {'thread_id': 'mcp:t9', 'markers': ['NEEDS-VICTOR DECISION-PUSH-2 approve the T05 push /x']}
+        for message in ('mcp:t9 BLOCKED DECISION-PUSH-20', 'mcp:t9 BLOCKED DECISION-PUSH-2X', 'mcp:t9 BLOCKED: needs Victor',
+                        'mcp:t9 NEEDS-VICTOR needs a decision from Victor', 'mcp:t9 BLOCKED DECISION-PUSH-3 approve the T05 push'):
+            with self.subTest(message=message):
+                self.assertFalse(asks.notice_carries(message, ask))
+        self.assertTrue(asks.notice_carries('mcp:t9 BLOCKED DECISION-PUSH-2, approve?', ask))
+        other = {'thread_id': 'mcp:t9', 'markers': ['NEEDS-VICTOR approve the T05 push to main /y']}
+        self.assertTrue(asks.notice_carries('mcp:t9 approve the T05 push', ask))
+        self.assertFalse(asks.notice_carries('mcp:t9 approve the T05 push', ask, [other]))
+
 
 class UpgradeTests(Harness):
     """Ask state the round-4 watchdog wrote (tests/preimage/sats_stall_asks.py, live 570acb59) has no turn or event.
@@ -1275,6 +1330,16 @@ def preimage_live():
     return module
 
 
+def preimage_needs_victor():
+    """The live base since 2026-10-23 22:55:52 CDT, cb8a6cc0 (the needs-victor fix; canon source 4a02910): the
+    install's preimage and the module its rollback restores."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('live_needs_victor_asks', ROOT / 'tests/preimage/live-20261023-needs-victor/sats_stall_asks.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 class EventsMigrationTests(Harness):
     """The item-6 schema change and its rollback: transactional, rowids, ids and data kept, no VACUUM or checkpoint,
     and the older watchdog keeps working on either schema."""
@@ -1446,6 +1511,188 @@ class EventsMigrationTests(Harness):
     def test_no_vacuum_or_checkpoint(self):
         source = (ROOT / 'src/sats_stall_asks.py').read_text()
         self.assertNotRegex(source, r'\.execute\([^\n]*(?i:vacuum|checkpoint)')  # no executed VACUUM or checkpoint
+
+
+class LiveBaseTests(Harness):
+    """The live base since 2026-10-23 22:55:52 CDT is cb8a6cc0, the needs-victor fix (canon source 4a02910). Each
+    behavior it adds is the candidate's too, and the rows and records it writes carry across the install and the
+    rollback that restores it (LIVE-1). Prose that only names the markers is no ask in the candidate, where cb8a6cc0
+    sends a BLOCKED for it (LIVE-2)."""
+    ARTIFACTS = {'delegated completion': {'createdBy': 'agent', 'creationSource': 'server', 'delegatedCompletion': {'taskIds': ['x']}},
+                 'system notice': {'createdBy': 'system', 'creationSource': 'server'},
+                 'provider wake': {'createdBy': 'agent', 'creationSource': 'provider'},
+                 'server wake': {'createdBy': 'agent', 'creationSource': 'server'}}
+    ANSWERS = {'person': {'createdBy': 'user', 'creationSource': 'web'}, 'Sats relay': {'createdBy': 'agent', 'creationSource': 'mcp'}}
+
+    def rewake(self, t, text, at, kind='assistant_message', **fields):
+        position = len(t['items'])
+        t['items'].append(dict(build((kind, text, at))[0], position=position, messageId='message:%d' % position, itemId='item:%d' % position,
+                               runId='run:thread:%s:ordinal:%d' % (t['meta']['threadId'], position + 1), **fields))
+        t['meta'].update(updatedAt=iso(at))
+
+    def live_tick(self, live, client, now, directory=None, send=None):
+        state = live.AskState(directory or self.directory)
+        try:
+            live.tick_host(client, 'fd', state, lambda action, **f: None, send or self.send, scope=SCOPE, now=now,
+                           evidence_dir=(directory or self.directory) / 'asks')
+        finally:
+            state.close()
+
+    def test_LIVE1_artifacts_leave_asks_and_urgent_open_at_find_and_reconcile(self):
+        live = preimage_needs_victor()
+        for fields in list(self.ARTIFACTS.values()) + list(self.ANSWERS.values()) + [{}]:
+            item = dict(type='user_message', **fields)
+            self.assertEqual(asks.answers(item), live.answers(item), fields)  # the live base's answers(), unchanged
+        names = list(self.ARTIFACTS) + list(self.ANSWERS)
+        threads = {}
+        for n, name in enumerate(names):
+            tid = 'a%d' % n
+            threads[tid] = thread(tid, build(('user_message', 'brief', T0), ('assistant_message', 'NEEDS-VICTOR %s pick route A or B /x' % tid, T0 + 1),
+                                             ('assistant_message', 'URGENT security: token in the CI log /x', T0 + 2)))
+            self.rewake(threads[tid], 'child task finished', T0 + 3, kind='user_message', **{**self.ARTIFACTS, **self.ANSWERS}[name])
+        self.tick(FakeT3(PROJECTS, threads), max_notices=50)
+        sent = {(p['thread_id'], p['kind']) for p in self.sent}
+        for n, name in enumerate(names):
+            with self.subTest(name):
+                still_open = name in self.ARTIFACTS
+                self.assertEqual((('a%d' % n, 'blocker') in sent, ('a%d' % n, 'urgent') in sent), (still_open, still_open))
+        # Reconcile: an ask stored pending while its turn ran stays open when only a server wake follows it.
+        t = thread('r1', build(('user_message', 'brief', T0), ('assistant_message', 'NEEDS-VICTOR r1 rotate the hub key /y', T0 + 1)), status='running')
+        t['meta']['activeRunId'] = t['items'][-1]['runId']
+        client, start, state = FakeT3(PROJECTS, {'r1': t}), len(self.sent), asks.AskState(self.directory / 'reconcile')
+        try:
+            self.tick(client, state=state)
+            self.assertEqual([a['state'] for _, a in state.rows('asks', 'ask-')], ['pending'])
+            self.rewake(t, 'child task finished', T0 + 2, kind='user_message', **self.ARTIFACTS['server wake'])
+            t['meta'].update(status='completed', activeRunId=None)
+            self.tick(client, now=T0 + 7200, state=state)
+        finally:
+            state.close()
+        self.assertEqual([p['thread_id'] for p in self.sent[start:] if p['kind'] == 'blocker'], ['r1'])
+
+    def test_LIVE1_a_restated_ask_sends_nothing_and_a_new_one_sends_once(self):
+        # The live base's rule: a later ask whose lines are all noticed in the generation sends nothing, merged or
+        # repeated. The candidate also treats a reworded line that names only decisions already noticed as a
+        # restatement (SOL-4), where the live base sends it again (last step).
+        lines = ('NEEDS-VICTOR t1 pick route A or B /x', 'NEEDS-VICTOR t1 rotate the hub key /y', 'NEEDS-VICTOR t1 confirm the T05 text /z')
+        steps = ((lines[0] + '\n' + lines[1], 1, 1), (lines[1], 0, 0), ('Still waiting.\n' + lines[1] + '\n' + lines[0], 0, 0),
+                 (lines[0] + '\n' + lines[2], 1, 1), ('NEEDS-VICTOR t1 DECISION-RT-A pick the route /a', 1, 1),
+                 ('NEEDS-VICTOR t1 DECISION-RT-B pick the key /b', 1, 1), ('NEEDS-VICTOR t1 DECISION-RT-A and DECISION-RT-B are both open /ab', 0, 1))
+        live, live_sent = preimage_needs_victor(), []
+        for module in ('candidate', 'live'):
+            t1 = thread('t1', build(('user_message', 'brief', T0), ('assistant_message', lines[0], T0 + 1)))
+            client, directory = FakeT3(PROJECTS, {'t1': t1}), self.directory / module
+            directory.mkdir()
+            sent = self.sent if module == 'candidate' else live_sent
+
+            def tick(now):
+                if module == 'candidate':
+                    state = asks.AskState(directory)
+                    try:
+                        self.tick(client, now=now, state=state)
+                    finally:
+                        state.close()
+                else:
+                    self.live_tick(live, client, now, directory, send=lambda plan: (live_sent.append(plan), {'accepted': True})[1])
+            tick(T0 + 3600)
+            for n, (text, candidate_sends, live_sends) in enumerate(steps):
+                before = len(sent)
+                self.rewake(t1, text, T0 + 100 * (n + 2))
+                tick(T0 + 3600 * (n + 2))
+                with self.subTest(module=module, text=text):
+                    self.assertEqual(len(sent) - before, candidate_sends if module == 'candidate' else live_sends)
+        self.assertEqual(len({p['occurrence'] for p in self.sent if p['kind'] == 'blocker'}), 5)
+
+    def test_LIVE1_rows_the_live_base_wrote_carry_over_the_install_and_its_rollback(self):
+        live = preimage_needs_victor()
+        lines = ['NEEDS-VICTOR t1 pick route A or B /x', 'NEEDS-VICTOR t1 rotate the hub key /y', 'NEEDS-VICTOR t1 confirm the T05 text /z',
+                 'NEEDS-VICTOR t1 approve the T06 body /w', 'NEEDS-VICTOR t1 name the T08 reviewer /v']
+        t1 = thread('t1', build(('user_message', 'brief', T0), ('assistant_message', lines[0], T0 + 1), ('assistant_message', lines[1], T0 + 2)))
+        client = FakeT3(PROJECTS, {'t1': t1})
+        self.live_tick(live, client, T0 + 3600)  # START, the generation's BLOCKED and the second ask's own row
+        occurrences = [p['occurrence'] for p in self.sent]
+        self.assertEqual(occurrences[:2], ['generation-1-START', 'generation-1-BLOCKED'])
+        self.assertRegex(occurrences[2], r'^generation-1-BLOCKED-[0-9a-f]{16}$')
+        self.rewake(t1, lines[2], T0 + 300)
+        self.receipts = [{'transport': 'hook', 'accepted': False, 'reason': 'hook-rejected'}]
+        self.live_tick(live, client, T0 + 7200)  # the third ask's own row is claimed, its send fails: pending at install
+        pending = self.sent[-1]['occurrence']
+        connection = sqlite3.connect(str(self.directory / 'asks.sqlite3'))
+        try:
+            self.assertEqual(sorted(s for (s,) in connection.execute("SELECT state FROM events WHERE state LIKE 'BLOCKED%'")),
+                             ['BLOCKED', 'BLOCKED:' + occurrences[2][-16:], 'BLOCKED:' + pending[-16:]])
+        finally:
+            connection.close()
+        # Install: the candidate opens the same state (the events migration). Re-wakes restate the three asks and add
+        # a fourth. The pending row goes out once under its own occurrence, the fourth ask once, the restatements never.
+        start = len(self.sent)
+        for n, text in enumerate(('Still waiting.\n' + lines[0], 'Still waiting.\n' + lines[1], 'Still waiting.\n' + lines[2], lines[3])):
+            self.rewake(t1, text, T0 + 400 + n)
+        self.tick(client, now=T0 + 10800)
+        self.tick(client, now=T0 + 11400)
+        after = [p['occurrence'] for p in self.sent[start:]]
+        self.assertEqual(len(after), 2, after)
+        self.assertEqual(after[0], pending)
+        self.assertEqual((label(after[1]), after[1] != 'generation-1-BLOCKED'), ('generation-1-BLOCKED', True))
+        # Rollback: the down-migration with the candidate, then the live base again. It restates the fourth ask (nothing)
+        # and sends a fifth once under its own row.
+        connection = sqlite3.connect(str(self.directory / 'asks.sqlite3'), isolation_level=None)
+        try:
+            connection.execute('BEGIN IMMEDIATE')
+            asks.downgrade_events(connection, T0)
+            connection.execute('COMMIT')
+            self.assertEqual(connection.execute("SELECT sql FROM sqlite_master WHERE name='events'").fetchone()[0], asks.EVENTS_V1)
+        finally:
+            connection.close()
+        start = len(self.sent)
+        self.rewake(t1, 'Still waiting.\n' + lines[3], T0 + 500)
+        self.rewake(t1, lines[4], T0 + 501)
+        self.live_tick(live, client, T0 + 14400)
+        self.live_tick(live, client, T0 + 15000)
+        self.assertEqual(len(self.sent[start:]), 1)
+        self.assertRegex(self.sent[-1]['occurrence'], r'^generation-1-BLOCKED-[0-9a-f]{16}$')
+
+    def test_LIVE1_the_live_base_fixture_matrix_passes_on_the_candidate_and_the_live_base(self):
+        # blocked-threads-rca-20261023's 19 cases (tests/needs_victor, from the MBP lane; cb8a6cc0 19/19 there).
+        import subprocess
+        script = ROOT / 'tests/needs_victor/test_needs_victor.py'
+        for module in (ROOT / 'src/sats_stall_asks.py', ROOT / 'tests/preimage/live-20261023-needs-victor/sats_stall_asks.py'):
+            out = subprocess.run([sys.executable, '-B', '-I', str(script), str(module)], capture_output=True, text=True, timeout=120)
+            with self.subTest(module=module.parent.name):
+                self.assertEqual((out.returncode, out.stdout.splitlines()[-1:]), (0, ['MATRIX PASS 19/19 sats_stall_asks.py']), out.stdout + out.stderr)
+
+    def test_LIVE2_prose_that_names_the_markers_is_no_ask_and_asks_in_the_same_shapes_send(self):
+        # 23:05 CT 2026-10-23: the live base sent a false BLOCKED (event-621be371) for a status bullet that names the
+        # markers. The candidate reads such prose, plain, coded, fenced, bold or quoted, as no ask.
+        live = preimage_needs_victor()
+        fixture = json.loads((ROOT / 'tests/fixtures/live2-status-20261023.json').read_text())
+        line = fixture['false_ask_line']
+        self.assertEqual(live.classify(fixture['text'], final=True)[1:4:2], (line[2:], 'BLOCKED'))  # the live notice's excerpt
+        verdict = asks.classify(fixture['text'], final=True)
+        self.assertTrue(verdict is None or verdict[3] is None, verdict)
+        mentions = (line, '- `NEEDS-VICTOR`, `BLOCKED` and `DECISION-` markers count anywhere.',
+                    'Scope:\n```\nNEEDS-VICTOR and BLOCKED lines count inside fences\n```', '- **BLOCKED** and **NEEDS-VICTOR** lines count anywhere.',
+                    '- "Decision for you:" prose counts as an ask.', '- `Decision for you` lines are asks now.', 'NEEDS-VICTOR or BLOCKED, either one.')
+        for text in mentions:
+            with self.subTest(mention=text):
+                verdict = asks.classify(text, final=True)
+                self.assertTrue(verdict is None or verdict[3] is None, verdict)
+        for text in ('- NEEDS-VICTOR t1 pick route A or B /x', 'NEEDS-VICTOR, BLOCKED: need the hub key /x',
+                     'Open asks:\n```\nNEEDS-VICTOR p pick A or B /x\n```', '`NEEDS-VICTOR t1 approve the T05 push /x`',
+                     'The reviewed result is **BLOCKED**: RESULT.md:1.', '**NEEDS-VICTOR:** pick A or B',
+                     '**Decision for you:** may I also push T05 upstream?', 'C14 needs a decision from you before the push.',
+                     'Closed as BLOCKED. The key never arrived.'):
+            with self.subTest(ask=text):
+                self.assertEqual(asks.classify(text, final=True)[3], 'BLOCKED')
+        # Through a tick, the status as a thread's final reply: the candidate sends START only, the live base a BLOCKED too.
+        rows = build(('user_message', 'brief', T0), ('assistant_message', fixture['text'], T0 + 1))
+        self.tick(FakeT3(PROJECTS, {'s1': thread('s1', rows)}))
+        self.assertEqual([label(p['occurrence']) for p in self.sent], ['generation-1-START'])
+        live_sent = []
+        (self.directory / 'live').mkdir()
+        self.live_tick(live, FakeT3(PROJECTS, {'s1': thread('s1', [dict(i) for i in rows])}), T0 + 3600, self.directory / 'live',
+                       send=lambda plan: (live_sent.append(plan), {'accepted': True})[1])
+        self.assertEqual([p['occurrence'] for p in live_sent], ['generation-1-START', 'generation-1-BLOCKED'])
 
 
 if __name__ == '__main__':
