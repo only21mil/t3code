@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Done-check receipts for the candidate (RECEIPTS.md): every suite on the candidate, the new tests against the
-# unpatched live bases (they must fail there), the vault suite, the rehearsals and the live-state readback.
-#   receipts.sh > RECEIPTS.md        (writes only under <lane>/.tmp-run and <lane>/candidate/.tmp-run)
+# unpatched live bases and the round-1 candidate (they must fail there), the live base's 19-case matrix, the vault
+# suite, the rehearsals and the live-state readback.
+#   receipts.sh > RECEIPTS.md        (writes only under <lane>/candidate/.tmp-run)
 set -uo pipefail
 CAND="$(cd "$(dirname "$0")/.." && pwd)"
 LANE="$(dirname "$CAND")"
@@ -9,6 +10,9 @@ RUN="$CAND/.tmp-run/receipts"
 rm -rf "$RUN" && mkdir -p "$RUN"
 export TMPDIR="$CAND/.tmp-run" PYTHONDONTWRITEBYTECODE=1
 W="$CAND/tools/sats-stall-watchdog"
+LIVEBASE="$W/tests/preimage/live-20261023-needs-victor/sats_stall_asks.py"  # cb8a6cc0, the live asks base
+DBCOPY="$LANE/repair-r2/asks-copy-20261023T233547.sqlite3"  # live copy 23:35 CDT, one cb8a6cc0 BLOCKED:<digest> row
+PREV=a31f46b69a08322ff2b5a7a5d5d73e80e0305025              # the round-1 candidate the round-2 review read
 
 block() {  # title, directory, command...: run, then print the command, exit code and output tail
   local title="$1" dir="$2" out code; shift 2
@@ -22,6 +26,11 @@ block() {  # title, directory, command...: run, then print the command, exit cod
   fi
   printf '```\n\n'
 }
+tests_on() {  # copy of the current watchdog tree at $1 with src/sats_stall_asks.py (and watchdog.py) from $2 (and $3)
+  mkdir -p "$(dirname "$1")" && cp -r "$W" "$1" && rm -rf "$1/tests/.tmp"
+  cp "$2" "$1/src/sats_stall_asks.py"
+  [ -z "${3:-}" ] || cp "$3" "$1/src/sats_stall_watchdog.py"
+}
 
 echo "# Receipts: notice-package-20261023 candidate"
 echo
@@ -33,6 +42,9 @@ echo "\`test_bad_delivery_data_does_not_hide_a_live_lane\` and \`test_real_colle
 echo "\`sats_stall_collector.discover()\` (unchanged, 1a5acf4a) rejects lane roots outside \`~/work\`"
 echo "(\`root-scope-rejected\`). This lane lives under \`~/.t3-nightly/scratch\`, and the 2026-10-20 run passed from \`~/work\`."
 echo
+echo "The live asks base is cb8a6cc0, the needs-victor fix (2026-10-23 22:55:52 CDT, canon source 4a02910). The"
+echo "package's first pin, 406e3fd9, is its backup and the candidate's \`base\` tag; § 2 runs the new tests on both."
+echo
 echo "## 1. Candidate suites"
 echo
 block "watchdog suite, candidate" "$W" python3 -m unittest discover -s tests -p 'test_*.py'
@@ -40,57 +52,68 @@ block "notifier item 7, candidate" "$CAND/notify" python3 -m unittest discover -
 block "mcp_call patch 2, candidate" "$CAND/mcp" python3 -m unittest discover -s tests -p 'test_*.py'
 block "install gate and replay recheck, candidate" "$CAND/install" python3 -m unittest discover -s tests -p 'test_*.py'
 
-echo "## 2. The same new tests against the unpatched live bases (must fail)"
+echo "## 2. The package's watchdog tests against the unpatched live bases (must fail)"
 echo
-BW="$RUN/base-watchdog/tools/sats-stall-watchdog"
-mkdir -p "$(dirname "$BW")" && cp -r "$W" "$BW" && rm -rf "$BW/tests/.tmp"
-git -C "$CAND" show base:tools/sats-stall-watchdog/src/sats_stall_asks.py > "$BW/src/sats_stall_asks.py"
-block "new watchdog tests on live asks 406e3fd9" "$BW/tests" python3 -m unittest \
-  test_asks.DoneTriggerTests test_asks.MarkersAnywhereTests test_asks.PerAskTests test_asks.EventsMigrationTests \
-  test_generations.EventTests.test_done_once_on_the_done_reply_never_on_settle \
-  test_generations.EventTests.test_needs_victor_then_a_different_blocked_line_are_two_asks \
-  test_notice_package_hook.InertNoticePackageHook.test_two_asks_are_two_hook_notices_and_a_repeat_is_none
+for pin in live:"$LIVEBASE" first-pin:base; do
+  name="${pin%%:*}" src="${pin#*:}"
+  if [ "$src" = base ]; then src="$RUN/base-asks.py"; git -C "$CAND" show base:tools/sats-stall-watchdog/src/sats_stall_asks.py > "$src"; fi
+  BW="$RUN/base-watchdog-$name/tools/sats-stall-watchdog"
+  tests_on "$BW" "$src"
+  block "package watchdog tests on the $name asks $(sha256sum "$src" | cut -c1-8)" "$BW/tests" python3 -m unittest \
+    test_asks.DoneTriggerTests test_asks.MarkersAnywhereTests test_asks.PerAskTests test_asks.EventsMigrationTests \
+    test_generations.EventTests.test_done_once_on_the_done_reply_never_on_settle \
+    test_generations.EventTests.test_needs_victor_then_a_different_blocked_line_are_two_asks \
+    test_notice_package_hook.InertNoticePackageHook.test_two_asks_are_two_hook_notices_and_a_repeat_is_none \
+    test_asks.LiveBaseTests.test_LIVE2_prose_that_names_the_markers_is_no_ask_and_asks_in_the_same_shapes_send
+done
 mkdir -p "$RUN/base-notify" && git -C "$CAND" show base:notify/sats-completion-notify > "$RUN/base-notify/sats-completion-notify"
 block "notifier item 7 tests on live notifier ad1f0106" "$CAND/notify" env NOTIFIER_SOURCE="$RUN/base-notify/sats-completion-notify" \
   python3 -m unittest discover -s tests -p 'test_item7.py'
 mkdir -p "$RUN/base-mcp/tests" && git -C "$CAND" show base:mcp/mcp_call.py > "$RUN/base-mcp/mcp_call.py" && cp "$CAND/mcp/tests/"*.py "$RUN/base-mcp/tests/"
-block "patch 2 tests on live mcp_call.py d1bb0937" "$RUN/base-mcp" python3 -m unittest discover -s tests -p 'test_*.py'
+block "patch 2 tests on live mcp_call.py d1bb0937" "$RUN/base-mcp" env WATCHDOG_SRC="$W/src" python3 -m unittest discover -s tests -p 'test_*.py'
 mkdir -p "$RUN/frozen" && git -C "$CAND" archive base tools/sats-stall-watchdog | tar -x -C "$RUN/frozen"
-block "frozen live suite on live base (reference)" "$RUN/frozen/tools/sats-stall-watchdog" python3 -m unittest discover -s tests -p 'test_*.py'
+block "frozen live suite on its own base (reference)" "$RUN/frozen/tools/sats-stall-watchdog" python3 -m unittest discover -s tests -p 'test_*.py'
 
-echo "## 2b. Review round-1 tests against the round-0 candidate e6a95f42 (must fail)"
+echo "## 2b. Review round-2 tests against the round-1 candidate a31f46b (must fail)"
 echo
-PRE="$RUN/round0"
-mkdir -p "$PRE/install-scripts" "$PRE/mcp/tests"
-git -C "$CAND" archive HEAD tools/sats-stall-watchdog | tar -x -C "$PRE"
-for m in sats_stall_asks.py sats_stall_watchdog.py; do git -C "$CAND" show "e6a95f42:tools/sats-stall-watchdog/src/$m" > "$PRE/tools/sats-stall-watchdog/src/$m"; done
-git -C "$CAND" show e6a95f42:mcp/mcp_call.py > "$PRE/mcp/mcp_call.py" && cp "$CAND/mcp/tests/"*.py "$PRE/mcp/tests/"
-for f in install.sh rollback.sh; do git -C "$CAND" show "e6a95f42:install/$f" > "$PRE/install-scripts/$f"; done
-block "round-1 watchdog tests on e6a95f42 (asks 8772ee0b, watchdog 6ea2e6fb)" "$PRE/tools/sats-stall-watchdog/tests" python3 -m unittest \
-  test_generations.EventTests.test_SOL1_a_done_led_progress_line_then_a_final_progress_reply_sends_no_done \
-  test_generations.EventTests.test_SOL1_kimi_replies_that_restate_done_keep_it_on_the_done_replys_run \
-  test_generations.EventTests.test_DSH2_single_read_message_after_a_done_reply_opens_a_generation \
-  test_generations.EventTests.test_DSH2_grace_reread_message_after_a_done_reply_opens_a_generation \
-  test_generations.EventTests.test_DSH2_a_follow_up_inside_the_done_replys_grace_claims_that_done_after_the_grace \
-  test_asks.ThreadNoticeTests.test_SOL2_a_delivered_turn_notice_covers_only_the_asks_it_carried \
-  test_generations.RepairRound1Tests test_asks.MarkersAnywhereTests.test_DSM2_decision_reports_stay_local_and_decision_asks_send \
-  test_asks.EventsMigrationTests.test_DSM3_a_per_ask_only_generation_downgrades_to_the_legacy_key
-block "round-1 settle guard tests on e6a95f42 mcp_call.py b1959e29" "$PRE/mcp" env WATCHDOG_SRC="$W/src" python3 -m unittest \
-  tests.test_settle_guard.SettleGuardTests.test_SOL5_every_watchdog_ask_form_from_the_done_reply_on_refuses \
-  tests.test_settle_guard.SettleGuardTests.test_SOL5_missing_watchdog_detection_refuses \
-  tests.test_settle_guard.SettleGuardTests.test_SOL6_a_required_reviewer_without_accept_refuses
-block "rehearsal with the e6a95f42 install.sh and rollback.sh, systemd-259 shim (DS-H1)" "$CAND" env REHEARSE_SCRIPTS="$PRE/install-scripts" \
-  bash install/rehearse.sh "$RUN/rehearsal-round0-259" "$LANE/evidence/asks-copy-20261023T204626.sqlite3" "$LANE/evidence/requeue-copy"
-block "rehearsal with the e6a95f42 scripts past their gate, old realtime shim (SOL-7, SOL-8)" "$CAND" env SHIM_REALTIME=1 REHEARSE_SCRIPTS="$PRE/install-scripts" \
-  bash install/rehearse.sh "$RUN/rehearsal-round0-realtime" "$LANE/evidence/asks-copy-20261023T204626.sqlite3" "$LANE/evidence/requeue-copy"
-echo "Asks after the round-0 rollback of a resumed install: \`$(sha256sum "$RUN/rehearsal-round0-realtime/resume/home/.local/lib/sats-stall-watchdog/sats_stall_asks.py" | cut -c1-16)\` (the candidate; base is 406e3fd9)."
+PRE="$RUN/round1"
+mkdir -p "$PRE/install/tests" "$PRE/mcp/tests" "$PRE/install-scripts"
+tests_on "$PRE/tools/sats-stall-watchdog" <(git -C "$CAND" show "$PREV:tools/sats-stall-watchdog/src/sats_stall_asks.py") \
+  <(git -C "$CAND" show "$PREV:tools/sats-stall-watchdog/src/sats_stall_watchdog.py")
+git -C "$CAND" show "$PREV:mcp/mcp_call.py" > "$PRE/mcp/mcp_call.py" && cp "$CAND/mcp/tests/"*.py "$PRE/mcp/tests/"
+for f in watchdog_gate.py replay_recheck.py requeue-triage.json; do git -C "$CAND" show "$PREV:install/$f" > "$PRE/install/$f"; done
+cp "$CAND/install/tests/test_install.py" "$PRE/install/tests/"
+for f in install.sh rollback.sh; do git -C "$CAND" show "$PREV:install/$f" > "$PRE/install-scripts/$f"; done
+block "round-2 watchdog tests on a31f46b (asks f68b5e47)" "$PRE/tools/sats-stall-watchdog/tests" python3 -m unittest \
+  test_generations.EventTests.test_SOL1_r2_progress_and_qualified_restatements_after_a_done_led_line_send_no_done \
+  test_asks.ThreadNoticeTests.test_SOL2_r2_complete_decision_ids_and_a_phrase_of_one_ask_only \
+  test_asks.ScanTests.test_agent_artifacts_after_an_ask_leave_it_open test_asks.LiveBaseTests
+block "round-2 settle guard test on a31f46b mcp_call.py (NEW-2)" "$PRE/mcp" env WATCHDOG_SRC="$W/src" python3 -m unittest \
+  tests.test_settle_guard.SettleGuardTests.test_NEW2_a_producer_or_repair_child_is_no_required_reviewer
+block "round-2 gate and recheck tests on a31f46b watchdog_gate.py and replay_recheck.py" "$PRE/install" python3 -m unittest \
+  tests.test_install.GateTests.test_SOLR21_systemctl_errors_unknown_states_and_missing_units_fail_closed \
+  tests.test_install.RecheckTests.test_LIVE1_an_agent_artifact_after_the_ask_is_no_answer
+block "rehearsal with the a31f46b install.sh and rollback.sh on the cb8a6cc0 live base (LIVE-1)" "$CAND" env REHEARSE_SCRIPTS="$PRE/install-scripts" \
+  bash install/rehearse.sh "$RUN/rehearsal-round1" "$DBCOPY" "$LANE/evidence/requeue-copy"
+echo "The a31f46b dry run on a cb8a6cc0 HOME: \`$(head -n 3 "$RUN/rehearsal-round1/main/dry-run.txt" | grep -m1 STOP || echo 'no STOP line')\`"
 echo
 
-echo "## 3. victor-vault tools/sats-stall-watchdog (canon-clone, items 4)"
+echo "## 2c. The live base's own 19-case matrix (blocked-threads-rca-20261023, MBP)"
+echo
+echo "Unmodified MBP copy (\`repair-r2/needs-victor-matrix/test_needs_victor.py\`, sha256 \`$(sha256sum "$LANE/repair-r2/needs-victor-matrix/test_needs_victor.py" | cut -c1-16)\`), deps = this suite's src:"
+echo
+block "unmodified matrix on the live base cb8a6cc0" "$LANE/repair-r2/needs-victor-matrix" python3 -B -I test_needs_victor.py "$LIVEBASE"
+block "unmodified matrix on the candidate (the per-ask occurrence suffix alone differs)" "$LANE/repair-r2/needs-victor-matrix" python3 -B -I test_needs_victor.py "$W/src/sats_stall_asks.py"
+block "suite copy (tests/needs_victor) on the candidate" "$W/tests/needs_victor" python3 -B -I test_needs_victor.py "$W/src/sats_stall_asks.py"
+block "suite copy (tests/needs_victor) on round-1 a31f46b (must fail)" "$W/tests/needs_victor" python3 -B -I test_needs_victor.py "$PRE/tools/sats-stall-watchdog/src/sats_stall_asks.py"
+
+echo "## 3. victor-vault tools/sats-stall-watchdog (canon-clone, item 4)"
 echo
 echo "Staged, not pushed: \`$(git -C "$LANE/canon-clone" log --format='%h %s' origin/main..HEAD | tr '\n' ';' | sed 's/;/; /g')\`"
 echo
-block "vault suite at HEAD (catch-up + items 1, 5, 6)" "$LANE/canon-clone/tools/sats-stall-watchdog" python3 -m unittest discover -s tests -p 'test_*.py'
+echo "4a02910 is an ancestor of HEAD: $(git -C "$LANE/canon-clone" merge-base --is-ancestor 4a02910 HEAD && echo yes || echo NO). origin/main is an ancestor (the push fast-forwards): $(git -C "$LANE/canon-clone" merge-base --is-ancestor origin/main HEAD && echo yes || echo NO)."
+echo
+block "vault suite at HEAD (catch-up + items 1, 5, 6, round-2 repairs)" "$LANE/canon-clone/tools/sats-stall-watchdog" python3 -m unittest discover -s tests -p 'test_*.py'
 for m in sats_stall_asks.py sats_stall_watchdog.py; do
   echo "Vault \`src/$m\` equals the candidate: $(cmp -s "$LANE/canon-clone/tools/sats-stall-watchdog/src/$m" "$W/src/$m" && echo yes || echo NO)."
 done
@@ -98,10 +121,10 @@ echo
 
 echo "## 4. Migration and install rehearsals"
 echo
-cp "$LANE/evidence/asks-copy-20261023T204626.sqlite3" "$RUN/asks-rehearse.sqlite3"
-block "migration up and down on a copy of the live asks.sqlite3" "$CAND" python3 -I install/events_migration.py --lib tools/sats-stall-watchdog/src rehearse "$RUN/asks-rehearse.sqlite3"
-block "install and rollback in a sandbox HOME" "$CAND" bash install/rehearse.sh "$RUN/rehearsal" \
-  "$LANE/evidence/asks-copy-20261023T204626.sqlite3" "$LANE/evidence/requeue-copy"
+cp "$DBCOPY" "$RUN/asks-rehearse.sqlite3"
+block "migration up and down on a copy of the live asks.sqlite3 (23:35, one BLOCKED:<digest> row)" "$CAND" python3 -I install/events_migration.py --lib tools/sats-stall-watchdog/src rehearse "$RUN/asks-rehearse.sqlite3"
+block "install and rollback in a sandbox HOME on the cb8a6cc0 live base" "$CAND" bash install/rehearse.sh "$RUN/rehearsal" \
+  "$DBCOPY" "$LANE/evidence/requeue-copy"
 RCA=/home/victor/.t3-nightly/worktrees/t3code-fork/grokbot-fd-master-fix-20261023/lanes/fd-master-fix-20261023/notice-delay-rca-20261023
 block "RCA patch-1 behavior check (check_done.py, Kimi included) on the candidate module" "$CAND" python3 -B -I "$RCA/.stage/check_done.py" "$W/src/sats_stall_asks.py" "$W/src"
 block "RCA patch-1 tick check (check_tick.py --staged) on the candidate module" "$CAND" python3 -B -I "$RCA/.stage/check_tick.py" "$W/src/sats_stall_asks.py" "$W/src" --staged
@@ -111,15 +134,15 @@ block "systemd-analyze verify" "$CAND" systemd-analyze --user verify notify/syst
 echo "## 5. Live state untouched by this phase"
 echo
 echo '```'
-for f in "$HOME/.local/lib/sats-stall-watchdog/sats_stall_asks.py" "$HOME/.local/lib/sats-stall-watchdog/sats_stall_watchdog.py" "$HOME/.local/bin/sats-completion-notify" \
+for f in "$HOME/.local/lib/sats-stall-watchdog/sats_stall_asks.py" "$HOME/.local/lib/sats-stall-watchdog/sats_stall_asks.py.bak-needs-victor-20261023T225552" \
+         "$HOME/.local/lib/sats-stall-watchdog/sats_stall_watchdog.py" "$HOME/.local/bin/sats-completion-notify" \
          "$HOME/work/t3-mcp-connect-2026-10-07/scripts/mcp_call.py"; do sha256sum "$f"; done
 units=("$HOME"/.config/systemd/user/sats-completion-requeue.*); [ -e "${units[0]}" ] && echo "requeue unit files on F-D: ${#units[@]}" || echo "requeue unit files on F-D: 0"
-python3 -I - "$CAND/install/requeue-triage.json" <<'EOF'
-import hashlib, json, sys
+python3 -I -c 'import hashlib, json, sys
 from pathlib import Path
-m = json.load(open(sys.argv[1])); rq = Path(m['directory'])
-live = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in rq.glob('*.json')}
-print('requeue entries: %d, all matching the triage sha256: %s' % (len(live), live == {e['file']: e['sha256'] for e in m['entries']}))
-EOF
+m = json.load(open(sys.argv[1])); rq = Path(m["directory"])
+live = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in rq.glob("*.json")}
+print("requeue entries: %d, all matching the triage sha256: %s" % (len(live), live == {e["file"]: e["sha256"] for e in m["entries"]}))' "$CAND/install/requeue-triage.json"
 sqlite3 -readonly "file:$HOME/.local/state/sats-stall-watchdog/asks.sqlite3?mode=ro" "SELECT 'live events schema: ' || sql FROM sqlite_master WHERE name='events'"
+ls "$HOME"/.local/lib/sats-stall-watchdog/*.bak-notice-package-* 2>/dev/null | sed 's/^/notice-package backup present: /' || true
 echo '```'
