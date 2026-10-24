@@ -1152,6 +1152,38 @@ describe("persisted environment queries", () => {
       ),
   );
 
+  it.effect("marks an in-memory value as waiting while it revalidates", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const refreshStarted = Latch.makeUnsafe();
+        const finishRefresh = Latch.makeUnsafe();
+        let executions = 0;
+        const execute = Effect.suspend(() => {
+          executions += 1;
+          if (executions === 1) return Effect.succeed("first");
+          refreshStarted.openUnsafe();
+          return finishRefresh.await.pipe(Effect.as("fresh"));
+        });
+        const harness = yield* makeEnvironmentQueryHarness(execute, {
+          persistence: { load: () => Effect.succeedNone, save: () => Effect.void },
+        });
+        const registry = yield* mountEnvironmentQuery(harness.atom);
+        expect(yield* readEnvironmentQuery(registry, harness.atom)).toBe("first");
+
+        registry.refresh(harness.atom);
+        yield* refreshStarted.await;
+        expect(registry.get(harness.atom)).toMatchObject({
+          _tag: "Success",
+          value: "first",
+          waiting: true,
+        });
+
+        finishRefresh.openUnsafe();
+        expect(yield* readEnvironmentQuery(registry, harness.atom)).toBe("fresh");
+      }),
+    ),
+  );
+
   it.effect("keeps cached content available when revalidation fails", () =>
     Effect.scoped(
       Effect.gen(function* () {
