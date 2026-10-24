@@ -46,6 +46,7 @@ interface AttachedTab {
   downloadDirectory: string | null;
   pendingDownloadGuid: string | null;
   agentInputAt: number;
+  readonly childSessions: Set<string>;
   readonly onMessage: (
     event: Electron.Event,
     method: string,
@@ -112,11 +113,39 @@ export const make = Effect.gen(function* () {
       // Announcing the tab again would reconnect Playwright, and the page could
       // replay the same oversized event, so the tab stays detached.
       () => {
-        if (tab.relay === relay && tabs.get(keyOf(tab.key)) === tab) detach(tab.key);
+        if (tab.relay !== relay || tabs.get(keyOf(tab.key)) !== tab) return;
+        tabs.delete(keyOf(tab.key));
+        emit({ type: "detached", ...tab.key });
+        void releaseChildTargets(tab);
       },
     );
     tab.relay = relay;
     return relay;
+  };
+
+  /**
+   * Playwright left auto-attach on the shared debugger with waitForDebuggerOnStart,
+   * so with no relay every new iframe and worker would stay paused. The manager
+   * still owns the debugger itself. The listener stays until auto-attach is off so
+   * no child that attaches meanwhile is missed.
+   */
+  const releaseChildTargets = async (tab: AttachedTab) => {
+    const { debugger: debuggee } = tab.debuggee;
+    const ignore = () => undefined;
+    await debuggee
+      .sendCommand("Target.setAutoAttach", {
+        autoAttach: false,
+        waitForDebuggerOnStart: false,
+        flatten: true,
+      })
+      .catch(ignore);
+    debuggee.off("message", tab.onMessage);
+    await Promise.all(
+      [...tab.childSessions].map(async (sessionId) => {
+        await debuggee.sendCommand("Runtime.runIfWaitingForDebugger", {}, sessionId).catch(ignore);
+        await debuggee.sendCommand("Target.detachFromTarget", { sessionId }).catch(ignore);
+      }),
+    );
   };
 
   /**
@@ -153,7 +182,14 @@ export const make = Effect.gen(function* () {
       downloadDirectory: null,
       pendingDownloadGuid: null,
       agentInputAt: Number.NEGATIVE_INFINITY,
+      childSessions: new Set(),
       onMessage: (_event, method, params, sessionId) => {
+        const child = (params as { sessionId?: unknown } | undefined)?.sessionId;
+        if (method === "Target.attachedToTarget" && typeof child === "string") {
+          tab.childSessions.add(child);
+        } else if (method === "Target.detachedFromTarget" && typeof child === "string") {
+          tab.childSessions.delete(child);
+        }
         if (method === "Browser.downloadWillBegin") {
           const guid = (params as { guid?: unknown } | undefined)?.guid;
           tab.pendingDownloadGuid = typeof guid === "string" ? guid : null;

@@ -17,19 +17,34 @@ const decodeCdpReply = Schema.decodeUnknownSync(
 );
 const key = { threadId: "thread-1", tabId: "tab-1" };
 
-const makeDebuggee = () => {
+interface SentCommand {
+  readonly method: string;
+  readonly params: unknown;
+  readonly sessionId: string | undefined;
+}
+
+const makeDebuggee = (held: (method: string) => boolean = () => true) => {
   const emitter = new NodeEvents.EventEmitter();
   const pending: Array<() => void> = [];
+  const sent: Array<SentCommand> = [];
+  const sentWaiters: Array<() => void> = [];
   const debuggee = Object.assign(emitter, {
-    sendCommand: (method: string) =>
+    sendCommand: (method: string, params?: unknown, sessionId?: string) =>
       new Promise((resolve) => {
+        sent.push({ method, params, sessionId });
+        sentWaiters.splice(0).forEach((wake) => wake());
         if (method === "Target.getTargetInfo") {
           resolve({ targetInfo: { targetId: "GUEST" } });
           return;
         }
-        pending.push(() => resolve({ method }));
+        if (held(method)) pending.push(() => resolve({ method }));
+        else resolve({});
       }),
   });
+  const untilSent = (done: (commands: ReadonlyArray<SentCommand>) => boolean): Promise<void> =>
+    done(sent)
+      ? Promise.resolve()
+      : new Promise<void>((wake) => void sentWaiters.push(wake)).then(() => untilSent(done));
   const webContents = {
     getURL: () => "http://localhost/",
     getTitle: () => "Page",
@@ -42,6 +57,9 @@ const makeDebuggee = () => {
     },
     emit: (method: string, params: unknown) => emitter.emit("message", {}, method, params, ""),
     release: () => pending.splice(0).forEach((resolve) => resolve()),
+    sent,
+    untilSent,
+    listeners: () => emitter.listenerCount("message"),
   };
 };
 
@@ -185,6 +203,68 @@ describe("DesktopBrowserHost", () => {
       expect(JSON.parse((next as { message: string }).message)).toMatchObject({
         method: "Page.loadEventFired",
       });
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("resumes the page's child targets after an oversized event detaches the tab", () =>
+    Effect.gen(function* () {
+      const host = yield* DesktopBrowserHost.make;
+      const debuggee = makeDebuggee((method) => method === "Target.setAutoAttach");
+      const events = yield* Queue.unbounded<DesktopBrowserEvent>();
+      yield* host.events.pipe(
+        Stream.runForEach((line) =>
+          Queue.offer(events, decodeEvent(new TextDecoder().decode(line))),
+        ),
+        Effect.forkScoped,
+      );
+      host.attach(key, debuggee.tab);
+      yield* Queue.take(events);
+      yield* host.handleCommandLine(
+        encodeJson({
+          type: "cdp",
+          ...key,
+          message: encodeJson({ id: 1, method: "Target.setAutoAttach" }),
+        }),
+      );
+      yield* Queue.takeN(events, 2);
+      debuggee.emit("Target.attachedToTarget", { sessionId: "IFRAME", waitingForDebugger: true });
+      yield* Queue.take(events);
+      const before = debuggee.sent.length;
+
+      debuggee.emit("Runtime.consoleAPICalled", {
+        args: Array(2048).fill("x".repeat(40 * 1024)),
+      });
+      expect(yield* Queue.take(events)).toMatchObject({ type: "detached", ...key });
+      // A worker that attaches before auto-attach is off is paused too.
+      debuggee.emit("Target.attachedToTarget", { sessionId: "WORKER", waitingForDebugger: true });
+      debuggee.release();
+      yield* Effect.promise(() =>
+        debuggee.untilSent(
+          (sent) =>
+            sent.filter((command) => command.method === "Target.detachFromTarget").length === 2,
+        ),
+      );
+
+      expect(debuggee.sent.slice(before)).toEqual([
+        {
+          method: "Target.setAutoAttach",
+          params: { autoAttach: false, waitForDebuggerOnStart: false, flatten: true },
+          sessionId: undefined,
+        },
+        { method: "Runtime.runIfWaitingForDebugger", params: {}, sessionId: "IFRAME" },
+        { method: "Runtime.runIfWaitingForDebugger", params: {}, sessionId: "WORKER" },
+        {
+          method: "Target.detachFromTarget",
+          params: { sessionId: "IFRAME" },
+          sessionId: undefined,
+        },
+        {
+          method: "Target.detachFromTarget",
+          params: { sessionId: "WORKER" },
+          sessionId: undefined,
+        },
+      ]);
+      expect(debuggee.listeners()).toBe(0);
     }).pipe(Effect.scoped),
   );
 });
