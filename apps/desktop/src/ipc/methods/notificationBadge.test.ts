@@ -1,4 +1,6 @@
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import { beforeEach, expect, vi } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -27,10 +29,12 @@ vi.mock("electron", () => ({
 }));
 
 import * as ElectronApp from "../../electron/ElectronApp.ts";
+import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
 import { installNotificationBadge } from "./notificationBadge.ts";
 
 const badge = { count: 2, image: "data:image/png;base64,aGVsbG8=" };
+const mainFrame = {};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -49,7 +53,7 @@ it.effect("validates IPC and clears on native focus, quit, and disposal", () =>
       Effect.gen(function* () {
         yield* installNotificationBadge();
         const handler = handlers.get("desktop:set-notification-badge")!;
-        const event = { sender: { id: 1 } };
+        const event = { sender: { id: 1 }, senderFrame: mainFrame };
         for (const invalid of [
           { ...badge, count: -1 },
           { ...badge, count: 0.5 },
@@ -89,7 +93,13 @@ it.effect("validates IPC and clears on native focus, quit, and disposal", () =>
           },
           on: vi.fn(),
           removeAllListeners: vi.fn(),
-        }),
+        }).pipe(
+          Layer.provide(
+            Layer.succeed(ElectronWindow.ElectronWindow, {
+              main: Effect.succeed(Option.some({ webContents: { id: 1, mainFrame } })),
+            } as unknown as ElectronWindow.ElectronWindow["Service"]),
+          ),
+        ),
       ]),
     );
     expect(native.setBadgeCount).toHaveBeenLastCalledWith(0);

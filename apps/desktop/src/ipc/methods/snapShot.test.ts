@@ -28,17 +28,20 @@ describe("window capture IPC", () => {
     return Effect.gen(function* () {
       const request = { operation: "install" as const, chooseFile: false };
       const untrustedRead = yield* Effect.exit(
-        previewSnapShotConfig.handler(request, { sender: { id: 8 } }),
+        previewSnapShotConfig.handler(request, { sender: { id: 8 }, senderFrame: null }),
       );
       const untrustedWrite = yield* Effect.exit(
-        applySnapShotConfig.handler(configPreview.id, { sender: { id: 8 } }),
+        applySnapShotConfig.handler(configPreview.id, { sender: { id: 8 }, senderFrame: null }),
       );
       assert(Exit.isFailure(untrustedRead));
       assert(Exit.isFailure(untrustedWrite));
       assert.deepEqual(calls, []);
-      yield* previewSnapShotConfig.handler(request, { sender: { id: 7 } });
+      yield* previewSnapShotConfig.handler(request, { sender: { id: 7 }, senderFrame: null });
       assert.deepEqual(calls, ["read"]);
-      yield* applySnapShotConfig.handler(configPreview.id, { sender: { id: 7 } });
+      yield* applySnapShotConfig.handler(configPreview.id, {
+        sender: { id: 7 },
+        senderFrame: null,
+      });
       assert.deepEqual(calls, ["read", configPreview.id]);
     }).pipe(
       Effect.provide(
@@ -70,10 +73,10 @@ describe("window capture IPC", () => {
   it.effect("allows capture setup only from the trusted main renderer", () => {
     const actions: string[] = [];
     return Effect.gen(function* () {
-      yield* setupSnapShot.handler("install-extension", { sender: { id: 7 } });
+      yield* setupSnapShot.handler("install-extension", { sender: { id: 7 }, senderFrame: null });
       assert.deepEqual(actions, ["install-extension"]);
       const rejected = yield* Effect.exit(
-        setupSnapShot.handler("enable-extension", { sender: { id: 8 } }),
+        setupSnapShot.handler("enable-extension", { sender: { id: 8 }, senderFrame: null }),
       );
       assert(Exit.isFailure(rejected));
       assert.deepEqual(actions, ["install-extension"]);

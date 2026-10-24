@@ -1,14 +1,18 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 
+import * as ElectronWindow from "../electron/ElectronWindow.ts";
+
 export interface DesktopIpcInvokeEvent {
   readonly sender: { readonly id: number };
+  readonly senderFrame: unknown;
 }
 
-export interface DesktopIpcSyncEvent {
+export interface DesktopIpcSyncEvent extends DesktopIpcInvokeEvent {
   returnValue: unknown;
 }
 
@@ -52,6 +56,17 @@ export class DesktopIpcUnregistrationError extends Schema.TaggedError<DesktopIpc
   }
 }
 
+export class DesktopIpcUntrustedSenderError extends Schema.TaggedError<DesktopIpcUntrustedSenderError>()(
+  "DesktopIpcUntrustedSenderError",
+  {
+    channel: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Rejected the ${this.channel} IPC request from outside the main window.`;
+  }
+}
+
 export const DesktopIpcError = Schema.Union([
   DesktopIpcRegistrationError,
   DesktopIpcUnregistrationError,
@@ -80,8 +95,23 @@ export class DesktopIpc extends Context.Service<
   }
 >()("@t3tools/desktop/ipc/DesktopIpc") {}
 
-export const make = (ipcMain: DesktopIpcMain): DesktopIpc["Service"] =>
-  DesktopIpc.of({
+export const make = Effect.fn("desktop.ipc.make")(function* (ipcMain: DesktopIpcMain) {
+  const electronWindow = yield* ElectronWindow.ElectronWindow;
+  // Preview guests run their preload in the page's own JS world, so any site they load could
+  // send on these channels. Only the app preload in the main window's top frame calls them;
+  // guests talk to main through their own `webContents.ipc` handlers.
+  const isTrustedSender = (event: DesktopIpcInvokeEvent) =>
+    electronWindow.main.pipe(
+      Effect.map(
+        Option.exists(
+          (window) =>
+            window.webContents.id === event.sender.id &&
+            window.webContents.mainFrame === event.senderFrame,
+        ),
+      ),
+    );
+
+  return DesktopIpc.of({
     handle: Effect.fn("desktop.ipc.registerInvoke")(function* <E, R>({
       channel,
       handler,
@@ -98,6 +128,10 @@ export const make = (ipcMain: DesktopIpcMain): DesktopIpc["Service"] =>
               runPromise(
                 Effect.gen(function* () {
                   yield* Effect.annotateCurrentSpan({ channel });
+                  if (!(yield* isTrustedSender(event))) {
+                    yield* Effect.logWarning("rejected IPC from an untrusted sender");
+                    return yield* new DesktopIpcUntrustedSenderError({ channel });
+                  }
                   return yield* handler(raw, event);
                 }).pipe(Effect.annotateLogs({ channel }), Effect.withSpan("desktop.ipc.invoke")),
               ),
@@ -131,6 +165,10 @@ export const make = (ipcMain: DesktopIpcMain): DesktopIpc["Service"] =>
               event.returnValue = runSync(
                 Effect.gen(function* () {
                   yield* Effect.annotateCurrentSpan({ channel });
+                  if (!(yield* isTrustedSender(event))) {
+                    yield* Effect.logWarning("rejected IPC from an untrusted sender");
+                    return null;
+                  }
                   return yield* handler();
                 }).pipe(
                   Effect.annotateLogs({ channel }),
@@ -151,8 +189,9 @@ export const make = (ipcMain: DesktopIpcMain): DesktopIpc["Service"] =>
       );
     }),
   });
+});
 
-export const layer = (ipcMain: DesktopIpcMain) => Layer.succeed(DesktopIpc, make(ipcMain));
+export const layer = (ipcMain: DesktopIpcMain) => Layer.effect(DesktopIpc, make(ipcMain));
 
 export interface DesktopIpcMethodRegistration<
   Payload,

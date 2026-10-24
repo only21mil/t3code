@@ -6,9 +6,11 @@ import {
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as PreviewManager from "../../preview/Manager.ts";
 import * as PreviewIpc from "./preview.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
@@ -35,6 +37,7 @@ vi.mock("electron", () => ({
 const decodeCaptureFailure = Schema.decodeUnknownEffect(PreviewCaptureFailure);
 
 describe("preview IPC methods", () => {
+  const mainFrame = {};
   const invokeCapture = (
     method: typeof PreviewIpc.startRecording | typeof PreviewIpc.captureScreenshot,
     manager: Partial<PreviewManager.PreviewManager["Service"]>,
@@ -42,7 +45,7 @@ describe("preview IPC methods", () => {
     Effect.scoped(
       Effect.gen(function* () {
         let listener: DesktopIpc.DesktopIpcHandleListener | undefined;
-        const ipc = DesktopIpc.make({
+        const ipc = yield* DesktopIpc.make({
           removeHandler: vi.fn(),
           handle: (_channel, registered) => {
             listener = registered;
@@ -52,9 +55,17 @@ describe("preview IPC methods", () => {
         });
         yield* ipc.handle(method);
         return yield* Effect.promise(async () =>
-          structuredClone(await listener!({ sender: { id: 7 } }, { tabId: "capture-tab" })),
+          structuredClone(
+            await listener!(
+              { sender: { id: 7 }, senderFrame: mainFrame },
+              { tabId: "capture-tab" },
+            ),
+          ),
         );
       }).pipe(
+        Effect.provideService(ElectronWindow.ElectronWindow, {
+          main: Effect.succeed(Option.some({ webContents: { id: 7, mainFrame } })),
+        } as unknown as ElectronWindow.ElectronWindow["Service"]),
         Effect.provideService(
           PreviewManager.PreviewManager,
           manager as PreviewManager.PreviewManager["Service"],
