@@ -3,8 +3,10 @@
 
     replay_recheck.py MANIFEST MCP_CALL SCRATCH    prints one JSON object {replay, answered, unverified}; exit 0
 
-An entry replays only while its thread has no user message after the ask it carries (the entry's answer_check:
-host, thread_id, ask_position). Answered, or unreadable, it is archived instead (SOL-7). The check keys on the
+An entry replays only while its thread has no answer after the ask it carries (the entry's answer_check: host,
+thread_id, ask_position). An answer is the watchdog's: sats_stall_asks.answers(), so a delegated-task completion,
+a server or provider wake and a system notice leave the ask open (the live base cb8a6cc0's rule). Answered, or
+unreadable, it is archived instead (SOL-7). The check keys on the
 user-answer position, never on settled state: a9acdeb1 is settled only because the 19:39 sweep settled it over
 an unanswered Victor ask (notice-delay-rca-20261023, TRIAGE.md), so settled says nothing about an answer.
 
@@ -25,6 +27,8 @@ import subprocess
 import sys
 
 PAGES = 10
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools/sats-stall-watchdog/src'))
+from sats_stall_asks import answers  # noqa: E402 - the candidate watchdog's answer rule, one definition
 
 
 def mcp_reader(mcp_call, scratch):
@@ -52,7 +56,7 @@ def mcp_reader(mcp_call, scratch):
 
 
 def answered(read, check):
-    """True when a user message follows the ask's position in its thread."""
+    """True when an answer (answers()) follows the ask's position in its thread."""
     after = check['ask_position']
     for _ in range(PAGES):
         page = read(check['host'], {'threadId': check['thread_id'], 'view': 'messages', 'afterPosition': after,
@@ -60,7 +64,7 @@ def answered(read, check):
         if (page.get('thread') or {}).get('threadId') != check['thread_id']:
             raise ValueError('the read named another thread')
         items = page.get('items') or []
-        if any(i.get('type') == 'user_message' and i.get('position', -1) > check['ask_position'] for i in items):
+        if any(answers(i) and i.get('position', -1) > check['ask_position'] for i in items):
             return True
         if not page.get('hasMore') or not items:
             return False

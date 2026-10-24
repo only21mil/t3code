@@ -22,7 +22,9 @@ def load(name):
 
 gate, recheck = load('watchdog_gate'), load('replay_recheck')
 FAKE = '''#!/usr/bin/env bash
+[ "$FAKE_RC" = 1 ] && exit 1
 case "$*" in
+  *"show -p LoadState --value sats-stall-watchdog."*) echo "$FAKE_LOAD" ;;
   *"show -p ActiveState --value sats-stall-watchdog.service") echo "$FAKE_SERVICE" ;;
   *"show -p ActiveState --value sats-stall-watchdog.timer") echo "$FAKE_TIMER" ;;
   *"show -p NextElapseUSecRealtime --value sats-stall-watchdog.timer") echo ;;
@@ -46,10 +48,11 @@ class GateTests(unittest.TestCase):
         (self.directory / 'systemctl').write_text(FAKE)
         (self.directory / 'systemctl').chmod(0o700)
 
-    def run_gate(self, service='inactive', timer='active', next_in=240.0, listing=True, mono_in=None):
+    def run_gate(self, service='inactive', timer='active', next_in=240.0, listing=True, mono_in=None, rc=0, load='loaded'):
         next_usec = None if next_in is None else int((time.time() + next_in) * 1e6)
         rows = [{'next': next_usec, 'left': next_usec, 'unit': 'sats-stall-watchdog.timer', 'activates': 'sats-stall-watchdog.service'}]
         env = dict(os.environ, PATH=str(self.directory) + ':' + os.environ['PATH'], FAKE_SERVICE=service, FAKE_TIMER=timer,
+                   FAKE_RC=str(rc), FAKE_LOAD=load,
                    FAKE_LIST=json.dumps(rows) if listing else 'fail',
                    FAKE_MONO=span(time.monotonic() + mono_in) if mono_in is not None else 'infinity')
         out = subprocess.run([sys.executable, '-I', str(ROOT / 'watchdog_gate.py')], env=env, capture_output=True, text=True, timeout=60)
@@ -73,6 +76,18 @@ class GateTests(unittest.TestCase):
             with self.subTest(name):
                 self.assertEqual(self.run_gate(**kwargs)[0], 3)
         self.assertEqual(self.run_gate(timer='inactive', next_in=None)[0], 0)  # a stopped timer schedules no tick
+
+    def test_SOLR21_systemctl_errors_unknown_states_and_missing_units_fail_closed(self):
+        # Sol round 2: systemctl rc=1 with empty stdout read as service '' and timer '', and the gate said ok, exit 0.
+        cases = {'systemctl exits 1 with empty stdout': {'rc': 1, 'listing': False}, 'unknown service state': {'service': 'bogus'},
+                 'empty service state': {'service': ''}, 'service in maintenance': {'service': 'maintenance'},
+                 'unknown timer state': {'timer': 'bogus'}, 'failed timer': {'timer': 'failed'},
+                 'units not found (systemd reads them inactive)': {'load': 'not-found', 'timer': 'inactive', 'next_in': None}}
+        for name, kwargs in cases.items():
+            with self.subTest(name):
+                code, report = self.run_gate(**kwargs)
+                self.assertEqual((code, report['ok']), (3, False))
+        self.assertEqual(self.run_gate(service='failed')[0], 0)  # the last tick failed and is over
 
     def test_timespan(self):
         self.assertAlmostEqual(gate.timespan('2d 15h 17min 58.829349s'), 2 * 86400 + 15 * 3600 + 17 * 60 + 58.829349)
@@ -102,6 +117,18 @@ class RecheckTests(unittest.TestCase):
         read, _ = self.reader([], thread='mcp:other')
         with self.assertRaises(ValueError):
             recheck.answered(read, self.CHECK)
+
+    def test_LIVE1_an_agent_artifact_after_the_ask_is_no_answer(self):
+        # The live base cb8a6cc0's rule: a delegated completion, a server or provider wake or a system notice is not
+        # Victor's answer, so the replay stays; a person or a Sats relay through MCP answers it.
+        for fields, verdict in (({'createdBy': 'agent', 'creationSource': 'server'}, False),
+                                ({'createdBy': 'agent', 'creationSource': 'provider'}, False),
+                                ({'createdBy': 'system', 'creationSource': 'server'}, False),
+                                ({'createdBy': 'agent', 'creationSource': 'server', 'delegatedCompletion': {'taskIds': ['t']}}, False),
+                                ({'createdBy': 'user', 'creationSource': 'web'}, True), ({'createdBy': 'agent', 'creationSource': 'mcp'}, True)):
+            with self.subTest(fields=fields):
+                read, _ = self.reader([{'position': 28, 'type': 'assistant_message'}, dict(position=30, type='user_message', **fields)])
+                self.assertEqual(recheck.answered(read, self.CHECK), verdict)
 
     def manifest(self, directory, check=CHECK):
         entries = [{'file': 'a.json', 'decision': 'replay', **({'answer_check': check} if check else {})},

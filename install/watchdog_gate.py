@@ -8,6 +8,10 @@ NextElapseUSecRealtime empty, so a gate that parses that property never passes (
 `systemctl --user list-timers --all --output=json` (`next`, microseconds since the epoch), else from
 NextElapseUSecMonotonic against CLOCK_MONOTONIC. While the service runs a tick the timer has no next elapse, which
 is busy. A stopped timer schedules no tick. The script runs only `systemctl --user show` and `list-timers`.
+
+It fails closed (SOL-R2-1): both units must read LoadState=loaded (systemd reports a missing unit as inactive), a
+show that exits nonzero or prints nothing reads as unknown, the service must be idle (inactive or failed) and the
+timer active or inactive. Anything else is ok=false, exit 3.
 """
 import argparse
 import json
@@ -17,7 +21,8 @@ import sys
 import time
 
 SERVICE, TIMER = 'sats-stall-watchdog.service', 'sats-stall-watchdog.timer'
-BUSY = {'active', 'activating', 'deactivating', 'reloading', 'refreshing'}
+IDLE = {'inactive', 'failed'}       # service states between ticks; every other state, unknown included, waits
+TIMER_STATES = {'active', 'inactive'}
 UNITS = {'y': 31557600, 'month': 2629800, 'w': 604800, 'd': 86400, 'h': 3600, 'min': 60, 's': 1, 'ms': 1e-3, 'us': 1e-6}
 SPAN_RE = re.compile(r'(\d+(?:\.\d+)?)(month|min|ms|us|y|w|d|h|s)')
 
@@ -27,7 +32,10 @@ def systemctl(*args):
 
 
 def show(unit, prop):
-    return systemctl('show', '-p', prop, '--value', unit).stdout.strip()
+    """The property's value, or None when systemctl exits nonzero or prints nothing."""
+    out = systemctl('show', '-p', prop, '--value', unit)
+    value = out.stdout.strip()
+    return value if out.returncode == 0 and value else None
 
 
 def timespan(text):
@@ -49,7 +57,7 @@ def next_tick():
         if row is not None:
             value = row.get('next')
             return (value / 1e6 - time.time(), 'list-timers') if type(value) is int and value > 0 else (None, 'list-timers')
-    monotonic = timespan(show(TIMER, 'NextElapseUSecMonotonic'))
+    monotonic = timespan(show(TIMER, 'NextElapseUSecMonotonic') or '')
     return (monotonic - time.monotonic(), 'monotonic') if monotonic is not None else (None, None)
 
 
@@ -58,9 +66,11 @@ def main(argv=None):
     parser.add_argument('--min', type=float, default=90)
     args = parser.parse_args(argv)
     service, timer = show(SERVICE, 'ActiveState'), show(TIMER, 'ActiveState')
+    loaded = [show(SERVICE, 'LoadState'), show(TIMER, 'LoadState')]
     left, source = next_tick()
-    ok = service not in BUSY and (timer != 'active' or (left is not None and left >= args.min))
-    print(json.dumps({'service': service, 'timer': timer, 'left': None if left is None else round(left, 1),
+    ok = (loaded == ['loaded', 'loaded'] and service in IDLE and timer in TIMER_STATES
+          and (timer == 'inactive' or (left is not None and left >= args.min)))
+    print(json.dumps({'service': service, 'timer': timer, 'loaded': loaded, 'left': None if left is None else round(left, 1),
                       'source': source, 'min': args.min, 'ok': ok}, sort_keys=True))
     return 0 if ok else 3
 
