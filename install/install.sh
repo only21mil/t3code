@@ -9,6 +9,7 @@ umask 077
 
 LANE=/home/victor/.t3-nightly/scratch/2026-10-24-you-are-now-running-as-5aa90f48
 CAND="$LANE/candidate"
+RECORD_ROOT="${NOTICE_PACKAGE_RECORD_ROOT:-$LANE}"  # a sandbox rehearsal keeps its record in the sandbox
 LIB="$HOME/.local/lib/sats-stall-watchdog"
 ASKS="$LIB/sats_stall_asks.py"
 NOTIFY="$HOME/.local/bin/sats-completion-notify"
@@ -31,7 +32,7 @@ while [ $# -gt 0 ]; do
 done
 
 TS=$(date +%Y%m%dT%H%M%S)
-RECORD="$LANE/install-record-$TS"
+RECORD="$RECORD_ROOT/install-record-$TS"
 say() { printf '%s %s\n' "$(date '+%H:%M:%S')" "$*"; }
 die() { say "STOP: $*"; exit 1; }
 sha() { sha256sum "$1" | cut -d' ' -f1; }
@@ -137,7 +138,7 @@ say "events migrated"
 
 # ---- 5. requeue triage: archive stale and DONE entries; the replay entry stays queued -------------------
 ARCHIVE="$STATE/requeue-archive-$(date +%Y%m%d)"
-mkdir -p -m 700 "$ARCHIVE"
+[ -d "$ARCHIVE" ] || mkdir -m 700 "$ARCHIVE"
 python3 -I - "$CAND/install/requeue-triage.json" "$RQ" "$ARCHIVE" "$RECORD" <<'EOF'
 import json, os, sys
 from pathlib import Path
