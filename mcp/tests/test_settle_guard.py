@@ -1,0 +1,156 @@
+"""notice-delay-rca-20261023 patch 2: a settle naming another thread runs only for a terminal ACCEPTED RESULT with
+no live children and no pending votes. Offline: a fake MCP rpc, RESULT.md files under the test's own directory."""
+import importlib.util
+import json
+import os
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[1]
+spec = importlib.util.spec_from_file_location('mcp_call', ROOT / 'mcp_call.py')
+mcp_call = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mcp_call)
+guard = getattr(mcp_call, 'sweep_settle_refusal', None)
+
+
+def text(value):
+    return {'content': [{'type': 'text', 'text': json.dumps(value)}]}
+
+
+class FakeRpc:
+    """t3_thread_read and t3_thread_list over a dict model; any other tool is a test failure."""
+
+    def __init__(self, threads):
+        self.threads, self.calls = threads, []
+
+    def __call__(self, method, params):
+        self.calls.append((method, params))
+        assert method == 'tools/call', method
+        name, args = params['name'], params['arguments']
+        if name == 't3_thread_list':
+            rows = [dict(t['thread']) for t in self.threads.values() if args.get('includeSubagents')]
+            return text({'threads': rows, 'nextCursor': None})
+        assert name == 't3_thread_read', name
+        model = self.threads[args['threadId']]
+        after = args.get('afterPosition', -1)
+        return text({'thread': model['thread'], 'recentRuns': model.get('runs', []),
+                     'items': [i for i in model.get('items', []) if i['position'] > after][:args.get('limit', 50)]})
+
+
+def reply(position, body, kind='assistant_message'):
+    return {'position': position, 'type': kind, 'status': 'completed', 'text': body}
+
+
+class SettleGuardTests(unittest.TestCase):
+    def setUp(self):
+        base = Path(os.environ.get('TMPDIR') or ROOT)
+        self.directory = Path(tempfile.mkdtemp(prefix='settle-guard-', dir=base))
+        self.result = self.directory / 'lane' / 'RESULT.md'
+        self.result.parent.mkdir()
+        self.result.write_text('DONE\n\nReviewed: Opus ACCEPT, DeepSeek ACCEPT.\n')
+
+    def model(self, items, children=(), active=None):
+        parent = {'thread': {'threadId': 'p', 'projectId': 'proj', 'activeRunId': active, 'pendingRequestCount': 0,
+                             'itemCount': len(items) + 1, 'parentThreadId': None}, 'items': items}
+        threads = {'p': parent}
+        for n, (status, verdict, model) in enumerate(children):
+            tid = 'c%d' % n
+            threads[tid] = {'thread': {'threadId': tid, 'projectId': 'proj', 'parentThreadId': 'p', 'model': model,
+                                       'activeRunId': 'run' if status == 'running' else None, 'itemCount': 2},
+                            'runs': [{'status': status, 'completedAt': '2026-10-23T23:%02d:00Z' % n}],
+                            'items': [reply(1, verdict)]}
+        return FakeRpc(threads)
+
+    def done(self):
+        return [reply(0, 'brief', 'user_message'), reply(1, 'DONE. Result: %s' % self.result)]
+
+    def test_guard_exists(self):
+        self.assertTrue(callable(guard), 'mcp_call.py has no sweep_settle_refusal')
+
+    @unittest.skipIf(guard is None, 'no guard in this mcp_call.py')
+    def test_accepted_terminal_result_with_finished_children_may_settle(self):
+        rpc = self.model(self.done(), children=[('completed', 'ACCEPT', 'opus'), ('completed', 'ACCEPT\nno findings', 'deepseek')])
+        self.assertIsNone(guard(rpc, 'fd', 'p'))
+        self.assertNotIn('t3_thread_organize', [c[1]['name'] for c in rpc.calls])
+
+    @unittest.skipIf(guard is None, 'no guard in this mcp_call.py')
+    def test_each_missing_condition_refuses(self):
+        cases = {
+            'active run': (self.model(self.done(), active='run:1'), 'active run'),
+            'no DONE reply': (self.model([reply(0, 'brief', 'user_message'), reply(1, 'Sol R2 vote is REQUEST_CHANGES.')]),
+                              'no reply leads with DONE'),
+            'reply after DONE asks': (self.model(self.done() + [reply(2, 'NEEDS-VICTOR p pick A /x')]), 'asks Victor'),
+            'message after DONE': (self.model(self.done() + [reply(2, 'one more thing', 'user_message')]), 'arrived after'),
+            'live child (4f5dd34b)': (self.model(self.done(), children=[('completed', 'REQUEST_CHANGES', 'sol'),
+                                                                       ('running', '', 'deepseek')]), 'still working'),
+            'newest vote rejects': (self.model(self.done(), children=[('completed', 'REQUEST_CHANGES', 'sol')]), 'REQUEST_CHANGES'),
+        }
+        for name, (rpc, reason) in cases.items():
+            with self.subTest(name):
+                self.assertIn(reason, guard(rpc, 'fd', 'p') or '')
+
+    @unittest.skipIf(guard is None, 'no guard in this mcp_call.py')
+    def test_result_must_lead_with_done_and_say_why_no_review(self):
+        self.result.write_text('BLOCKED\n')  # 7237c08a and 7a9c4131: reviewed, but BLOCKED
+        self.assertIn('line 1 is not DONE', guard(self.model(self.done(), children=[('completed', 'ACCEPT', 'opus')]), 'fd', 'p'))
+        self.result.write_text('DONE\n')
+        self.assertIn('review is not required', guard(self.model(self.done()), 'fd', 'p'))
+        self.result.write_text('DONE\nReview is not required: proof thread.\n')
+        self.assertIsNone(guard(self.model(self.done()), 'fd', 'p'))
+
+    def main_calls(self, arguments, refusal):
+        """Drive main() over a fake transport. Returns the tools/call names it sent and the guard's calls."""
+        sent, checked = [], []
+
+        class Response:
+            def __init__(self, body):
+                self.body, self.headers = body, {'content-type': 'application/json'}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return self.body
+
+        def urlopen(request, timeout=None):
+            message = json.loads(request.data)
+            if message['method'] == 'tools/call':
+                sent.append(message['params']['name'])
+            return Response(json.dumps({'jsonrpc': '2.0', 'id': 1, 'result': {'serverInfo': {}, 'content': []}}).encode())
+
+        def recorded(rpc, host, tid):
+            checked.append((host, tid))
+            return refusal
+        with patch.object(mcp_call, 'host_url', lambda name: 'http://fixture'), \
+                patch.object(mcp_call, 'read_token', lambda name: 'fixture-token'), \
+                patch.object(mcp_call, 'PACK', str(self.directory)), \
+                patch.object(mcp_call, 'sweep_settle_refusal', recorded), \
+                patch.object(mcp_call.urllib.request, 'urlopen', urlopen), \
+                patch('builtins.print'):
+            try:
+                mcp_call.main(['--host', 'mbp', 'call', 't3_thread_organize', json.dumps(arguments)])
+            except SystemExit as stop:
+                return sent, checked, str(stop)
+        return sent, checked, None
+
+    @unittest.skipIf(guard is None, 'no guard in this mcp_call.py')
+    def test_main_guards_a_settle_naming_a_thread_and_nothing_else(self):
+        # The 19:39 sweep's call: refused before any settle reaches the server.
+        sent, checked, stop = self.main_calls({'action': 'settle', 'threadId': 'mcp:4f5dd34b'}, 'child c1 is still working')
+        self.assertEqual((sent, checked), ([], [('mbp', 'mcp:4f5dd34b')]))
+        self.assertIn('settle refused for mcp:4f5dd34b', stop)
+        sent, checked, stop = self.main_calls({'action': 'settle', 'threadId': 'mcp:3e9f5d46'}, None)
+        self.assertEqual((sent, checked, stop), (['t3_thread_organize'], [('mbp', 'mcp:3e9f5d46')], None))
+        # A thread settling itself names no threadId and keeps canon's self-settle checks; other actions pass through.
+        for arguments in ({'action': 'settle'}, {'action': 'archive', 'threadId': 'mcp:x'}):
+            with self.subTest(arguments=arguments):
+                sent, checked, stop = self.main_calls(arguments, 'must not be asked')
+                self.assertEqual((sent, checked, stop), (['t3_thread_organize'], [], None))
+
+if __name__ == '__main__':
+    unittest.main()

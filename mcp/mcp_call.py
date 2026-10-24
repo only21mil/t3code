@@ -17,6 +17,7 @@ import http.client
 import json
 import os
 import re
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -87,6 +88,85 @@ def failure(e: Exception) -> str:
             return f"{type(reason).__name__} errno {num}: {os.strerror(num)}"
         return type(reason).__name__
     return type(e).__name__
+
+
+TERMINAL_RUN = {"completed", "failed", "cancelled", "interrupted", "rolled_back"}
+VERDICT = re.compile(r"(ACCEPT|REQUEST_CHANGES)\b")
+RESULT_PATH = re.compile(r"(/(?:home|Users)/[A-Za-z0-9._/-]+/RESULT\.md)")
+STILL_OPEN = re.compile(r"NEEDS-VICTOR|^[ \t>*_-]*(?:BLOCKED|FAILED|CANCEL+ED)\b", re.M)
+
+
+def sweep_settle_refusal(rpc, host: str, thread_id: str) -> str | None:
+    """Why a settle of another thread must not run, or None.
+
+    Victor 19:47 CT 2026-10-23: a sweep settles only a thread with a terminal
+    ACCEPTED RESULT and no live children or pending votes. The server already
+    refuses an active run, a queued message and a pending request; this adds
+    the children, votes and RESULT it cannot see. A thread settling itself
+    (no threadId) keeps its own self-settle checks."""
+    def read(tool: str, args: dict) -> dict:
+        out = rpc("tools/call", {"name": tool, "arguments": args})
+        if out.get("isError"):
+            raise SystemExit(f"settle guard: {tool} failed; nothing settled")
+        return json.loads(out["content"][0]["text"])
+
+    head = read("t3_thread_read", {"threadId": thread_id, "view": "messages", "limit": 1, "maxCharsPerItem": 1, "runLimit": 1})
+    thread = head["thread"]
+    if thread.get("activeRunId") or thread.get("pendingRequestCount"):
+        return "thread has an active run or a pending request"
+    tail = read("t3_thread_read", {"threadId": thread_id, "view": "messages", "runLimit": 1, "limit": 40,
+                                   "maxCharsPerItem": 4000, "afterPosition": max(0, thread["itemCount"] - 41)})
+    items = tail["items"]
+    done = [n for n, i in enumerate(items) if i["type"] == "assistant_message" and i["status"] == "completed"
+            and i["text"].lstrip(" \t>*_-#").startswith("DONE")]
+    if not done:
+        return "no reply leads with DONE"
+    final = items[done[-1]]["text"]
+    for later in items[done[-1] + 1:]:
+        if later["type"] == "user_message":
+            return "a message arrived after the DONE reply"
+        if later["type"] == "assistant_message" and STILL_OPEN.search(later["text"]):
+            return "a reply after DONE is BLOCKED or asks Victor"
+    children = []
+    cursor = None
+    while True:
+        page = read("t3_thread_list", {"projectId": thread["projectId"], "includeSubagents": True, "limit": 100,
+                                       **({} if cursor is None else {"cursor": cursor})})
+        children += [t for t in page.get("threads", []) if t.get("parentThreadId") == thread_id]
+        cursor = page.get("nextCursor")
+        if cursor is None:
+            break
+    votes: dict[str, tuple[str, str]] = {}
+    for child in children:
+        state = read("t3_thread_read", {"threadId": child["threadId"], "view": "messages", "limit": 1,
+                                        "maxCharsPerItem": 1, "runLimit": 1})
+        runs = state.get("recentRuns") or []
+        if state["thread"].get("activeRunId") or (runs and runs[0]["status"] not in TERMINAL_RUN):
+            return f"child {child['threadId']} is still working (live child or pending vote)"
+        last = read("t3_thread_read", {"threadId": child["threadId"], "view": "messages", "runLimit": 1, "limit": 20,
+                                       "maxCharsPerItem": 200, "afterPosition": max(0, state["thread"]["itemCount"] - 21)})
+        said = [i for i in last["items"] if i["type"] == "assistant_message" and i["status"] == "completed"]
+        verdict = VERDICT.match(said[-1]["text"].lstrip()) if said else None
+        if verdict:
+            # A reviewer seat is its model; its newest vote stands.
+            seat = state["thread"].get("model") or child["threadId"]
+            at = runs[0].get("completedAt") or ""
+            if seat not in votes or at > votes[seat][0]:
+                votes[seat] = (at, verdict.group(1))
+    if any(vote != "ACCEPT" for _, vote in votes.values()):
+        return "a reviewer's newest vote is REQUEST_CHANGES"
+    path = RESULT_PATH.search(final)
+    if path is None:
+        return "final reply names no RESULT.md"
+    probe = ["head", "-n", "60", path.group(1)]
+    shown = subprocess.run(probe if host == "fd" else ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, *probe],
+                           capture_output=True, text=True, timeout=30)
+    lines = shown.stdout.splitlines()
+    if shown.returncode != 0 or not lines or not lines[0].strip().startswith("DONE"):
+        return "RESULT.md line 1 is not DONE"
+    if not votes and not re.search(r"(?im)^.*\breview\b.*\bnot required\b", shown.stdout):
+        return "no reviewer ACCEPT and RESULT.md does not say review is not required"
+    return None
 
 
 def main(argv: list[str]) -> None:
@@ -163,6 +243,10 @@ def main(argv: list[str]) -> None:
             json.dump(tools, fh, indent=1)
         print(len(tools), "tools:", [t["name"] for t in tools])
     elif argv[0] == "call":
+        if argv[1] == "t3_thread_organize" and arguments.get("action") == "settle" and arguments.get("threadId"):
+            refused = sweep_settle_refusal(rpc, name, arguments["threadId"])
+            if refused:
+                raise SystemExit(f"settle refused for {arguments['threadId']}: {refused}")
         result = rpc("tools/call", {"name": argv[1], "arguments": arguments})
         with open(PACK + "/mcp-last-result.json", "w") as fh:
             json.dump(result, fh, indent=1)
