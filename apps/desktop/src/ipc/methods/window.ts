@@ -272,10 +272,17 @@ export const showContextMenu = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.CONTEXT_MENU_CHANNEL,
   payload: ContextMenuInput,
   result: Schema.NullOr(Schema.String),
-  handler: Effect.fn("desktop.ipc.window.showContextMenu")(function* (input) {
+  handler: Effect.fn("desktop.ipc.window.showContextMenu")(function* (input, event) {
     const electronMenu = yield* ElectronMenu.ElectronMenu;
     const electronWindow = yield* ElectronWindow.ElectronWindow;
-    const window = yield* electronWindow.focusedMainOrFirst;
+    // The position is relative to the asking window, and macOS right-clicks reach
+    // a window without focusing it, so the focused window can be the preview PiP.
+    const senderWindow = Option.fromNullishOr(
+      event && Electron.webContents.fromId(event.sender.id),
+    ).pipe(Option.flatMapNullishOr((contents) => Electron.BrowserWindow.fromWebContents(contents)));
+    const window = Option.isSome(senderWindow)
+      ? senderWindow
+      : yield* electronWindow.focusedMainOrFirst;
     if (Option.isNone(window)) {
       return null;
     }

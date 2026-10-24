@@ -8,22 +8,26 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { vi } from "vite-plus/test";
 
-const { focusedWebContents, ownerWindow } = vi.hoisted(() => ({
+const { contentsById, focusedWebContents, ownerWindow } = vi.hoisted(() => ({
+  contentsById: vi.fn(),
   focusedWebContents: vi.fn(),
   ownerWindow: vi.fn(),
 }));
 vi.mock("electron", () => ({
-  webContents: { getFocusedWebContents: focusedWebContents },
+  webContents: { fromId: contentsById, getFocusedWebContents: focusedWebContents },
   BrowserWindow: { fromWebContents: ownerWindow },
 }));
 
 import * as DesktopBackendConfiguration from "../../backend/DesktopBackendConfiguration.ts";
 import * as DesktopBackendManager from "../../backend/DesktopBackendManager.ts";
 import * as DesktopBackendPool from "../../backend/DesktopBackendPool.ts";
+import * as ElectronMenu from "../../electron/ElectronMenu.ts";
+import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import {
   getLocalEnvironmentBootstraps,
   getRelayTelemetryEnabled,
   probeRemoteEditors,
+  showContextMenu,
 } from "./window.ts";
 
 const readyWslConfig: DesktopBackendManager.DesktopBackendStartConfig = {
@@ -190,6 +194,44 @@ describe("getRelayTelemetryEnabled", () => {
       );
     }),
   );
+});
+
+describe("showContextMenu", () => {
+  it.effect("opens the menu on the window that asked while another window has focus", () => {
+    const mainContents = { id: 7 };
+    const mainWindow = { id: 1 } as Electron.BrowserWindow;
+    const pictureInPictureWindow = { id: 2 } as Electron.BrowserWindow;
+    const owners: Electron.BrowserWindow[] = [];
+    contentsById.mockImplementation((id) => (id === mainContents.id ? mainContents : undefined));
+    ownerWindow.mockImplementation((contents) => (contents === mainContents ? mainWindow : null));
+
+    return Effect.gen(function* () {
+      const selected = yield* showContextMenu.handler(
+        { items: [{ id: "rename", label: "Rename" }], position: { x: 40, y: 60 } },
+        { sender: { id: mainContents.id } },
+      );
+      assert.strictEqual(selected, "rename");
+      assert.strictEqual(owners.length, 1);
+      assert.strictEqual(owners[0], mainWindow);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.succeed(ElectronWindow.ElectronWindow, {
+            focusedMainOrFirst: Effect.succeedSome(pictureInPictureWindow),
+          } as ElectronWindow.ElectronWindow["Service"]),
+          Layer.succeed(ElectronMenu.ElectronMenu, {
+            setApplicationMenu: () => Effect.void,
+            popupTemplate: () => Effect.void,
+            showContextMenu: (input) =>
+              Effect.sync(() => {
+                owners.push(input.window);
+                return Option.some("rename");
+              }),
+          }),
+        ),
+      ),
+    );
+  });
 });
 
 it.effect.skipIf(HostProcess.Platform.defaultValue() === "win32")(
