@@ -99,6 +99,15 @@ block "rehearsal with the a31f46b install.sh and rollback.sh on the cb8a6cc0 liv
 echo "The a31f46b dry run on a cb8a6cc0 HOME: \`$(head -n 3 "$RUN/rehearsal-round1/main/dry-run.txt" | grep -m1 STOP || echo 'no STOP line')\`"
 echo
 
+echo "## 2c. The live base's own 19-case matrix (blocked-threads-rca-20261023, MBP)"
+echo
+echo "Unmodified MBP copy (\`repair-r2/needs-victor-matrix/test_needs_victor.py\`, sha256 \`$(sha256sum "$LANE/repair-r2/needs-victor-matrix/test_needs_victor.py" | cut -c1-16)\`), deps = this suite's src:"
+echo
+block "unmodified matrix on the live base cb8a6cc0" "$LANE/repair-r2/needs-victor-matrix" python3 -B -I test_needs_victor.py "$LIVEBASE"
+block "unmodified matrix on the candidate (the per-ask occurrence suffix alone differs)" "$LANE/repair-r2/needs-victor-matrix" python3 -B -I test_needs_victor.py "$W/src/sats_stall_asks.py"
+block "suite copy (tests/needs_victor) on the candidate" "$W/tests/needs_victor" python3 -B -I test_needs_victor.py "$W/src/sats_stall_asks.py"
+block "suite copy (tests/needs_victor) on round-1 a31f46b (must fail)" "$W/tests/needs_victor" python3 -B -I test_needs_victor.py "$PRE/tools/sats-stall-watchdog/src/sats_stall_asks.py"
+
 echo "## 2d. Review round-3 tests against the round-2 candidate 917f4de (must fail)"
 echo
 PRE2="$RUN/round2"
@@ -116,22 +125,13 @@ block "the reviewers' round-3 probes on 917f4de (repair-r3/probes.py)" "$CAND" p
   "$PRE2/tools/sats-stall-watchdog/src/sats_stall_asks.py" "$PRE2/mcp/mcp_call.py"
 block "the reviewers' round-3 probes on the candidate" "$CAND" python3 -B "$LANE/repair-r3/probes.py" "$W/src/sats_stall_asks.py" "$CAND/mcp/mcp_call.py"
 
-echo "## 2c. The live base's own 19-case matrix (blocked-threads-rca-20261023, MBP)"
-echo
-echo "Unmodified MBP copy (\`repair-r2/needs-victor-matrix/test_needs_victor.py\`, sha256 \`$(sha256sum "$LANE/repair-r2/needs-victor-matrix/test_needs_victor.py" | cut -c1-16)\`), deps = this suite's src:"
-echo
-block "unmodified matrix on the live base cb8a6cc0" "$LANE/repair-r2/needs-victor-matrix" python3 -B -I test_needs_victor.py "$LIVEBASE"
-block "unmodified matrix on the candidate (the per-ask occurrence suffix alone differs)" "$LANE/repair-r2/needs-victor-matrix" python3 -B -I test_needs_victor.py "$W/src/sats_stall_asks.py"
-block "suite copy (tests/needs_victor) on the candidate" "$W/tests/needs_victor" python3 -B -I test_needs_victor.py "$W/src/sats_stall_asks.py"
-block "suite copy (tests/needs_victor) on round-1 a31f46b (must fail)" "$W/tests/needs_victor" python3 -B -I test_needs_victor.py "$PRE/tools/sats-stall-watchdog/src/sats_stall_asks.py"
-
 echo "## 3. victor-vault tools/sats-stall-watchdog (canon-clone, item 4)"
 echo
 echo "Staged, not pushed: \`$(git -C "$LANE/canon-clone" log --format='%h %s' origin/main..HEAD | tr '\n' ';' | sed 's/;/; /g')\`"
 echo
 echo "4a02910 is an ancestor of HEAD: $(git -C "$LANE/canon-clone" merge-base --is-ancestor 4a02910 HEAD && echo yes || echo NO). origin/main is an ancestor (the push fast-forwards): $(git -C "$LANE/canon-clone" merge-base --is-ancestor origin/main HEAD && echo yes || echo NO)."
 echo
-block "vault suite at HEAD (catch-up + items 1, 5, 6, round-2 repairs)" "$LANE/canon-clone/tools/sats-stall-watchdog" python3 -m unittest discover -s tests -p 'test_*.py'
+block "vault suite at HEAD (catch-up + items 1, 5, 6, round-1 to round-3 repairs)" "$LANE/canon-clone/tools/sats-stall-watchdog" python3 -m unittest discover -s tests -p 'test_*.py'
 for m in sats_stall_asks.py sats_stall_watchdog.py; do
   echo "Vault \`src/$m\` equals the candidate: $(cmp -s "$LANE/canon-clone/tools/sats-stall-watchdog/src/$m" "$W/src/$m" && echo yes || echo NO)."
 done
