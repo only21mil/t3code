@@ -299,6 +299,48 @@ class EventTests(Generations):
             with self.subTest(kept=text):
                 self.assertTrue(asks.keeps_done(text))
 
+    def test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done(self):
+        # Review round 3. Sol and DeepSeek: ongoing-work synonyms, a quoted template, and a restatement under a negation
+        # on the line above kept a false DONE, while negated ongoing work ("Nothing is pending."), the whole-work
+        # subjects, a lower-case done and a trailing "now" dropped a genuine one. Each companion clause is read on its
+        # own: open work named, unless a negative quantifier opens the clause, or anything unfinished, is progress.
+        progress = ('Phase 2 is underway. The objective is DONE.', 'The nightly re-run is still going. The objective is DONE.',
+                    'The last check is in flight. The work is DONE.', 'Two checks are outstanding. The objective is DONE.',
+                    'More results to come. The objective is DONE.', 'Phase 2 is ongoing. The objective is DONE.',
+                    'The rerun is queued for tonight. The objective is DONE.', 'Phase 2 is not finished. The objective is DONE.',
+                    'No tests passed. The objective is DONE.', 'It is not true that nothing is pending. The objective is DONE.',
+                    'Nothing is pending, but phase 2 runs. The objective is DONE.', 'Should I rerun it? The objective is DONE.',
+                    "I'll post the logs. The objective is DONE.", '2 of 5 checks pass. The objective is DONE.',
+                    'The following sentence is a template, not a completion claim:\n> The objective is DONE.',
+                    'It is false that:\nThe objective is DONE.', 'It is false that:\n\nThe objective is DONE.',
+                    'The notice reads "The objective is DONE."', '- The objective is DONE.',
+                    'Phase 2 log:\n```\nstarting phase 2\n```\nThe objective is DONE.')
+        kept = ('No work is pending. The objective is DONE.', 'Nothing is pending. The work is DONE.',
+                'No remaining items. The objective is DONE.', 'Nothing is running. The objective is DONE.',
+                'There is nothing left. No blockers remain. The research stays DONE.', 'The assignment is DONE.', 'All work is DONE.',
+                'The whole work is DONE.', 'The review is DONE.', 'The repair is DONE.', 'The delivery is DONE.', 'The migration is DONE.',
+                'The work is done.', 'The objective is DONE now.', 'Those are late notices. The objective is DONE and settled.',
+                'Stale background scans stopped. The research stays DONE.', 'Late wake from the review child.\n\nThe objective is DONE.')
+        for text in progress:
+            with self.subTest(progress=text):
+                self.assertFalse(asks.keeps_done(text))
+        for text in kept:
+            with self.subTest(kept=text):
+                self.assertTrue(asks.keeps_done(text))
+        # Through ticks: after a DONE-led progress line, a progress reply sends no DONE; after a DONE reply, a genuine
+        # restatement keeps its DONE, claimed for the DONE reply's own position.
+        threads = {}
+        for n, text in enumerate(progress):
+            threads['p%d' % n] = thread('p%d' % n, build(('user_message', 'brief', T0), ('assistant_message', 'DONE with phase 1.', T0 + 1),
+                                                         ('assistant_message', text, T0 + 2)))
+        for n, text in enumerate(kept):
+            threads['k%d' % n] = thread('k%d' % n, build(('user_message', 'brief', T0), ('assistant_message', 'DONE. Report written.', T0 + 1),
+                                                         ('assistant_message', text, T0 + 2)))
+        self.tick(FakeT3(PROJECTS, threads), now=LATER, max_notices=100, max_reads=100)
+        self.assertEqual(sorted(self.sent_events()), sorted([(tid, 'generation-1-START', 'start') for tid in threads] +
+                                                            [('k%d' % n, 'generation-1-DONE', 'done') for n in range(len(kept))]))
+        self.assertEqual({e['position'] for tid in threads if tid[0] == 'k' for e in self.events(tid) if e['state'] == 'DONE'}, {1})
+
     def test_DSH2_single_read_message_after_a_done_reply_opens_a_generation(self):
         # DeepSeek's single-read probe: one read holds the DONE reply and Victor's follow-up. The follow-up closes
         # generation 1, whose DONE is claimed first for the DONE reply's own run, and opens generation 2 with its own

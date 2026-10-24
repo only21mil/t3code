@@ -941,6 +941,45 @@ class ThreadNoticeTests(Harness):
         self.assertTrue(asks.notice_carries('mcp:t9 approve the T05 push', ask))
         self.assertFalse(asks.notice_carries('mcp:t9 approve the T05 push', ask, [other]))
 
+    def test_SOL2_r3_marker_words_paths_and_negated_sentences_decide_what_a_notice_carries(self):
+        # Review round 3 (Sol). t1: the ask and the delivered notice open with different marker words, which broke the
+        # phrase, so both asks sent. t2: two asks differ only by /repo/main and /repo/staging; dropping paths made them
+        # one, so a notice naming /repo/main covered neither. t3: a notice naming neither path covers neither. t4: "Do
+        # not act on" embeds the ask's line, and that negated sentence covered it.
+        self.transport()
+        main, staging = 'NEEDS-VICTOR approve the T05 push to /repo/main', 'NEEDS-VICTOR approve the T05 push to /repo/staging'
+        turns = {'t1': ('NEEDS-VICTOR pick route A or B for T01 /x/RESULT.md', 'NEEDS-VICTOR rotate the hub key /y/RESULT.md',
+                        'mcp:t1 BLOCKED rotate the hub key'),
+                 't2': (main, staging, 'mcp:t2 BLOCKED approve the T05 push to /repo/main'),
+                 't3': (main, staging, 'mcp:t3 BLOCKED approve the T05 push'),
+                 't4': ('NEEDS-VICTOR pick route A or B for T01 /x', 'BLOCKED: rotate the hub key /y', 'mcp:t4 Do not act on BLOCKED: rotate the hub key')}
+        threads = {}
+        for tid, (first, second, message) in turns.items():
+            threads[tid] = thread(tid, build(('user_message', 'brief', T0), ('assistant_message', first, T0 + 1),
+                                             ('assistant_message', second, T0 + 2)))
+            self.proof(tid, 'blocker', self.UUID)
+            self.payload(tid, 'blocker', message)
+        client = FakeT3(PROJECTS, threads)
+        for _ in range(3):
+            self.tick(client)
+        state = asks.AskState(self.directory)
+        try:
+            statuses = {tid: [(e['position'], e['status']) for e in state.events('fd:' + tid) if e['state'] == 'BLOCKED'] for tid in turns}
+        finally:
+            state.close()
+        self.assertEqual(statuses, {'t1': [(1, 'sent'), (2, 'thread-notice')], 't2': [(1, 'thread-notice'), (2, 'sent')],
+                                    't3': [(1, 'sent'), (2, 'sent')], 't4': [(1, 'sent'), (2, 'sent')]})
+        self.assertEqual(self.hooked(), ['t1', 't2', 't3', 't3', 't4', 't4'])
+        # The message test itself. A notice covers each ask one of its sentences alone carries.
+        hub, route = ({'thread_id': 'mcp:t9', 'markers': [line]} for line in ('Decision for you: rotate the hub key', 'BLOCKED: pick route A or B for T01'))
+        self.assertTrue(asks.notice_carries('mcp:t9 NEEDS-VICTOR rotate the hub key', hub, [route]))
+        message = 'mcp:t9 BLOCKED: rotate the hub key. Also pick route A or B for T01.'
+        self.assertEqual((asks.notice_carries(message, hub, [route]), asks.notice_carries(message, route, [hub])), (True, True))
+        for message in ('mcp:t9 BLOCKED: never rotate the hub key', "mcp:t9 Don't rotate the hub key", 'mcp:t9 BLOCKED: needs Victor',
+                        'mcp:t9 BLOCKED rotate the hub key /z/other.md'):
+            with self.subTest(message=message):
+                self.assertFalse(asks.notice_carries(message, hub, [route]))
+
 
 class UpgradeTests(Harness):
     """Ask state the round-4 watchdog wrote (tests/preimage/sats_stall_asks.py, live 570acb59) has no turn or event.
@@ -1693,6 +1732,38 @@ class LiveBaseTests(Harness):
         self.live_tick(live, FakeT3(PROJECTS, {'s1': thread('s1', [dict(i) for i in rows])}), T0 + 3600, self.directory / 'live',
                        send=lambda plan: (live_sent.append(plan), {'accepted': True})[1])
         self.assertEqual([p['occurrence'] for p in live_sent], ['generation-1-START', 'generation-1-BLOCKED'])
+
+    def test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate(self):
+        # Review round 3. Sol and DeepSeek: the mention filter read a marker followed by one of its nouns, or by joined
+        # marker names, as a mention even when a colon labelled a real request, so asks the live base sends went
+        # silent; and a marker then descriptive prose, an upper-case AND, or a coverage status sentence still sent.
+        live = preimage_needs_victor()
+        asking = ('NEEDS-VICTOR and BLOCKED: pick A or B before I can proceed.', 'NEEDS-VICTOR tokens expired; approve replacing the credentials.',
+                  'BLOCKED: lines 40-60 were not applied. Which branch?', 'NEEDS-VICTOR: tokens for the T05 push expire tomorrow; rotate now?',
+                  'BLOCKED: prefix check fails on F-D; may I bypass?', 'NEEDS-VICTOR: tags on release r3 are wrong; which set?',
+                  'Decision for you: lines 40 or 60 for the fix?', 'NEEDS-VICTOR tokens expired.', 'NEEDS-VICTOR - tags on r3 are wrong',
+                  '**NEEDS-VICTOR** and **BLOCKED**: the hub key is missing /x')
+        naming = ('NEEDS-VICTOR AND BLOCKED markers count anywhere.', 'NEEDS-VICTOR status is now covered by the suite.',
+                  'NEEDS-VICTOR matches inside fences and inline code.', 'NEEDS-VICTOR now matches inside code spans.',
+                  'BLOCKED lines are now counted anywhere.', 'NEEDS-VICTOR detection is covered by 3 tests.',
+                  'Decisions for Victor count as asks now.', 'NEEDS-VICTOR Or BLOCKED lines count.')
+        for text in asking:
+            with self.subTest(ask=text):
+                self.assertEqual(asks.classify(text, final=True)[3], 'BLOCKED')
+        for text in asking[:7]:
+            with self.subTest(live_base=text):
+                self.assertIsNotNone(live.classify(text, final=True))  # the live base sends these asks too
+        for text in naming:
+            with self.subTest(mention=text):
+                verdict = asks.classify(text, final=True)
+                self.assertTrue(verdict is None or verdict[3] is None, verdict)
+        threads = {}
+        for prefix, texts in (('a', asking), ('m', naming)):
+            for n, text in enumerate(texts):
+                threads['%s%d' % (prefix, n)] = thread('%s%d' % (prefix, n), build(('user_message', 'brief', T0), ('assistant_message', text, T0 + 1)))
+        self.tick(FakeT3(PROJECTS, threads), max_notices=100, max_reads=100)
+        self.assertEqual(sorted((p['thread_id'], label(p['occurrence'])) for p in self.sent),
+                         sorted([(tid, 'generation-1-START') for tid in threads] + [('a%d' % n, 'generation-1-BLOCKED') for n in range(len(asking))]))
 
 
 if __name__ == '__main__':

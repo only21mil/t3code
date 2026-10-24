@@ -26,10 +26,16 @@ event state, ask) is a unique row, claimed in the transaction that commits the
 scan, before any send.
 
 A generation's DONE is its final reply when that reply leads with DONE, or its
-last reply that does, when every reply after it restates the DONE: its last
-sentence is exactly a whole-work DONE ("The research stays DONE.", DONE_KEPT_RE)
-and no part of it names ongoing or reopened work. It is claimed a minute after
-that reply's turn ends; any other later reply supersedes it as progress.
+last reply that does, when every reply after it restates the DONE (keeps_done):
+it ends on a plain paragraph, not a quote, list item or colon-opened block,
+whose last sentence is exactly a whole-work DONE ("The research stays DONE.",
+DONE_KEPT_RE), and each other clause of it is settled. A clause is settled when
+it names no open or new work, or a negative quantifier opens it ("Nothing is
+pending."), and it names nothing unfinished (still, yet, future, sequence,
+condition, exception, a question); any other negated clause is unfinished, and
+any present participle counts as open work, so an unlisted word drops the DONE
+rather than keeping a false one. It is claimed a minute after that reply's turn
+ends; any other later reply supersedes it as progress.
 Threads known before this round start from a baseline generation 0, so their
 history sends nothing.
 
@@ -42,8 +48,10 @@ provider wake and a system notice are artifacts, not replies (cb8a6cc0). A
 NEEDS-VICTOR marker, a BLOCKED line, a bold **BLOCKED** in a final message or a
 "decision for you" line is a BLOCKED, each ask its own (notice-package-20261023
 items 5 and 6); markers count inside fenced and inline code too. A line that only
-names the markers, listing them or calling them markers or lines, or quoting the
-decision phrase, asks nothing (LIVE-2). A final message that leads with FAILED or
+names the markers asks nothing (LIVE-2): no colon or spaced dash labels the
+marker names, the line asks nothing, and the names are joined by and/or or a
+detection predicate follows them ("... lines count anywhere"), or the decision
+phrase is quoted. Any other marker line asks. A final message that leads with FAILED or
 CANCELED is that event. Other asks stay local records. Assistant text is read
 in memory; only the notice line and the per-event evidence file carry an
 excerpt, never the watchdog log.
@@ -54,11 +62,13 @@ send's thread_notice check under the hook's occurrence lock decides: delivered
 records the event without a send, queued or in flight waits, anything else
 claims the event for the generation (t3-terminal-notice-20261020). A delivered
 notice covers only the asks it carried: the turn's one ask; with several asks,
-those whose complete decision ID its message names, or, when it names none, the
-one ask whose line and the message hold each other as an unbroken phrase of
-three or more words besides the marker words, matching no other ask of the
-turn. Each other ask of the turn still sends its own BLOCKED, so a generic
-notice ("BLOCKED: needs Victor") covers none.
+those whose complete decision ID its message names, or, when it names none, each
+ask that one sentence of the message carries: the sentence holds no negation,
+it and one line of the ask hold each other as an unbroken phrase of three or
+more words with the marker words dropped from both, that line holds every path
+the sentence names, and no other ask of the turn matches that sentence. Each
+other ask of the turn still sends its own BLOCKED, so a generic notice
+("BLOCKED: needs Victor") covers none.
 """
 from __future__ import annotations
 from contextlib import contextmanager
@@ -96,17 +106,37 @@ INLINE_BLOCKED_RE = re.compile(r'(\*\*|__)BLOCKED\1')
 TERMINAL_LINE_RE = re.compile(r'^[ \t>*_-]*(?:[A-Za-z0-9:_%./-]{3,200}[ \t]+)?[*_]*(FAILED|CANCEL+ED)\b')
 # A reply whose first line leads with DONE, in the same notice shape, is the generation's own DONE.
 DONE_LINE_RE = re.compile(r'^[ \t>*_-]*(?:[A-Za-z0-9:_%./-]{3,200}[ \t]+)?[*_]*(DONE)\b')
-# A later reply keeps that DONE only when its last sentence, outside code, is a whole-work restatement and nothing
-# more: "The objective is DONE and settled.", "The research stays DONE." (Kimi, mini 3e9f5d46). The sentence is
-# the whole work (objective, research, work, task, job, project, goal, lane, brief, package or everything), then
-# is, stays or remains (still or now allowed), an upper-case DONE and at most "and settled". A phase or part
-# ("Phase 1 is DONE."), a continuation, exception, condition or negation in that sentence, a code span in it, and a
-# reply that names ongoing or reopened work anywhere (ONGOING_RE) are progress and supersede it (SOL-1).
-DONE_KEPT_RE = re.compile(r'^[ \t>*_-]*(?i:(?:the|this|our|my)[ \t]+)?(?i:objective|research|work|task|job|project|goal|lane|brief|package|everything)'
-                          r'[ \t]+(?i:is|stays|remains)(?:[ \t]+(?i:still|now))?[ \t]+[*_]*DONE[*_]*(?:[ \t]+(?i:and)[ \t]+(?i:settled))?'
-                          r'[ \t]*[.!]?[*_]*[ \t]*$')
-ONGOING_RE = re.compile(r'\b(?:running|start(?:s|ing)?|pending|waiting|in[ \t]+progress|next|continu\w*|re-?open\w*|resum\w*|'
-                        r'restart\w*|remaining|not[ \t]+yet|still[ \t]+(?:fail\w*|run\w*|open|pending|wait\w*|work\w*)|until|unless|except|todo)\b', re.I)
+# A later reply keeps that DONE only when it restates it as a claim and says nothing of unfinished work (SOL-1, review
+# rounds 1-3; keeps_done). The claim is the last sentence of the reply's last Markdown block outside fenced code, and
+# that block is a plain paragraph: no quote, list item, heading or table row, and not opened by a block that ends in a
+# colon (a template, "It is false that:"). Its lines join as Markdown joins them, so a sentence runs on across a line
+# break. The sentence is exactly a whole-work DONE: the whole work as subject (the objective, research, work, task, job,
+# project, goal, lane, brief, package, assignment, review, repair, delivery or migration, "all work", "the whole work",
+# everything), is, stays or remains (still or now allowed), DONE in any case, now and "and settled" allowed after it.
+# "The objective is DONE and settled.", "The research stays DONE." (Kimi, mini 3e9f5d46). A part ("Phase 1 is DONE."),
+# a condition, exception or negation in that sentence, a code span or quote in it, are no claim.
+DONE_KEPT_RE = re.compile(r'^[*_]*(?:(?:(?:all[ \t]+(?:of[ \t]+)?)?(?:the|this|our|my)[ \t]+(?:whole[ \t]+|entire[ \t]+)?|all[ \t]+)?'
+                          r'(?:objective|research|work|task|job|project|goal|lane|brief|package|assignment|review|repair|delivery|migration)'
+                          r'|everything)[ \t]+(?:is|stays|remains)(?:[ \t]+(?:still|now))?[ \t]+[*_]*DONE[*_]*(?:[ \t]+now)?'
+                          r'(?:[ \t]+and[ \t]+settled)?[ \t]*[.!]?[*_]*[ \t]*$', re.I)
+# Every other clause of that reply must be settled: it names no open or new work (OPEN_WORK_RE) unless a negative
+# quantifier opens it ("Nothing is pending.", "No remaining items."), and it names nothing that is unfinished whatever
+# the negation (UNFINISHED_RE: still, yet, again, future, sequence, condition, exception, obligation; or a question).
+# A clause under any other negation ("Phase 2 is not finished.", "No tests passed.") is unfinished. Any present
+# participle counts as ongoing work, so a synonym the lists miss fails toward no DONE, never toward a false one.
+OPEN_WORK_RE = re.compile(r"\b(?!(?:no|some|any|every)?thing\b|morning\b|evening\b|during\b|string\b)\w+ing\b|"
+                          r"\b(?:pending|remain\w*|left|open\w*|outstanding|underway|under[ \t]+way|in[ \t]+(?:progress|flight|the[ \t]+works)|"
+                          r"on[ \t]+deck|queued|scheduled|unfinished|incomplete|partial\w*|half|mostly|almost|nearly|wip|todos?|to-?do|tbd|"
+                          r"start\w*|begin\w*|began|begun|kick\w*[ \t]+off|launch\w*|resum\w*|restart\w*|re-?open\w*|continu\w*|proceed\w*|"
+                          r"re-?runs?|retr(?:y|ies|ied)|red(?:o|oes|id|one)|follow\w*|blocked|blockers?|fail\w*|wait\w*|await\w*|"
+                          r"need\w*|requir\w*|actions?|new|more|further|else|chang\w*|due|red)\b|\b\d+[ \t]*(?:of|/)[ \t]*\d+\b", re.I)
+UNFINISHED_RE = re.compile(r"\?|\b(?:still|yet|again|will|shall|about[ \t]+to|to[ \t]+(?:come|follow)|soon|shortly|later|tomorrow|tonight|"
+                           r"overnight|noon|afternoon|(?:mon|tues|wednes|thurs|fri|satur|sun)day|next|then|afterwards|until|till|unless|"
+                           r"except|but|however|although|though|if|once|when|whenever|assuming|provided|must|should|ha(?:ve|s)[ \t]+to|"
+                           r"so[ \t]+far|for[ \t]+now|meanwhile)\b|['’]ll\b", re.I)
+NEGATIVE_QUANTIFIER_RE = re.compile(r'^[ \t*_]*(?:there[ \t]+(?:is|are|was|were)[ \t]+)?(?:nothing|none|nobody|no[ \t]+\w)', re.I)
+CLAUSE_NEGATION_RE = re.compile(r"\b(?:nothing|not|no|never|none|nobody|neither|nor|cannot|without)\b|n['’]t\b", re.I)
+CLAUSE_RE = re.compile(r'[,:()–—]|[ \t]-[ \t]|\b(?:and|but|while|whereas|although|though|because|since|so|yet|plus)\b', re.I)
 # URGENT is a line that leads with the token and names one of Victor's three cases on that line.
 URGENT_RE = re.compile(r'^[ \t>*_-]*(?:\d+[.)][ \t]*)?[*_]*URGENT\b.*?(?i:\b(?:security|data[ -]at[ -]risk|destructive))', re.M)
 # Event state -> the hook's --kind. URGENT rides its own urgent kind (sats-completion-notify MILESTONE_KINDS and
@@ -125,13 +155,26 @@ DECISION_FOR_RE = re.compile(r'\bdecisions?[*_]{0,2}[ \t]+for[ \t]+' + _WHO +
                              r'|\bdecisions?[ \t]+(?:from|by)[ \t]+' + _WHO + r'[*_]{0,2}[ \t]+(?:is[ \t]+|are[ \t]+)?(?:needed|required|pending)\b',
                              re.I)
 # Prose that only names the markers is no ask (LIVE-2, 2026-10-23 23:05 CT: the bullet "NEEDS-VICTOR, BLOCKED, and
-# decision markers anywhere, including fenced and inline code." in a status sent a false BLOCKED). A marker token
-# that a list of marker names joined by and/or follows, or a noun for the marker itself ("NEEDS-VICTOR lines count
-# anywhere"), names it. A quoted or coded decision phrase does too. "NEEDS-VICTOR, BLOCKED: need the key" still asks.
+# decision markers anywhere, including fenced and inline code." in a status sent a false BLOCKED). A marker token is a
+# name, not an ask, only when three things hold (names_markers). Nothing labels it: a colon or a spaced dash after the
+# marker names makes it an ask's label ("NEEDS-VICTOR and BLOCKED: pick A", "BLOCKED: lines 40-60 failed"). The line
+# asks nothing (REQUEST_RE or a PROSE ask). And either a list of marker names joined by a conjunction follows it, in
+# any case ("NEEDS-VICTOR AND BLOCKED markers"), or a detection predicate follows it, after at most one noun for it
+# (MENTION_TAIL_RE: "matches inside fences", "lines count anywhere", "status is now covered by the suite"). Every
+# other shape asks, so an unlisted mention costs a notice, never an ask. A quoted or coded decision phrase names it too.
 _QUOTE = '[*_`\'"“”‘’]*'
 _NAME = r'(?:NEEDS-VICTOR|BLOCKED|DECISION-[A-Z0-9_-]*|DECISION|[Dd]ecisions?(?:[ \t]+for[ \t]+(?:you|Victor))?|DONE|FAILED|CANCEL+ED|START|URGENT)\b'
-MENTION_LIST_RE = re.compile(r'(?:' + _QUOTE + r'[ \t]*(?:,|/|&|\band\b|\bor\b)(?:[ \t]*(?:and|or)\b)?[ \t]*' + _QUOTE + _NAME + r')*' + _QUOTE)
-MENTION_NOUN_RE = re.compile(r'[:]?' + _QUOTE + r'[ \t]+(?:markers?|lines?|tokens?|labels?|tags?|prefix(?:es)?|keywords?|forms?|shapes?|prose)\b', re.I)
+_JOIN = r'(?i:\band\b|\bor\b)'
+MENTION_LIST_RE = re.compile(r'(?:' + _QUOTE + r'[ \t]*(?:,|/|&|' + _JOIN + r')(?:[ \t]*' + _JOIN + r')?[ \t]*' + _QUOTE + _NAME + r')*' + _QUOTE)
+MENTION_LABEL_RE = re.compile(r'[ \t*_]*:|[ \t]+[-\u2013\u2014][ \t]')
+MENTION_TAIL_RE = re.compile(
+    r'(?:[ \t]+(?:markers?|lines?|tokens?|labels?|tags?|prefix(?:es)?|keywords?|forms?|shapes?|prose|status|detection|handling|'
+    r'matching|parsing|support|coverage|rules?|behaviou?r|cases?|notices?|tests?))?(?:[ \t]+(?:now|still|also|always|only))?[ \t]+'
+    r'(?:count(?:s|ed)?|match(?:es|ed)?|appear(?:s|ed)?|appl(?:y|ies|ied)|fire(?:s|d)?|trigger(?:s|ed)?|mean(?:s|t)?|anywhere|everywhere|'
+    r'inside|within|including|(?:is|are|was|were|stays?|remains?)(?:[ \t]+(?:now|still|also|always|only|not|never))*[ \t]+'
+    r'(?:covered|matched|counted|recogni[sz]ed|detected|supported|handled|parsed|stripped|ignored|caught|asks?|an[ \t]+ask|local))\b', re.I)
+REQUEST_RE = re.compile(r'\?|\b(?:approve|confirm|decide|choose|pick|reply|answer|sign|unlock|rotate|grant|provide|paste|share|allow|'
+                        r'authori[sz]e|bypass|please|tell[ \t]+me|let[ \t]+me[ \t]+know|may[ \t]+i|can[ \t]+i|should[ \t]+i|shall[ \t]+i)\b', re.I)
 FENCE_RE = re.compile(r'^[ \t]*```.*?^[ \t]*```[^\n]*$', re.M | re.S)
 INLINE_CODE_RE = re.compile(r'`[^`\n]*`')
 NEXT_STEPS_RE = re.compile(r'^[ \t>#*_]*next steps\b', re.I | re.M)
@@ -184,10 +227,15 @@ def one_line(text, limit):
 
 
 def names_markers(rest):
-    """True when `rest`, the text right after a marker token, makes the token a name: a list of marker names joined by
-    and/or follows it ("…, BLOCKED, and decision markers"), or a noun for the marker ("… lines count anywhere")."""
+    """True when `rest`, the text right after a marker token, makes the token a name, not an ask: no colon or spaced
+    dash labels the marker names (MENTION_LABEL_RE), the line asks nothing (REQUEST_RE, PROSE), and a list of marker
+    names joined by a conjunction follows ("…, BLOCKED, and decision markers"), or a detection predicate does
+    (MENTION_TAIL_RE: "… matches inside fences", "… lines count anywhere")."""
     listed = MENTION_LIST_RE.match(rest)
-    return bool(MENTION_NOUN_RE.match(rest[listed.end():]) or re.search(r'\b(?:and|or)\b|&', listed.group(0)))
+    after = rest[listed.end():]
+    if MENTION_LABEL_RE.match(after) or REQUEST_RE.search(rest) or any(pattern.search(rest) for pattern in PROSE):
+        return False
+    return bool(re.search(r'\b(?:and|or)\b|&', listed.group(0), re.I) or MENTION_TAIL_RE.match(after))
 
 
 def marker_ask(line):
@@ -222,16 +270,73 @@ def blocked_lines(text):
     return lines
 
 
-def keeps_done(text):
-    """True for a reply that restates the generation's DONE and says nothing else about the work: its last sentence
-    outside fenced code is exactly a whole-work DONE (DONE_KEPT_RE) with no code span, and no part of the reply
-    names ongoing or reopened work (ONGOING_RE)."""
-    body = FENCE_RE.sub('', text) if isinstance(text, str) else ''
-    rows = [row for row in body.splitlines() if row.strip()]
-    if not rows:
+def blocks(text):
+    """The Markdown blocks of a reply in order, each [kind, lines]: 'fence' (its inner lines), 'quote', 'item' (a list
+    item), 'heading', 'table' or 'para'. A plain line joins the paragraph, quote or item above it, as Markdown joins
+    it; a blank line ends a block."""
+    parts, at = [], 0
+    for fence in FENCE_RE.finditer(text):
+        parts += [('plain', text[at:fence.start()]), ('fence', fence.group(0))]
+        at = fence.end()
+    parts.append(('plain', text[at:]))
+    found = []
+    for kind, part in parts:
+        if kind == 'fence':
+            found.append(['fence', part.splitlines()[1:-1]])
+            continue
+        current = None
+        for line in part.splitlines():
+            if not line.strip():
+                current = None
+                continue
+            kind = ('quote' if re.match(r'[ \t]*>', line) else 'item' if re.match(r'[ \t]*(?:[-*+]|\d+[.)])[ \t]', line)
+                    else 'heading' if re.match(r'[ \t]*#', line) else 'table' if re.match(r'[ \t]*\|', line) else 'para')
+            if kind == 'para' and current is not None and current[0] in ('para', 'quote', 'item'):
+                current[1].append(line)
+                continue
+            current = [kind, [line]]
+            found.append(current)
+            if kind in ('heading', 'table'):
+                current = None
+    return found
+
+
+def sentences(lines):
+    """A block's lines joined as one run of text, split after . ! ? or ;"""
+    return [part for part in re.split(r'(?<=[.!?;])\s+', ' '.join(line.strip() for line in lines)) if part.strip()]
+
+
+def settled(sentence):
+    """True when a sentence says nothing of unfinished work: no UNFINISHED_RE word, and each clause either names no
+    open or new work (OPEN_WORK_RE) and holds no negation, or opens with a negative quantifier, holds no other
+    negation and names open work ("Nothing is pending", "No remaining items"). Any other negated clause is unfinished."""
+    if UNFINISHED_RE.search(sentence):
         return False
-    sentence = [part for part in re.split(r'(?<=[.!?;])\s+', rows[-1].strip()) if part.strip()][-1]
-    return '`' not in sentence and DONE_KEPT_RE.match(sentence) is not None and not ONGOING_RE.search(body)
+    for clause in CLAUSE_RE.split(sentence):
+        if not re.search(r'\w', clause):
+            continue
+        negations, open_work = len(CLAUSE_NEGATION_RE.findall(clause)), OPEN_WORK_RE.search(clause) is not None
+        if negations == 0 and open_work:
+            return False
+        if negations and not (negations == 1 and open_work and NEGATIVE_QUANTIFIER_RE.match(clause.strip())):
+            return False
+    return True
+
+
+def keeps_done(text):
+    """True for a later reply that restates the generation's DONE and says nothing of unfinished work: its last
+    block outside fenced code is a plain paragraph that no block ending in a colon opens, the paragraph's last sentence
+    is exactly a whole-work DONE (DONE_KEPT_RE) with no code span or quote, and every other sentence of the reply,
+    fenced lines included, is settled (settled())."""
+    found = blocks(text) if isinstance(text, str) else []
+    if not found or found[-1][0] != 'para' or (len(found) > 1 and found[-2][0] != 'fence' and found[-2][1][-1].rstrip(' \t*_').endswith(':')):
+        return False
+    claim = sentences(found[-1][1])
+    if '`' in claim[-1] or DONE_KEPT_RE.match(claim[-1]) is None:
+        return False
+    rest = claim[:-1] + [sentence for kind, lines in found[:-1]
+                         for sentence in (lines if kind == 'fence' else sentences([line.strip(' \t>#|*+-') for line in lines]))]
+    return all(settled(sentence) for sentence in rest)
 
 
 def classify(text, final):
@@ -530,45 +635,57 @@ def ask_identity(host, thread_id, message_id):
     return 'ask-' + hashlib.sha256('|'.join((host, thread_id, message_id)).encode()).hexdigest()[:40]
 
 
-# Words that only name the notice's kind. A phrase needs three other words to name an ask: "mcp:t1 BLOCKED: needs
-# Victor" names none (NEW-1).
+# Words that only name the notice's kind: the marker forms an ask or a notice opens with. A notice and an ask line are
+# compared without them, so "BLOCKED rotate the hub key" and "NEEDS-VICTOR rotate the hub key" read alike, and a phrase
+# needs three other words to name an ask: "mcp:t1 BLOCKED: needs Victor" names none (NEW-1).
 NOTICE_WORDS = frozenset(('needs', 'need', 'needed', 'victor', 'blocked', 'closed', 'as', 'decision', 'decisions'))
+# A path token, compared whole like a decision ID: "/repo/main" never matches "/repo/staging".
+PATH_RE = re.compile(r'[^\s()\[\]<>"\'`*]*/[^\s()\[\]<>"\'`*]*')
+
+
+def paths(text):
+    """The path tokens of a notice or ask line, without trailing punctuation."""
+    return {found.rstrip('.,;:!?') for found in PATH_RE.findall(text)} - {'', '/'}
 
 
 def phrase(text, thread_id):
-    """A notice's or ask line's words in order, lower case, without decision IDs, paths or the thread id's words."""
+    """A notice's or ask line's content words in order, lower case, without decision IDs, paths, the thread id's
+    words and the marker words (NOTICE_WORDS)."""
     own = set(re.findall(r'[a-z0-9]+', thread_id.lower()))
-    text = ' '.join(token for token in DECISION_ID_RE.sub(' ', text).split() if '/' not in token)
-    return [word for word in re.findall(r'[a-z0-9]+', text.lower()) if word not in own]
+    text = PATH_RE.sub(' ', DECISION_ID_RE.sub(' ', text))
+    return [word for word in re.findall(r'[a-z0-9]+', text.lower()) if word not in own and word not in NOTICE_WORDS]
 
 
 def holds(longer, shorter):
-    """True when the word list `shorter`, with three or more words besides NOTICE_WORDS, runs unbroken in `longer`."""
+    """True when the word list `shorter`, three or more words, runs unbroken in `longer`."""
     size = len(shorter)
-    if sum(word not in NOTICE_WORDS for word in shorter) < 3:
-        return False
-    return any(longer[start:start + size] == shorter for start in range(len(longer) - size + 1))
+    return size >= 3 and any(longer[start:start + size] == shorter for start in range(len(longer) - size + 1))
 
 
 def notice_carries(message, ask, others=()):
     """True when a thread's own notice message carries this ask and no other ask of its turn (`others`, SOL-2).
 
     A message that names decision IDs carries exactly the asks with one of those IDs, matched as complete IDs
-    (DECISION-PUSH-20 never carries DECISION-PUSH-2). A message without one carries the ask when the message and one
-    of the ask's lines hold each other as an unbroken phrase ("mcp:<id> rotate the hub key" carries "NEEDS-VICTOR
-    rotate the hub key /y") and no line of another ask of the turn matches it too. A generic message ("BLOCKED:
-    needs Victor") carries none."""
+    (DECISION-PUSH-20 never carries DECISION-PUSH-2). A message without one is read sentence by sentence, and a
+    sentence under a negation ("Do not act on …") carries nothing. A sentence carries the ask when it and one of the
+    ask's lines hold each other as an unbroken phrase of content words ("mcp:<id> BLOCKED rotate the hub key" carries
+    "NEEDS-VICTOR rotate the hub key /y"), that line holds every path the sentence names, and no line of another ask
+    of the turn matches the sentence too. A generic message ("BLOCKED: needs Victor") carries none, and one that
+    names neither of two paths two asks differ by carries neither."""
     if not isinstance(message, str) or not message.strip():
         return False
     named = set(DECISION_ID_RE.findall(message))
     if named:
         return bool(named & set(decision_ids(ask)))
-    notice = phrase(re.sub(r'^\s*\S*:\S*\s+', '', message), ask['thread_id'])  # without its leading "<thread>" token
+    text = re.sub(r'^\s*\S*:\S*\s+', '', message)  # without its leading "<thread>" token
 
-    def matches(record):
-        lines = [phrase(str(line), ask['thread_id']) for line in record.get('markers') or []]
-        return any(holds(line, notice) or holds(notice, line) for line in lines)
-    return matches(ask) and not any(matches(other) for other in others)
+    def matches(record, sentence):
+        named, notice = paths(sentence), phrase(sentence, ask['thread_id'])
+        lines = [str(line) for line in record.get('markers') or []]
+        return any(named <= paths(line) and (holds(words, notice) or holds(notice, words))
+                   for line in lines for words in [phrase(line, ask['thread_id'])])
+    return any(matches(ask, sentence) and not any(matches(other, sentence) for other in others)
+               for sentence in re.split(r'(?<=[.!?;])\s+|\n', text) if sentence.strip() and not CLAUSE_NEGATION_RE.search(sentence))
 
 
 def blocked_ask(ask):
