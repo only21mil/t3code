@@ -67,7 +67,11 @@ export class DeliveryAttempts extends Context.Service<
   }
 >()("t3code-relay/agentActivity/DeliveryAttempts") {}
 
-const SOURCE_JOB_CLAIM_LEASE_MINUTES = 10;
+// A consumer that fails after claiming leaves the claim behind. The lease has
+// to end inside the queue's retry window (five retries, 30 seconds apart) and
+// well before the signed job expires, so a retry can reclaim and send it. It
+// still outlasts one APNs send, which is two 10-second stages.
+const SOURCE_JOB_CLAIM_LEASE_MINUTES = 1;
 
 function insertValues(
   input: DeliveryAttemptInput,

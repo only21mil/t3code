@@ -168,4 +168,64 @@ describe("DeliveryAttempts", () => {
       ),
     );
   });
+
+  // The queue retries a failed job five times, 30 seconds apart, and the
+  // signed job expires 10 minutes after enqueue. A claim left by a consumer
+  // that failed after claiming must be reclaimable by those retries.
+  it.effect("reclaims an abandoned claim while queue retries can still deliver the job", () => {
+    const fakeDb = {
+      insert: () => ({
+        values: () => ({
+          onConflictDoNothing: () => ({
+            returning: () => Effect.succeed([]),
+          }),
+        }),
+      }),
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: () =>
+              Effect.succeed([
+                {
+                  createdAt: "1969-12-31T23:58:00.000Z",
+                  apnsStatus: null,
+                  apnsReason: null,
+                  apnsId: null,
+                  transportError: null,
+                },
+              ]),
+          }),
+        }),
+      }),
+      update: () => ({
+        set: () => ({
+          where: () => ({
+            returning: () => Effect.succeed([{ id: "attempt-1" }]),
+          }),
+        }),
+      }),
+    } as unknown as RelayDb.RelayDb["Service"];
+
+    return Effect.gen(function* () {
+      const attempts = yield* DeliveryAttempts.DeliveryAttempts;
+      const claimed = yield* attempts.claimSourceJob({
+        userId: "user-1",
+        environmentId: null,
+        threadId: null,
+        deviceId: "device-1",
+        kind: "push_notification",
+        sourceJobId: "job-1",
+        token: "apns-token",
+      });
+
+      expect(claimed).toBe("claimed");
+    }).pipe(
+      Effect.provide(
+        DeliveryAttempts.layer.pipe(
+          Layer.provide(NodeCryptoLayer.layer),
+          Layer.provide(Layer.succeed(RelayDb.RelayDb, fakeDb)),
+        ),
+      ),
+    );
+  });
 });
