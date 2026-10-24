@@ -6,6 +6,7 @@ const state = vi.hoisted(() => ({
   creates: [] as string[],
   runs: [] as unknown[],
   refreshResult: null as ReadonlyArray<{ name: string; isRemote: boolean }> | null,
+  pending: Promise.resolve() as Promise<unknown>,
 }));
 
 vi.mock("react", async (importOriginal) => ({
@@ -42,16 +43,17 @@ vi.mock("../../../state/use-selected-thread-git-actions", () => ({
   useSelectedThreadGitActions: () => ({
     canWriteSourceControl: true,
     canChangeThreadBranch: true,
-    refreshSelectedThreadBranches: async () => {
+    refreshSelectedThreadBranches: () => {
       state.refreshes++;
-      return state.refreshResult;
+      return (state.pending = Promise.resolve(state.refreshResult));
     },
-    onCreateSelectedThreadBranch: async (name: string) => {
+    onCreateSelectedThreadBranch: (name: string) => {
       state.creates.push(name);
-      return { refName: name };
+      return (state.pending = Promise.resolve({ refName: name }));
     },
-    onRunSelectedThreadGitAction: async (input: unknown) => {
+    onRunSelectedThreadGitAction: (input: unknown) => {
       state.runs.push(input);
+      return (state.pending = Promise.resolve());
     },
   }),
 }));
@@ -90,8 +92,9 @@ async function pressFeatureBranch() {
   const press = findControl(sheet, "Feature branch & continue")?.onPress;
   if (!press) throw new Error("Missing feature-branch action");
   press();
-  // onPress discards the action promise. Every mock settles in microtasks, so one macrotask drains them.
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  // The sheet awaits each action before the test does, so its continuation runs first.
+  await state.pending; // ref refresh
+  await state.pending; // branch creation, when the refresh returned refs
 }
 
 describe("feature-branch confirmation", () => {
