@@ -38,4 +38,22 @@ describe("settings draft commits", () => {
 
     expect(saved).toBe("/projects");
   });
+
+  it("saves an edit back to the shown value while an earlier save is pending", async () => {
+    let saved = "~/";
+    const commit = (next: string) => {
+      saved = next;
+    };
+    await using screen = await render(<DraftInput value="~/" onCommit={commit} />);
+    const input = screen.getByRole("textbox");
+    await input.fill("/projects");
+    await userEvent.tab();
+    expect(saved).toBe("/projects");
+
+    await input.fill("/other");
+    await input.fill("~/");
+    await userEvent.tab();
+
+    expect(saved).toBe("~/");
+  });
 });
