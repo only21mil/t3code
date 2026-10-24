@@ -16,7 +16,7 @@ Two failures recur in every run of the frozen suite, base included:
 | Notifier item 7 tests on the candidate | 7 of 7 pass |
 | Patch 2 guard tests on the candidate | 5 of 5 pass |
 | New watchdog tests on live asks 406e3fd9 | 23 of 25 fail or error, as they must; the 2 that pass are guards that hold on both: no DONE when a BLOCKED follows, and the static no-VACUUM check |
-| Item 7 tests on live notifier ad1f0106 | 6 of 7 fail or error; the unit-file test passes on both |
+| Item 7 tests on live notifier ad1f0106 | 5 of 7 fail or error; the 2 that pass hold on both: a successful kick logs nothing, and the unit-file check |
 | Patch 2 tests on live mcp_call.py d1bb0937 | the guard is absent (1 fail, 4 skipped) |
 | Frozen live suite on the live base (reference) | 103 run, the same 2 location-bound failures |
 | victor-vault suite at the staged HEAD | 125 run, the same 2 location-bound failures; vault `sats_stall_asks.py` equals the candidate |
