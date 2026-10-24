@@ -344,10 +344,12 @@ export function useComposerPathSearch(target: ComposerPathSearchTarget) {
   return {
     entries: result.data?.entries ?? [],
     error:
-      isDebouncing || !hasTarget || fileAccess.isPending
+      !hasTarget || fileAccess.isPending
         ? null
         : canReadFiles
-          ? result.error
+          ? isDebouncing
+            ? null
+            : result.error
           : (fileAccess.error ?? "This connection cannot search host files."),
     isPending: isDebouncing || (hasTarget && (fileAccess.isPending || result.isPending)),
     refresh: result.refresh,

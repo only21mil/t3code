@@ -101,3 +101,12 @@ it("hides a failed file search's error while the next query debounces", () => {
     isPending: true,
   });
 });
+
+it("keeps a connection's file-access error visible while the next query debounces", () => {
+  state.session = { authenticated: true, scopes: [] };
+  state.debouncedQuery = target.query;
+  expect(useComposerPathSearch({ ...target, query: "srcx" })).toMatchObject({
+    error: "This connection cannot search host files.",
+    isPending: true,
+  });
+});
