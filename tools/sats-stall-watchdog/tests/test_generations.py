@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import patch
 
 import test_asks as base
-from test_asks import ASK, FakeT3, PROJECTS, SCOPE, T0, build, iso, message, thread
+from test_asks import ASK, FakeT3, PROJECTS, SCOPE, T0, build, iso, label, message, thread
 
 asks, watchdog = base.asks, base.watchdog
 ROOT = base.ROOT
@@ -28,7 +28,7 @@ class Generations(base.Harness):
         return item
 
     def sent_events(self):
-        return [(p['thread_id'], p['occurrence'], p['kind']) for p in self.sent]
+        return [(p['thread_id'], label(p['occurrence']), p['kind']) for p in self.sent]
 
     def db(self):
         return sqlite3.connect(str(self.directory / 'asks.sqlite3'))
@@ -83,16 +83,21 @@ class EventTests(Generations):
         self.assertEqual(sorted(self.sent_events()), [('t1', 'generation-1-START', 'start'), ('t2', 'generation-1-DONE', 'done'),
                                                       ('t2', 'generation-1-START', 'start')])
 
-    def test_needs_victor_and_blocked_line_are_one_blocked(self):
+    def test_needs_victor_then_a_different_blocked_line_are_two_asks(self):
         t1 = thread('t1', build(('user_message', 'brief', T0), ('assistant_message', 'NEEDS-VICTOR t1 pick A or B /x', T0 + 60)))
         self.assertEqual(asks.classify('NEEDS-VICTOR t1 pick A or B /x', final=True)[0], 'decision')  # the old label
         client = FakeT3(PROJECTS, {'t1': t1})
         self.assertEqual(self.tick(client)[0], 2)
         self.assertEqual(self.sent_events()[1], ('t1', 'generation-1-BLOCKED', 'blocker'))  # relabeled to BLOCKED
-        # The same work blocks again in a re-wake with a BLOCKED line: the generation already has its BLOCKED.
+        # notice-package-20261023 item 6: a re-wake that blocks on something else is a new ask with its own notice;
+        # repeating it, or the first ask, sends nothing more.
         self.add(t1, 'assistant_message', 'BLOCKED: still need the key /x/RESULT.md', T0 + 300, 'run:thread:t1:ordinal:2')
-        self.assertEqual(self.tick(client, now=LATER)[0], 0)
-        self.assertEqual(len(self.sent), 2)
+        self.assertEqual(self.tick(client, now=LATER)[0], 1)
+        self.add(t1, 'assistant_message', 'BLOCKED: still need the key /x/RESULT.md', T0 + 400, 'run:thread:t1:ordinal:3')
+        self.add(t1, 'assistant_message', 'NEEDS-VICTOR t1 pick A or B /x', T0 + 500, 'run:thread:t1:ordinal:4')
+        self.assertEqual(self.tick(client, now=LATER + 1)[0], 0)
+        self.assertEqual([o for _, o, _ in self.sent_events()], ['generation-1-START', 'generation-1-BLOCKED', 'generation-1-BLOCKED'])
+        self.assertEqual(len({p['occurrence'] for p in self.sent}), 3)
         self.assertEqual({a['state'] for a in self.ask_rows()}, {'bound'})
 
     def test_urgent_sends_once_and_only_when_qualifying(self):
@@ -154,7 +159,8 @@ class EventTests(Generations):
             self.add(t1, 'assistant_message', 'Still waiting.\n' + ASK, T0 + 100 * n, 'run:thread:t1:ordinal:%d' % n)
             self.assertEqual(self.tick(client, now=LATER + n)[0], 0)
         self.assertEqual([o for _, o, _ in self.sent_events()], ['generation-1-START', 'generation-1-BLOCKED'])
-        self.assertEqual({a['event_id'] for a in self.ask_rows()}, {asks.event_key('fd', 't1', 1, 'BLOCKED')})
+        blocked = [e['event_id'] for e in self.events() if e['state'] == 'BLOCKED']
+        self.assertEqual(({a['event_id'] for a in self.ask_rows()}, len(blocked)), (set(blocked), 1))
 
     def test_duplicate_ticks_messages_and_concurrent_claims_are_one(self):
         t1 = thread('t1', build(('user_message', 'brief', T0), ('assistant_message', 'Checking.\n' + ASK, T0 + 1),
@@ -357,7 +363,7 @@ class InertLiveHook(Generations):
 
         def ambiguous(plan):
             receipt = self.hook(plan)  # the hook posts and records its proof
-            calls.append((plan['occurrence'], receipt.get('sats_receipt')))
+            calls.append((label(plan['occurrence']), receipt.get('sats_receipt')))
             if len(calls) == 1:
                 return {'transport': 'hook', 'accepted': False, 'reason': 'hook-timeout'}  # but the caller saw a timeout
             return receipt
@@ -373,7 +379,7 @@ class InertLiveHook(Generations):
                                  ('generation-1-START', 'DELIVERED')])
         posts = self.posts()
         # The retry reused the hook's proof: one POST per event, each keyed thread + generation + state.
-        self.assertEqual([(p['event_kind'], p['run'], p['notice_occurrence']) for p in posts],
+        self.assertEqual([(p['event_kind'], p['run'], label(p['notice_occurrence'])) for p in posts],
                          [('start', 'generation-1', 'generation-1-START'), ('blocker', 'generation-1', 'generation-1-BLOCKED')])
         self.assertEqual(len({p['event_id'] for p in posts}), 2)
         self.assertTrue(all(p['recipient'] == 'Sats' and p['notice_binding']['owner_thread_id'] == 't1' for p in posts))
@@ -391,7 +397,7 @@ class InertLiveHook(Generations):
         self.assertEqual(statuses, {'START': ('failed', 3), 'BLOCKED': ('failed', 3)})
         posts = self.posts()
         # The hook's own ledger caps attempts per occurrence: three POSTs each, one event id each, same bytes.
-        self.assertEqual(sorted(p['notice_occurrence'] for p in posts), ['generation-1-BLOCKED'] * 3 + ['generation-1-START'] * 3)
+        self.assertEqual(sorted(label(p['notice_occurrence']) for p in posts), ['generation-1-BLOCKED'] * 3 + ['generation-1-START'] * 3)
         self.assertEqual(len({p['event_id'] for p in posts}), 2)
         self.assertEqual(len({json.dumps(p, sort_keys=True) for p in posts}), 2)
         # Generation numbering survives restarts: the next accepted message is generation 2.

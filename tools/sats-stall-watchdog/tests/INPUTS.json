@@ -48,5 +48,10 @@
     "live_path": "code-round candidate/bin/sats-completion-notify (install target for /home/victor/.local/bin/sats-completion-notify: live a1e138ca plus the urgent kind)",
     "frozen_path": "tests/preimage/candidate-20261020/sats-completion-notify",
     "sha256": "ad1f0106f6f8d0fad97067d7fa2807bd41c9991af5c9fc12adae91b45fc1ae62"
+  },
+  {
+    "live_path": "/home/victor/.local/lib/sats-stall-watchdog/sats_stall_asks.py",
+    "frozen_path": "tests/preimage/live-20261023/sats_stall_asks.py",
+    "sha256": "406e3fd97579e823f67d27f4e02f4b81cab11a720f39df8ff5bb7e2af16a0a22"
   }
 ]

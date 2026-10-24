@@ -2,6 +2,8 @@
 import json
 import os
 from pathlib import Path
+import re
+import sqlite3
 import stat
 import sys
 import tempfile
@@ -18,6 +20,12 @@ T0 = 1792360000.0  # 2026-10-18T21:46:40Z
 # built at runtime so no key-shaped literal sits in source.
 FAKE_KEY = 'sk' + '-' + 'synthetic' + 'FIXTURE' + ''.join(map(str, range(10))) + 'NotARealKey'
 FAKE_FRAG = FAKE_KEY[3:19]
+
+
+def label(occurrence):
+    """A hook occurrence without its per-ask key: 'generation-1-BLOCKED-ask-<32 hex>' reads 'generation-1-BLOCKED'.
+    Tests of one ask per generation compare labels; the per-ask tests compare whole occurrences."""
+    return re.sub(r'-ask-[0-9a-f]{32}$', '', occurrence)
 
 
 def iso(at):
@@ -124,7 +132,7 @@ class Harness(unittest.TestCase):
 
     def occurrences(self):
         """(thread, hook occurrence) per send: the occurrence is generation-<n>-<event state>."""
-        return [(p['thread_id'], p['occurrence']) for p in self.sent]
+        return [(p['thread_id'], label(p['occurrence'])) for p in self.sent]
 
     def evidence(self, plan):
         return json.loads(Path(plan['evidence']).read_text())
@@ -132,7 +140,7 @@ class Harness(unittest.TestCase):
     def event_status(self, tid='t9'):
         state = asks.AskState(self.directory)
         try:
-            return {e['occurrence']: e['status'] for e in state.events('fd:' + tid)}
+            return {label(e['occurrence']): e['status'] for e in state.events('fd:' + tid)}
         finally:
             state.close()
 
@@ -257,7 +265,7 @@ class ScanTests(Harness):
         client = FakeT3(PROJECTS, {'t1': legacy})
         self.assertEqual(self.tick(client)[0], 1)
         # The notice's hook run is the generation, so a missing message run id changes nothing on the wire.
-        self.assertEqual((self.sent[0]['run'], self.sent[0]['occurrence']), ('generation-0', 'generation-0-BLOCKED'))
+        self.assertEqual((self.sent[0]['run'], label(self.sent[0]['occurrence'])), ('generation-0', 'generation-0-BLOCKED'))
         state = asks.AskState(self.directory)
         try:
             self.assertRegex(state.rows('asks', 'ask-')[0][1]['run'], r'^t3-thread-[0-9a-f]{32}$')
@@ -490,7 +498,8 @@ class ScanTests(Harness):
                     self.assertEqual(self.tick(client, max_notices=0)[0], 0)
                 else:
                     (client, target), seed, now = self.deferred_asks(2), ['t9'], T0 + 3600
-                # Both asks are bound to their generation's one BLOCKED, claimed but held by the notice cap.
+                # Both asks are bound to BLOCKED events, claimed but held by the notice cap: their lines differ, so
+                # each is its own ask (notice-package-20261023 item 6).
                 stored = [a['message_id'] for a in self.asks() if a['state'] == 'bound']
                 self.assertEqual(len(stored), 2)
                 blocked = 'generation-%d-BLOCKED' % (1 if listed else 0)
@@ -509,11 +518,11 @@ class ScanTests(Harness):
                 self.assertEqual((after.get('position'), after.get('sig')), (marker.get('position'), marker.get('sig')))
                 client.failing_text.clear()
                 client.cut_text.clear()
-                # One BLOCKED for the generation whatever its asks. An answer closes it and opens the next generation.
+                # One BLOCKED per ask. An answer closes them and opens the next generation.
                 expected = {(True, True): ['generation-1-START', 'generation-2-START'],
-                            (True, False): ['generation-1-START', 'generation-1-BLOCKED'],
+                            (True, False): ['generation-1-START', 'generation-1-BLOCKED', 'generation-1-BLOCKED'],
                             (False, True): ['generation-1-START'],
-                            (False, False): ['generation-0-BLOCKED']}[(listed, answered)]
+                            (False, False): ['generation-0-BLOCKED', 'generation-0-BLOCKED']}[(listed, answered)]
                 self.assertEqual(self.tick(client, seed=seed, now=now + 30000)[0], len(expected))
                 self.assertEqual(self.tick(client, seed=seed, now=now + 90000)[0], 0)
                 states = {a['message_id']: a['state'] for a in self.asks()}
@@ -1109,6 +1118,216 @@ class MarkersAnywhereTests(Harness):
             return [value for _, value in state.rows('asks', 'ask-') if value['thread_id'] == tid]
         finally:
             state.close()
+
+
+
+def blocked_sends(sent):
+    return [p['occurrence'] for p in sent if label(p['occurrence']).endswith('-BLOCKED')]
+
+
+class PerAskTests(Harness):
+    """notice-package-20261023 item 6: each new ask is its own BLOCKED notice; START and DONE stay one per generation."""
+
+    def test_c95235ec_generation_4_sends_four(self):
+        # Generation 4 of F-D c95235ec (origin 2282) carried four NEEDS-VICTOR asks; the live key sent one.
+        tid, t = evidence_thread('c95235ec-gen4', upto=2368)
+        client = FakeT3(PROJECTS, {tid: t})
+        self.assertEqual(self.tick(client, now=after_turn(t))[0], 5)
+        self.assertEqual(len(set(blocked_sends(self.sent))), 4)
+        self.assertEqual(sorted(e['position'] for e in self.stored_events(tid) if e['state'] == 'BLOCKED'), [2289, 2296, 2305, 2315])
+        self.assertEqual(self.tick(client, now=after_turn(t) + 600)[0], 0)
+        # Victor's next message (2370) is a new generation with its own START and nothing more.
+        _, whole = evidence_thread('c95235ec-gen4')
+        t['items'].append(whole['items'][-1])
+        t['meta']['updatedAt'] = whole['meta']['updatedAt']
+        self.tick(client, now=after_turn(whole))
+        self.assertEqual([label(p['occurrence']) for p in self.sent[5:]], ['generation-2-START'])
+
+    def test_5a44357c_t01_and_24285_each_send(self):
+        tid, t = evidence_thread('5a44357c', upto=404, lead=0)
+        self.tick(FakeT3(PROJECTS, {tid: t}), now=after_turn(t))
+        by_position = {e['position']: e for e in self.stored_events(tid) if e['state'] == 'BLOCKED'}
+        self.assertEqual(sorted(by_position), [385, 397, 404])
+        self.assertTrue(by_position[397]['excerpt'].startswith('NEEDS-VICTOR mcp:5a44357c-47a0-4250-a7fc-d5b9a1bb9738 T01 pick route'))
+        self.assertTrue(by_position[404]['excerpt'].startswith('NEEDS-VICTOR mcp:5a44357c-47a0-4250-a7fc-d5b9a1bb9738 24285 push replies OK'))
+        self.assertEqual({e['status'] for e in by_position.values()}, {'sent'})
+        self.assertEqual(len({e['occurrence'] for e in by_position.values()}), 3)
+
+    def test_mbp_64539631_fenced_asks_and_close_out_are_two_asks(self):
+        tid, t = evidence_thread('64539631', lead=98)
+        self.tick(FakeT3(PROJECTS, {tid: t}), now=after_turn(t))
+        self.assertEqual(sorted(e['position'] for e in self.stored_events(tid) if e['state'] == 'BLOCKED'), [171, 174])
+
+    def test_fd_7237c08a_three_asks_and_no_done_on_settle(self):
+        tid, t = evidence_thread('7237c08a')
+        client = FakeT3(PROJECTS, {tid: t})
+        self.tick(client, now=after_turn(t))
+        self.assertEqual(sorted(e['position'] for e in self.stored_events(tid) if e['state'] == 'BLOCKED'), [12, 19, 25])
+        t['meta'].update(settled=True, settledAt='2026-10-24T00:39:26.701Z', updatedAt='2026-10-24T00:39:26.701Z')
+        self.tick(client, now=after_turn(t) + 7200)
+        self.assertNotIn('DONE', {e['state'] for e in self.stored_events(tid)})
+
+    def test_start_and_done_stay_one_per_generation(self):
+        rows = [('user_message', 'brief', T0), ('assistant_message', 'NEEDS-VICTOR t1 pick A /x', T0 + 1),
+                ('assistant_message', 'NEEDS-VICTOR t1 pick B /y', T0 + 2), ('assistant_message', 'DONE. Both recorded.', T0 + 3),
+                ('assistant_message', 'DONE. Still done.', T0 + 4)]
+        t1 = thread('t1', build(*rows))
+        client = FakeT3(PROJECTS, {'t1': t1})
+        self.tick(client)
+        self.tick(client, now=T0 + 7200)
+        states = sorted(e['state'] for e in self.stored_events('t1'))
+        self.assertEqual(states, ['BLOCKED', 'BLOCKED', 'DONE', 'START'])
+        state = asks.AskState(self.directory)
+        try:
+            with state.transaction():
+                self.assertFalse(state.claim(asks.event('fd', 't1', 1, 'START', 9, T0)))
+                self.assertFalse(state.claim(asks.event('fd', 't1', 1, 'DONE', 9, T0)))
+                self.assertFalse(state.claim(asks.event('fd', 't1', 1, 'BLOCKED', 9, T0, ask=asks.ask_key({'markers': ['NEEDS-VICTOR t1 pick A /x']}))))
+                self.assertTrue(state.claim(asks.event('fd', 't1', 1, 'BLOCKED', 9, T0, ask=asks.ask_key({'markers': ['NEEDS-VICTOR t1 pick C /z']}))))
+        finally:
+            state.close()
+
+    def test_an_ask_sent_under_the_old_key_is_not_sent_again_after_the_upgrade(self):
+        # The live watchdog (406e3fd9) sends the first ask under the one-BLOCKED-per-generation key and binds the
+        # second ask to it unsent. After the upgrade a re-wake repeats the first ask (nothing) and the second (sent).
+        old = preimage_live()
+        first, second = 'NEEDS-VICTOR t1 O19 exact text OK /x', 'NEEDS-VICTOR t1 T01 pick route /y'
+        t1 = thread('t1', build(('user_message', 'brief', T0), ('assistant_message', first, T0 + 1), ('assistant_message', second, T0 + 2)))
+        client = FakeT3(PROJECTS, {'t1': t1})
+        state = old.AskState(self.directory)
+        try:
+            old.tick_host(client, 'fd', state, lambda action, **f: None, self.send, scope=SCOPE, now=T0 + 3600,
+                          evidence_dir=self.directory / 'asks')
+        finally:
+            state.close()
+        self.assertEqual([p['occurrence'] for p in self.sent], ['generation-1-START', 'generation-1-BLOCKED'])
+        for n, text in enumerate(('Still waiting.\n' + first, 'Still waiting.\n' + second), 3):
+            t1['items'].append(dict(build(('assistant_message', text, T0 + 100 * n))[0], position=n, messageId='message:%d' % n,
+                                    itemId='item:%d' % n, runId='run:thread:t1:ordinal:%d' % n))
+        t1['meta'].update(updatedAt=iso(T0 + 400))
+        self.tick(client, now=T0 + 7200)
+        self.tick(client, now=T0 + 7800)
+        later = [p['message'] for p in self.sent[2:]]
+        self.assertEqual(len(later), 1)
+        self.assertIn('T01 pick route', later[0])
+
+    def stored_events(self, tid):
+        state = asks.AskState(self.directory)
+        try:
+            return state.events('fd:' + tid)
+        finally:
+            state.close()
+
+
+def preimage_live():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('live_20261023_asks', ROOT / 'tests/preimage/live-20261023/sats_stall_asks.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class EventsMigrationTests(Harness):
+    """The item-6 schema change and its rollback: transactional, rowids, ids and data kept, no VACUUM or checkpoint,
+    and the older watchdog keeps working on either schema."""
+
+    def v1_state(self):
+        """State the live watchdog (406e3fd9) wrote: START, BLOCKED, URGENT and DONE rows over two threads."""
+        old = preimage_live()
+        threads = {'t1': thread('t1', build(('user_message', 'brief', T0), ('assistant_message', ASK, T0 + 1))),
+                   't2': thread('t2', build(('user_message', 'brief', T0), ('assistant_message', 'URGENT security: key in log /x', T0 + 1))),
+                   't4': thread('t4', build(('user_message', 'brief', T0), ('assistant_message', 'All checks pass.', T0 + 2)),
+                                settled=True, settled_at=T0 + 10)}
+        state = old.AskState(self.directory)
+        try:
+            old.tick_host(FakeT3(PROJECTS, threads), 'fd', state, lambda action, **f: None, self.send, scope=SCOPE,
+                          now=T0 + 3600, evidence_dir=self.directory / 'asks')
+        finally:
+            state.close()
+        return threads
+
+    def schema(self):
+        connection = sqlite3.connect(str(self.directory / 'asks.sqlite3'))
+        try:
+            return (connection.execute("SELECT type, name, tbl_name, sql FROM sqlite_master ORDER BY name").fetchall(),
+                    connection.execute('SELECT rowid, id, thread, generation, state, data FROM events ORDER BY rowid').fetchall(),
+                    [r[0] for r in connection.execute('SELECT name FROM migrations ORDER BY name')],
+                    connection.execute('PRAGMA integrity_check').fetchone()[0])
+        finally:
+            connection.close()
+
+    def test_upgrade_keeps_every_row_and_downgrade_restores_the_old_schema(self):
+        self.v1_state()
+        before = self.schema()
+        self.assertIn(asks.EVENTS_V1, [row[3] for row in before[0]])
+        self.assertEqual(sorted(r[4] for r in before[1]), ['BLOCKED', 'DONE', 'START', 'START', 'START', 'URGENT'])
+        asks.AskState(self.directory).close()  # first open of the new code upgrades in one transaction
+        after = self.schema()
+        self.assertIn(asks.EVENTS_V2, [row[3] for row in after[0]])
+        self.assertEqual((after[1], after[3]), (before[1], 'ok'))
+        self.assertEqual(after[2], ['events-per-ask', 'generations'])
+        asks.AskState(self.directory).close()  # a second open changes nothing
+        self.assertEqual(self.schema(), after)
+        connection = sqlite3.connect(str(self.directory / 'asks.sqlite3'), isolation_level=None)
+        try:
+            connection.execute('BEGIN IMMEDIATE')
+            asks.downgrade_events(connection, T0)
+            connection.execute('COMMIT')
+        finally:
+            connection.close()
+        self.assertEqual(self.schema(), before)  # byte-identical schema, rows and migrations; no events_parked
+
+    def test_downgrade_parks_per_ask_rows_and_the_old_watchdog_runs_on_both_schemas(self):
+        threads = self.v1_state()
+        state = asks.AskState(self.directory)
+        try:
+            with state.transaction():
+                self.assertTrue(state.claim(asks.event('fd', 't1', 1, 'BLOCKED', 5, T0, ask=asks.ask_key({'markers': ['other ask']}))))
+        finally:
+            state.close()
+        old = preimage_live()
+        # Rolled back without the down-migration: the old code still reads and writes the per-ask table.
+        threads['t3'] = thread('t3', build(('user_message', 'brief', T0), ('assistant_message', ASK.replace('t1', 't3'), T0 + 1)))
+        state = old.AskState(self.directory)
+        try:
+            old.tick_host(FakeT3(PROJECTS, threads), 'fd', state, lambda action, **f: None, self.send, scope=SCOPE,
+                          now=T0 + 3700, evidence_dir=self.directory / 'asks')
+            self.assertEqual(sorted(e['state'] for e in state.events('fd:t3')), ['BLOCKED', 'START'])
+            with state.transaction():
+                self.assertFalse(state.claim(old.event('fd', 't3', 1, 'BLOCKED', 9, T0)))  # its one-per-generation rule holds
+        finally:
+            state.close()
+        connection = sqlite3.connect(str(self.directory / 'asks.sqlite3'), isolation_level=None)
+        try:
+            connection.execute('BEGIN IMMEDIATE')
+            asks.downgrade_events(connection, T0)
+            connection.execute('COMMIT')
+            parked = connection.execute('SELECT thread, generation, state FROM events_parked').fetchall()
+            sql = connection.execute("SELECT sql FROM sqlite_master WHERE name='events'").fetchone()[0]
+        finally:
+            connection.close()
+        self.assertEqual((parked, sql), ([('fd:t1', 1, 'BLOCKED')], asks.EVENTS_V1))
+        state = old.AskState(self.directory)
+        try:
+            self.assertEqual(state.db.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
+            self.assertEqual(sorted(e['state'] for e in state.events('fd:t1')), ['BLOCKED', 'START'])
+        finally:
+            state.close()
+
+    def test_a_failed_upgrade_changes_nothing(self):
+        self.v1_state()
+        connection = sqlite3.connect(str(self.directory / 'asks.sqlite3'))
+        connection.execute('CREATE TABLE events_v1 (x)')  # the rename target is taken: the upgrade fails midway
+        connection.commit()
+        connection.close()
+        before = self.schema()
+        with self.assertRaises(sqlite3.OperationalError):
+            asks.AskState(self.directory)
+        self.assertEqual(self.schema(), before)
+
+    def test_no_vacuum_or_checkpoint(self):
+        source = (ROOT / 'src/sats_stall_asks.py').read_text()
+        self.assertNotRegex(source, r'\.execute\([^\n]*(?i:vacuum|checkpoint)')  # no executed VACUUM or checkpoint
 
 
 if __name__ == '__main__':

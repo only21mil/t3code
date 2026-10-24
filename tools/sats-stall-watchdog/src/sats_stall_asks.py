@@ -6,17 +6,20 @@ which ignores terminal, settled and archived threads, never saw them
 
 Victor GO 3:18 PM CT 2026-10-20 (t3-watchdog-r5-install-20261020): a notice is
 keyed on host:threadId, durable generation and event state, never on a run or
-turn. Sats gets START, BLOCKED (NEEDS-VICTOR included), DONE and URGENT, each at
-most once per generation. FAILED and CANCELED keep their own event state in the
-key and reach Sats with the BLOCKED kind. Status, replies, milestones, stalls
-and decision or prose asks send nothing.
+turn. Sats gets START, BLOCKED (NEEDS-VICTOR included), DONE and URGENT. START,
+DONE and URGENT go at most once per generation; BLOCKED goes once per ask, keyed
+on the ask's own marker lines, so a new ask sends while a re-wake repeating the
+same ask does not (notice-package-20261023 item 6). FAILED and CANCELED keep
+their own event state in the key and reach Sats with the BLOCKED kind. Status,
+replies, milestones, stalls and prose asks send nothing.
 
 A generation is one piece of work. Its origin is an accepted user message in a
 top-level thread: the first one, a Victor answer after BLOCKED, FAILED or
 CANCELED, or a new message after DONE. A message while the work is unfinished
 is a steer and joins it. A re-wake starts a run with no user message, so it
-never opens one. Each origin and each (thread, generation, event state) is a
-unique row, claimed in the transaction that commits the scan, before any send.
+never opens one. Each origin and each (thread, generation, event state, ask)
+is a unique row, claimed in the transaction that commits the scan, before any
+send.
 Threads known before this round start from a baseline generation 0, so their
 history sends nothing.
 
@@ -108,6 +111,16 @@ MESSAGE_ID_RE = re.compile(r'^[A-Za-z0-9:_%.-]{1,1000}$')
 # A 24+ character token mixing upper case, lower case and digits looks like a key; it is masked.
 TOKENISH_RE = re.compile(r'[A-Za-z0-9_+=-]{16,}')
 SECRET_PREFIX_RE = re.compile(r'^(?:sk-|ghp_|gho_|ghs_|github_pat_|glpat-|xox[abpr]-|AKIA|ASIA|crsr_|AIza)')
+# The events table before notice-package-20261023, byte for byte, and after it. `ask` is derived from the event's
+# JSON ('' for every event but a BLOCKED), so an INSERT still names five columns and the older watchdog, rolled
+# back without the down-migration, keeps writing this table under its old one-per-generation rule.
+EVENTS_V1 = ('CREATE TABLE events (id TEXT PRIMARY KEY, thread TEXT NOT NULL, generation INTEGER NOT NULL,'
+             ' state TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (thread, generation, state))')
+EVENTS_V2 = ('CREATE TABLE events (id TEXT PRIMARY KEY, thread TEXT NOT NULL, generation INTEGER NOT NULL,'
+             ' state TEXT NOT NULL, data TEXT NOT NULL, ask TEXT GENERATED ALWAYS AS'
+             " (CASE WHEN json_valid(data) THEN coalesce(json_extract(data, '$.ask'), '') ELSE '' END) VIRTUAL,"
+             ' UNIQUE (thread, generation, state, ask))')
+EVENT_COLUMNS = 'id, thread, generation, state, data'
 
 
 def mask(text):
@@ -218,7 +231,8 @@ class AskState:
     """Per-thread read cursor, per-ask record, and the work generations and events, committed before transport.
 
     generations: one row per (thread, generation), its origin unique per thread. events: one row per
-    (thread, generation, event state), unique, holding the frozen notice and its delivery status."""
+    (thread, generation, event state, ask), unique, holding the frozen notice and its delivery status; ask is ''
+    except for a BLOCKED, which is keyed per ask."""
 
     def __init__(self, directory=None):
         if directory is not None:
@@ -235,10 +249,12 @@ class AskState:
                 # sends nothing, and a thread whose old notice was a blocker keeps that as its BLOCKED.
                 self.db.execute('CREATE TABLE generations (thread TEXT NOT NULL, generation INTEGER NOT NULL, origin TEXT NOT NULL,'
                                 ' data TEXT NOT NULL, PRIMARY KEY (thread, generation), UNIQUE (thread, origin))')
-                self.db.execute('CREATE TABLE events (id TEXT PRIMARY KEY, thread TEXT NOT NULL, generation INTEGER NOT NULL,'
-                                ' state TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (thread, generation, state))')
+                self.db.execute(EVENTS_V2)
                 self.db.execute('CREATE TABLE migrations (name TEXT PRIMARY KEY, at REAL NOT NULL)')
                 self.baseline(time.time())
+                self.db.execute("INSERT INTO migrations VALUES ('events-per-ask', ?)", (time.time(),))
+            elif not events_per_ask(self.db):
+                upgrade_events(self.db, time.time())
 
     def baseline(self, now):
         # Threads created before this moment are history wherever they are first seen (a scope added later).
@@ -308,13 +324,27 @@ class AskState:
         return [json.loads(v) for (v,) in self.db.execute('SELECT data FROM events WHERE ' + query + ' ORDER BY rowid', args)]
 
     def claim(self, value):
-        """Insert one event under its unique (thread, generation, state) key. False when the key is already claimed."""
+        """Insert one event under its unique (thread, generation, state, ask) key. False when the key is already claimed."""
         try:
             self.db.execute('INSERT INTO events VALUES (?,?,?,?,?)', (value['event_id'], value['host'] + ':' + value['thread_id'],
                             value['generation'], value['state'], json.dumps(value, separators=(',', ':'))))
         except sqlite3.IntegrityError:
             return False
         return True
+
+    def sent_before_per_ask(self, host, thread_id, generation, slot):
+        """The generation's BLOCKED from before per-ask keys when it carried this same ask, else None: its source
+        ask, or for a baseline event the round-4 ask at its position, has the same marker lines. A re-wake that
+        repeats an ask notified before the upgrade stays that one notice; an ask the old key only bound sends."""
+        legacy = self.event(event_key(host, thread_id, generation, 'BLOCKED'))
+        if legacy is None:
+            return None
+        for _, prior in self.rows('asks', 'ask-'):
+            if prior.get('host') == host and prior.get('thread_id') == thread_id and ask_key(prior) == slot and (
+                    prior.get('ask_id') == legacy.get('source') or (legacy.get('status') == 'baseline'
+                                                                    and prior.get('position') == legacy.get('position'))):
+                return legacy
+        return None
 
     def put_event(self, value):
         self.db.execute('UPDATE events SET data=? WHERE id=?', (json.dumps(value, separators=(',', ':')), value['event_id']))
@@ -323,18 +353,63 @@ class AskState:
         self.db.close()
 
 
-def event_key(host, thread_id, generation, state):
-    return 'event-' + hashlib.sha256(json.dumps([host, thread_id, generation, state], separators=(',', ':')).encode()).hexdigest()[:40]
+def events_per_ask(db):
+    """True once the events table keys a BLOCKED per ask (it has the derived ask column)."""
+    return any(row[1] == 'ask' for row in db.execute('PRAGMA table_xinfo(events)'))
 
 
-def event(host, thread_id, generation, state, position, at, status='pending', detail='', **facts):
-    """One event record. Its hook run and occurrence are the generation and state, so a retry is the same notice."""
+def upgrade_events(db, now):
+    """Rebuild events under the per-ask key, inside the caller's transaction. Every row keeps its rowid, id and
+    data; old rows derive ask ''. No VACUUM, no checkpoint (notice-package-20261023 item 6)."""
+    db.execute('ALTER TABLE events RENAME TO events_v1')
+    db.execute(EVENTS_V2)
+    db.execute('INSERT INTO events (rowid, %s) SELECT rowid, %s FROM events_v1 ORDER BY rowid' % (EVENT_COLUMNS, EVENT_COLUMNS))
+    db.execute('DROP TABLE events_v1')
+    db.execute("INSERT OR REPLACE INTO migrations VALUES ('events-per-ask', ?)", (now,))
+
+
+def downgrade_events(db, now):
+    """The tested rollback of upgrade_events, inside the caller's transaction: events returns to EVENTS_V1. The first
+    row of each (thread, generation, state) stays; later per-ask BLOCKED rows move to events_parked, a table the
+    older watchdog never reads. No VACUUM, no checkpoint."""
+    db.execute('ALTER TABLE events RENAME TO events_v2')
+    db.execute(EVENTS_V1)
+    first = 'rowid IN (SELECT min(rowid) FROM events_v2 GROUP BY thread, generation, state)'
+    db.execute('INSERT INTO events (rowid, %s) SELECT rowid, %s FROM events_v2 WHERE %s ORDER BY rowid'
+               % (EVENT_COLUMNS, EVENT_COLUMNS, first))
+    if db.execute('SELECT 1 FROM events_v2 WHERE NOT ' + first).fetchone():
+        db.execute('CREATE TABLE IF NOT EXISTS events_parked (id TEXT PRIMARY KEY, thread TEXT NOT NULL, generation INTEGER NOT NULL,'
+                   ' state TEXT NOT NULL, data TEXT NOT NULL, parked_at REAL NOT NULL)')
+        db.execute('INSERT INTO events_parked SELECT %s, ? FROM events_v2 WHERE NOT %s ORDER BY rowid' % (EVENT_COLUMNS, first), (now,))
+    db.execute('DROP TABLE events_v2')
+    db.execute("DELETE FROM migrations WHERE name='events-per-ask'")
+
+
+def ask_key(ask):
+    """A BLOCKED event's per-ask key: the ask's own marker lines. A new ask is its own notice, while a re-wake or
+    duplicate message repeating the same ask is not (Victor GO 3:18 PM CT 2026-10-20: re-wakes, retries and
+    duplicates each yield exactly one notice)."""
+    lines = sorted(set(str(line) for line in ask.get('markers') or [ask.get('excerpt') or '']))
+    return 'ask-' + hashlib.sha256('\n'.join(lines).encode()).hexdigest()[:32]
+
+
+def event_key(host, thread_id, generation, state, ask=''):
+    parts = [host, thread_id, generation, state] + ([ask] if ask else [])
+    return 'event-' + hashlib.sha256(json.dumps(parts, separators=(',', ':')).encode()).hexdigest()[:40]
+
+
+def event(host, thread_id, generation, state, position, at, status='pending', detail='', ask='', **facts):
+    """One event record. Its hook run is the generation and its occurrence the state, plus the ask key for a
+    BLOCKED, so a retry is the same notice and each ask its own."""
     kind = SATS_KIND[state]
-    return dict(facts, event_id=event_key(host, thread_id, generation, state), host=host, thread_id=thread_id,
-                generation=generation, state=state, kind=kind, position=position, at=at,
-                status=status, attempts=0,
-                run='generation-%d' % generation, occurrence='generation-%d-%s' % (generation, state),
-                message=one_line('T3 %s %s %s generation %d: %s' % (host, thread_id, state, generation, detail), MESSAGE_LIMIT))
+    value = dict(facts, event_id=event_key(host, thread_id, generation, state, ask), host=host, thread_id=thread_id,
+                 generation=generation, state=state, kind=kind, position=position, at=at,
+                 status=status, attempts=0,
+                 run='generation-%d' % generation, occurrence='generation-%d-%s' % (generation, state) + ('-' + ask if ask else ''),
+                 message=one_line('T3 %s %s %s generation %d: %s' % (host, thread_id, state, generation, detail), MESSAGE_LIMIT))
+    if ask:
+        value['ask'] = ask
+    return value
 
 
 def closed(state, thread, number, record, position):
@@ -744,8 +819,9 @@ def tick_host(client, host, state, emit, send, scope, now, max_notices=10, evide
     # A later reply in any thread read this tick has already marked its asks overridden.
     pending = sorted((value for _, value in state.rows('asks', 'ask-') if value.get('host') == host and value.get('state') in ('pending', 'attempting')),
                      key=lambda a: a['at'])
-    # One decision per generation event: an event already claimed binds every later ask of it, and once one ask
-    # of an unclaimed event has been looked at this tick, the event's other asks wait for a later tick.
+    # One decision per event: a BLOCKED event belongs to one ask (its marker lines), a FAILED or CANCELED event to
+    # the generation. An event already claimed binds every later ask of it, and once one ask of an unclaimed event
+    # has been looked at this tick, the event's other asks wait for a later tick.
     looked = set()
     for ask in pending:
         tid = ask['thread_id']
@@ -773,8 +849,10 @@ def tick_host(client, host, state, emit, send, scope, now, max_notices=10, evide
                 state.put('asks', ask['ask_id'], ask)
             emit('ask-local', host=host, thread_id=tid, message_id=ask['message_id'], ask_id=ask['ask_id'], kind=ask['kind'])
             continue
-        key = event_key(host, tid, ask['generation'], ask['event'])
-        value = state.event(key)
+        slot = ask_key(ask) if ask['event'] == 'BLOCKED' else ''
+        key = event_key(host, tid, ask['generation'], ask['event'], slot)
+        value = state.event(key) or (state.sent_before_per_ask(host, tid, ask['generation'], slot) if slot else None)
+        key = value['event_id'] if value else key
         if value is None:
             if key in looked:
                 continue
@@ -785,7 +863,7 @@ def tick_host(client, host, state, emit, send, scope, now, max_notices=10, evide
             if carried == 'pending':
                 continue  # the hook still holds the thread's notice, queued or in flight; a later tick looks again
             value = event(host, tid, ask['generation'], ask['event'], ask['position'], ask['at'],
-                          status='thread-notice' if carried == 'delivered' else 'pending', detail=notice_line(ask),
+                          status='thread-notice' if carried == 'delivered' else 'pending', detail=notice_line(ask), ask=slot,
                           source=ask['ask_id'], message_id=ask['message_id'], excerpt=ask['excerpt'],
                           title=ask.get('title'), project_id=ask.get('project_id'))
         with state.transaction():
