@@ -78,6 +78,9 @@ export function EnvironmentRoutesSection({
   // land in one frame. Kept rows would show their old offsets in their new
   // slots until the animated style catches up, and the card flashes empty.
   const [drops, setDrops] = useState(0);
+  // Drop the pending order once the saved order catches up, or it would hide
+  // routes added or removed afterwards.
+  if (pending !== null && order === savedIds) setPending(null);
   if (entry === undefined) return null;
 
   const byId = new Map(saved.map((route) => [connectionRouteId(route.target), route]));

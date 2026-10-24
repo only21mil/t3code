@@ -52,6 +52,9 @@ export function EnvironmentRoutesList({
     pending.some((id, index) => id !== savedIds[index])
       ? [...pending]
       : savedIds;
+  // Drop the pending order once the saved order catches up, or it would hide
+  // routes added or removed afterwards.
+  if (pending !== null && order === savedIds) setPending(null);
   const byId = new Map(saved.map((route) => [connectionRouteId(route.target), route]));
   const routes = order.flatMap((id) => byId.get(id) ?? []);
 
