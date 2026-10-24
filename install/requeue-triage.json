@@ -26,6 +26,12 @@
      "2026-10-24T00:39:27.217Z",
      null
     ]
+   },
+   "answer_check": {
+    "host": "f13pro",
+    "thread_id": "mcp:a9acdeb1-4e97-4e68-953c-72681ef9cf07",
+    "ask_position": 27,
+    "note": "the NEEDS-VICTOR ask this entry notifies (asks.sqlite3 event generation-1-BLOCKED, position 27); replay only while no user message follows it; settled state is not an answer (SOL-7)"
    }
   },
   {
