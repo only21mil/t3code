@@ -26,6 +26,9 @@ class FakeSocket extends EventTarget {
   control(value: PreviewStreamControl) {
     this.message(JSON.stringify({ type: "control", ...value }));
   }
+  closed(code: number) {
+    this.dispatchEvent(Object.assign(new Event("close"), { code, reason: "" }));
+  }
 }
 
 const target = {
@@ -105,6 +108,31 @@ describe("preview stream control", () => {
     socket.control({ ...agent, generation: 2 });
     expect(client.send({ type: "text", text: "late input" })).toBe(false);
     expect(client.send({ type: "dialog", accept: false })).toBe(false);
+    client.stop();
+  });
+});
+
+describe("preview stream reconnects", () => {
+  beforeEach(() => vi.stubGlobal("WebSocket", FakeSocket));
+  afterEach(() => vi.unstubAllGlobals());
+
+  it.each([
+    { auth: "cookie", query: {}, outcome: "is not refused", refused: false },
+    { auth: "ticket", query: { wsTicket: "ticket" }, outcome: "is refused", refused: true },
+  ])("a $auth stream $outcome when the upgrade fails before opening", ({ query, refused }) => {
+    const onUnauthorized = vi.fn();
+    const client = createPreviewStreamClient(
+      { ...target, access: { ...target.access, query, credentials: !refused } },
+      {
+        onFrame: vi.fn(),
+        onViewport: vi.fn(),
+        onConnectedChange: vi.fn(),
+        onUnauthorized,
+      },
+    );
+    // An unreachable server and a refused upgrade both close before open with 1006.
+    FakeSocket.current.closed(1006);
+    expect(onUnauthorized).toHaveBeenCalledTimes(refused ? 1 : 0);
     client.stop();
   });
 });

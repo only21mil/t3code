@@ -358,8 +358,13 @@ export function createPreviewStreamClient(
         events.onHostSetup?.(decodeHostSetup(event.reason));
         return;
       }
-      // Rejected upgrades surface as 1006 before open for both cookies and tickets.
-      if (event.code === 1008 || event.code === 4401 || (!opened && event.code === 1006)) {
+      // A rejected upgrade surfaces as 1006 before open, and so does an unreachable server.
+      // Only a ticket can be renewed, so a cookie stream retries instead.
+      if (
+        event.code === 1008 ||
+        event.code === 4401 ||
+        (!opened && event.code === 1006 && target.access.query.wsTicket)
+      ) {
         stopped = true;
         events.onUnauthorized();
         return;
