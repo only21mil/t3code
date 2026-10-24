@@ -108,31 +108,34 @@ export function useRightPanelSurfaceClose(input: {
     terminalLabelsById.get(terminalId) ?? getTerminalLabel(terminalId);
   const closeSurfaces = (toClose: readonly RightPanelSurface[]) => {
     if (!threadRef) return;
-    closeAfterAgentBrowserConfirmation(toClose, () => finishClose(toClose));
+    const canOperateTerminals = readEnvironmentScope(
+      threadRef.environmentId,
+      AuthTerminalOperateScope,
+    );
+    const [firstLabel, ...otherLabels] = canOperateTerminals
+      ? toClose.flatMap((surface) =>
+          surface.kind === "terminal"
+            ? [
+                surface.activeTerminalId,
+                ...surface.terminalIds.filter(
+                  (terminalId) => terminalId !== surface.activeTerminalId,
+                ),
+              ].map(labelFor)
+            : [],
+        )
+      : [];
+    closeAfterAgentBrowserConfirmation(toClose, () => {
+      if (firstLabel === undefined) {
+        finishClose(toClose);
+        return;
+      }
+      void confirmTerminalClose([firstLabel, ...otherLabels]).then((confirmed) => {
+        if (confirmed) finishClose(toClose);
+      });
+    });
   };
 
-  const closeSurface = useStableCallback((surface: RightPanelSurface) => {
-    if (!threadRef) return;
-    if (surface.kind === "preview") {
-      closeSurfaces([surface]);
-      return;
-    }
-    if (
-      surface.kind !== "terminal" ||
-      !readEnvironmentScope(threadRef.environmentId, AuthTerminalOperateScope)
-    ) {
-      finishClose([surface]);
-      return;
-    }
-    const otherLabels = surface.terminalIds
-      .filter((terminalId) => terminalId !== surface.activeTerminalId)
-      .map(labelFor);
-    void confirmTerminalClose([labelFor(surface.activeTerminalId), ...otherLabels]).then(
-      (confirmed) => {
-        if (confirmed) finishClose([surface]);
-      },
-    );
-  });
+  const closeSurface = useStableCallback((surface: RightPanelSurface) => closeSurfaces([surface]));
   const closeOtherSurfaces = useStableCallback((surface: RightPanelSurface) =>
     closeSurfaces(surfaces.filter((entry) => entry.id !== surface.id)),
   );
