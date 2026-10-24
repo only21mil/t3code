@@ -196,8 +196,19 @@ it.each(["Save", "Disable"])("keeps other provider edits through a %s refetch", 
   });
   commands.listProviders.mockReturnValueOnce(reload);
   await screen.click(action);
+  const providerActions = () =>
+    [...screen.container.querySelectorAll("button")].filter((element) =>
+      ["Save", "Disable"].includes(element.textContent ?? ""),
+    );
+  expect(providerActions().map((element) => element.disabled)).toEqual([true, true, true, true]);
   await userEvent.fill(input("other base URL"), "https://newer.example.test/v1");
   await act(async () => resolveReload(response));
+  expect(providerActions().map((element) => element.disabled)).toEqual([
+    false,
+    false,
+    false,
+    false,
+  ]);
 
   expect(input("other base URL").value).toBe("https://newer.example.test/v1");
   expect(input("other write-only headers JSON").value).toBe('{"X-Test":"unsaved"}');

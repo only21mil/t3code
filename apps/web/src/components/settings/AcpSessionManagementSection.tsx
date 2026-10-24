@@ -125,6 +125,8 @@ export function AcpSessionManagementSection(props: {
     deletingSessionId !== null ||
     loadingProviders ||
     savingProviderId !== null;
+  // loadProviders skips while a reload runs, so a save during one would keep its write-only headers.
+  const providerActionPending = loadingProviders || savingProviderId !== null;
 
   if (!canList && !canLogout && !canConfigureProviders) return null;
 
@@ -244,7 +246,7 @@ export function AcpSessionManagementSection(props: {
     if (
       !readEnvironmentScope(props.environmentId, AuthProvidersManageScope) ||
       projectId === null ||
-      savingProviderId !== null
+      providerActionPending
     )
       return;
     const draft = providerDrafts[provider.providerId];
@@ -281,7 +283,7 @@ export function AcpSessionManagementSection(props: {
   };
 
   const disableConfiguredProvider = async (provider: AcpRegistryConfigurableProvider) => {
-    if (projectId === null || savingProviderId !== null || provider.required) return;
+    if (projectId === null || providerActionPending || provider.required) return;
     const confirmed = await ensureLocalApi().dialogs.confirm(
       `Disable ACP provider "${provider.providerId}"?`,
       { variant: "destructive" },
@@ -533,7 +535,7 @@ export function AcpSessionManagementSection(props: {
                           variant="outline"
                           disabled={
                             props.readOnly ||
-                            savingProviderId !== null ||
+                            providerActionPending ||
                             draft.apiType.length === 0 ||
                             draft.baseUrl.length === 0
                           }
@@ -546,7 +548,7 @@ export function AcpSessionManagementSection(props: {
                             type="button"
                             size="xs"
                             variant="ghost-muted"
-                            disabled={props.readOnly || savingProviderId !== null}
+                            disabled={props.readOnly || providerActionPending}
                             onClick={() => void disableConfiguredProvider(provider)}
                           >
                             Disable
