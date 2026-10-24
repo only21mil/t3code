@@ -1,0 +1,337 @@
+{
+  "enabled": true,
+  "hosts_file": "~/.config/sats-stall-watchdog/hosts",
+  "token_dir": "~/.config/t3-mcp",
+  "hook_cli": "~/.local/bin/sats-completion-notify",
+  "state_dir": "~/.local/state/sats-stall-watchdog",
+  "stall_seconds": 900,
+  "cooldown_seconds": 900,
+  "tick_budget_seconds": 240,
+  "t3_enabled": true,
+  "collector": {
+    "roots": [
+      "~/work"
+    ],
+    "allowed_home_names": [
+      "victor",
+      "sats"
+    ],
+    "systemd": true,
+    "max_depth": 4,
+    "max_entries": 2000,
+    "native_sessions": [
+      {
+        "kind": "codex",
+        "root": "~/.codex/sessions",
+        "scope": "victor",
+        "trusted_home_owner": "Sats"
+      },
+      {
+        "kind": "claude",
+        "root": "~/.claude/projects",
+        "scope": "victor",
+        "trusted_home_owner": "Sats"
+      }
+    ]
+  },
+  "t3": {
+    "timeout_seconds": 5,
+    "max_calls": 48,
+    "max_seconds": 40,
+    "max_pages": 12,
+    "max_reads": 20
+  },
+  "collector_by_host": {
+    "mbp": {
+      "allowed_home_names": [
+        "m5mbp"
+      ],
+      "systemd": false
+    },
+    "yoga": {
+      "allowed_home_names": [
+        "proofofwork"
+      ],
+      "systemd": true
+    },
+    "mini": {
+      "allowed_home_names": [
+        "m4mini"
+      ],
+      "systemd": false,
+      "allowed_recipients": [
+        "Sats",
+        "sats"
+      ],
+      "native_sessions": [
+        {
+          "kind": "codex",
+          "root": "~/.codex/sessions",
+          "scope": "victor",
+          "bindings": {}
+        },
+        {
+          "kind": "claude",
+          "root": "~/.claude/projects",
+          "scope": "victor",
+          "bindings": {}
+        }
+      ],
+      "public_process_metadata_only": true
+    },
+    "fd": {
+      "owner_bindings_file": "/home/victor/work/p5b-med4-reader-20261013/owner-bindings.json",
+      "native_sessions": [
+        {
+          "kind": "codex",
+          "root": "~/.codex/sessions",
+          "scope": "victor",
+          "trusted_home_owner": "Sats"
+        },
+        {
+          "kind": "codex",
+          "root": "~/.codex-buzz/sessions",
+          "scope": "victor",
+          "trusted_home_owner": "Sats"
+        },
+        {
+          "kind": "codex",
+          "root": "~/.codex-app/sessions",
+          "scope": "victor",
+          "trusted_home_owner": "Sats"
+        },
+        {
+          "kind": "codex",
+          "root": "~/.codex-remote-auto/sessions",
+          "scope": "victor",
+          "trusted_home_owner": "Sats"
+        },
+        {
+          "kind": "claude",
+          "root": "~/.claude/projects",
+          "scope": "victor",
+          "trusted_home_owner": "Sats"
+        }
+      ]
+    },
+    "m3mbp": {
+      "allowed_home_names": [
+        "mason"
+      ],
+      "allowed_recipients": [
+        "Sats",
+        "sats"
+      ],
+      "systemd": false,
+      "public_metadata_only": true,
+      "public_process_metadata_only": true,
+      "native_sessions": []
+    },
+    "muse": {
+      "allowed_home_names": [
+        "hatch"
+      ],
+      "systemd": false,
+      "public_metadata_only": true,
+      "native_sessions": [],
+      "metadata_transport": "t3-only"
+    },
+    "muse-1": {
+      "allowed_home_names": [
+        "hatch"
+      ],
+      "systemd": false,
+      "public_metadata_only": true,
+      "native_sessions": [],
+      "metadata_transport": "t3-only"
+    },
+    "muse-2": {
+      "allowed_home_names": [
+        "hatch"
+      ],
+      "systemd": false,
+      "public_metadata_only": true,
+      "native_sessions": [],
+      "metadata_transport": "t3-only"
+    },
+    "f13pro": {
+      "allowed_home_names": [
+        "only21mil"
+      ],
+      "systemd": true
+    }
+  },
+  "t3_projects": {
+    "fd": [
+      "5105a3a4-bb72-4066-ac70-3be1431a7a5c",
+      "f256e0b2-e2ce-40b1-b801-93b14ebef9a5",
+      "8ca5c96f-efca-412e-af15-5fbdecaa3a0c",
+      "3338f7a9-2a68-41ca-ba01-f5fa1b0f11a6",
+      "eaf7015b-2f20-423b-ad3b-635246148e2b",
+      "ef2a92b9-d929-43cb-9b69-751a50fa9d91",
+      "75c5c18a-daf6-4686-8ed0-f03f5ce1dad2",
+      "4eb36543-9d6b-4e1e-8956-b0b8df37e5dd",
+      "12fec4fd-fc28-401b-bc3b-bc79348dbf51",
+      "0869c403-a6a8-42ed-ad39-f09371723e30",
+      "mcp:f5ad2b17-accf-4463-bcfc-866ac7c11a4f",
+      "mcp:66104cda-8102-4f89-bfab-4496f902cc54",
+      "mcp:f3a21bc0-361b-4a44-ad54-daff6e521b22",
+      "mcp:f2fa47ad-7c16-44f3-a8e1-d56dbd915be2",
+      "mcp:d0ecd1e0-db1b-4c58-960b-202a41c39251",
+      "mcp:ed84c258-d165-40b0-825e-047fc70f43f0",
+      "mcp:26cbe112-3693-4b86-8a48-8374f1133336",
+      "mcp:faaa2bc3-a491-4879-bcbc-48c81e26a356",
+      "mcp:f7ae252a-ff6c-4463-879b-75174b224516",
+      "mcp:8b296daa-dc10-41ec-8859-8558545b51e8",
+      "mcp:7099e22c-f7fb-4531-ad2b-a314d5f83bce",
+      "mcp:4e80c89c-18a4-46a8-a5a2-aa495f0f613f",
+      "mcp:88114d00-c595-45ad-9ea7-c9117aeced81",
+      "mcp:0ad763e5-9b28-42ac-834b-b9ef7b668233",
+      "mcp:87bd9c91-b018-4fa3-b53e-20e43961d685",
+      "6ae4695f-0b07-4413-9bf9-a00c89933605",
+      "bc39531a-027f-4028-baf2-22b3c3a5c256",
+      "mcp:bf4a80d6-8a4a-425d-bd58-fe067f4af31e",
+      "mcp:c6c1054b-3b17-4315-a1da-e890b9dc2d06",
+      "mcp:5d516e37-59a0-4060-bc0b-41a82c80bd26",
+      "mcp:9c226f98-008e-4363-a453-f33becd4d2c9",
+      "mcp:e425112d-95ab-44a5-931f-ebe57241afdb"
+    ],
+    "mbp": [
+      "mcp:e2608576-91fe-4191-b173-3c93f288b795",
+      "9802c72c-184c-4fc2-8139-141b43a91b81"
+    ],
+    "yoga": [
+      "77d3ec81-1cd0-4550-a149-4d40121bba0b",
+      "b4b77c22-a2e8-4e84-9b66-f827e073b907",
+      "31187381-abb2-4f1e-bdb0-e42ebcb2e2fd"
+    ],
+    "mini": [
+      "79cfb2ce-b66b-4339-b404-f1359da632b7"
+    ],
+    "m3mbp": [],
+    "f13pro": [
+      "28c40eda-8a75-43b5-b05f-e68552b46a5b",
+      "2d0ee046-cf2c-482b-adbe-0a28e27609bf",
+      "mcp:a11a956e-5f55-44d1-8d08-1df8bb12bea4",
+      "mcp:6a38f56c-539e-48bf-820c-c3f350442428",
+      "mcp:809b33e0-4e4f-4822-95d5-9164017f8681",
+      "mcp:1a2425c2-9717-47ed-a2bd-8c33de7feb82",
+      "mcp:3f889bc7-0a2f-4127-8346-f2627a31ac17",
+      "mcp:df3956b1-95c1-4293-8cc8-ebde2de9d1ba",
+      "0e4790f0-5ea6-4d19-a9d0-8a0a1b610666",
+      "a5684bd9-65af-4eed-86b4-4422a9d07f98"
+    ]
+  },
+  "allowed_hosts": [
+    "fd",
+    "mbp",
+    "yoga",
+    "mini",
+    "m3mbp",
+    "f13pro"
+  ],
+  "t3_owner_bindings": {
+    "mini": {},
+    "m3mbp": {}
+  },
+  "t3_ask_scope": {
+    "fd": {
+      "ids": [
+        "5105a3a4-bb72-4066-ac70-3be1431a7a5c",
+        "f256e0b2-e2ce-40b1-b801-93b14ebef9a5",
+        "8ca5c96f-efca-412e-af15-5fbdecaa3a0c",
+        "3338f7a9-2a68-41ca-ba01-f5fa1b0f11a6",
+        "eaf7015b-2f20-423b-ad3b-635246148e2b",
+        "ef2a92b9-d929-43cb-9b69-751a50fa9d91",
+        "75c5c18a-daf6-4686-8ed0-f03f5ce1dad2",
+        "4eb36543-9d6b-4e1e-8956-b0b8df37e5dd",
+        "12fec4fd-fc28-401b-bc3b-bc79348dbf51",
+        "0869c403-a6a8-42ed-ad39-f09371723e30",
+        "mcp:f5ad2b17-accf-4463-bcfc-866ac7c11a4f",
+        "mcp:66104cda-8102-4f89-bfab-4496f902cc54",
+        "mcp:f3a21bc0-361b-4a44-ad54-daff6e521b22",
+        "mcp:f2fa47ad-7c16-44f3-a8e1-d56dbd915be2",
+        "mcp:d0ecd1e0-db1b-4c58-960b-202a41c39251",
+        "mcp:ed84c258-d165-40b0-825e-047fc70f43f0",
+        "mcp:26cbe112-3693-4b86-8a48-8374f1133336",
+        "mcp:faaa2bc3-a491-4879-bcbc-48c81e26a356",
+        "mcp:f7ae252a-ff6c-4463-879b-75174b224516",
+        "mcp:8b296daa-dc10-41ec-8859-8558545b51e8",
+        "mcp:7099e22c-f7fb-4531-ad2b-a314d5f83bce",
+        "mcp:4e80c89c-18a4-46a8-a5a2-aa495f0f613f",
+        "mcp:88114d00-c595-45ad-9ea7-c9117aeced81",
+        "mcp:0ad763e5-9b28-42ac-834b-b9ef7b668233",
+        "mcp:87bd9c91-b018-4fa3-b53e-20e43961d685",
+        "6ae4695f-0b07-4413-9bf9-a00c89933605",
+        "bc39531a-027f-4028-baf2-22b3c3a5c256",
+        "mcp:bf4a80d6-8a4a-425d-bd58-fe067f4af31e",
+        "mcp:c6c1054b-3b17-4315-a1da-e890b9dc2d06",
+        "mcp:5d516e37-59a0-4060-bc0b-41a82c80bd26",
+        "mcp:9c226f98-008e-4363-a453-f33becd4d2c9",
+        "mcp:e425112d-95ab-44a5-931f-ebe57241afdb"
+      ],
+      "roots": [
+        "/home/victor"
+      ],
+      "exclude": [
+        "d0515f49-6ba0-4644-9cdf-d211d5109d4e"
+      ]
+    },
+    "mbp": {
+      "ids": [
+        "mcp:e2608576-91fe-4191-b173-3c93f288b795",
+        "9802c72c-184c-4fc2-8139-141b43a91b81"
+      ],
+      "roots": [
+        "/Users/m5mbp"
+      ],
+      "exclude": []
+    },
+    "yoga": {
+      "ids": [
+        "77d3ec81-1cd0-4550-a149-4d40121bba0b",
+        "b4b77c22-a2e8-4e84-9b66-f827e073b907",
+        "31187381-abb2-4f1e-bdb0-e42ebcb2e2fd"
+      ],
+      "roots": [
+        "/home/proofofwork"
+      ],
+      "exclude": []
+    },
+    "mini": {
+      "ids": [
+        "79cfb2ce-b66b-4339-b404-f1359da632b7"
+      ],
+      "roots": [
+        "/Users/m4mini"
+      ],
+      "exclude": []
+    },
+    "f13pro": {
+      "ids": [
+        "28c40eda-8a75-43b5-b05f-e68552b46a5b",
+        "2d0ee046-cf2c-482b-adbe-0a28e27609bf",
+        "mcp:a11a956e-5f55-44d1-8d08-1df8bb12bea4",
+        "mcp:6a38f56c-539e-48bf-820c-c3f350442428",
+        "mcp:809b33e0-4e4f-4822-95d5-9164017f8681",
+        "mcp:1a2425c2-9717-47ed-a2bd-8c33de7feb82",
+        "mcp:3f889bc7-0a2f-4127-8346-f2627a31ac17",
+        "mcp:df3956b1-95c1-4293-8cc8-ebde2de9d1ba",
+        "0e4790f0-5ea6-4d19-a9d0-8a0a1b610666",
+        "a5684bd9-65af-4eed-86b4-4422a9d07f98"
+      ],
+      "roots": [
+        "/home/only21mil"
+      ],
+      "exclude": []
+    }
+  },
+  "t3_asks": {
+    "timeout_seconds": 8,
+    "max_calls": 80,
+    "max_seconds": 45,
+    "max_reads": 25,
+    "max_notices": 10
+  },
+  "t3_ask_seed_file": "~/.config/sats-stall-watchdog/ask-seed.json"
+}

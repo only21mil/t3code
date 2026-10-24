@@ -1,0 +1,8 @@
+# Watchdog-only roster; does not grant placement, auth, or pairing.
+# name alias t3url cap roles
+fd     local                http://100.94.71.50:3774   20 -
+mbp    victors-macbook-pro   http://100.65.3.65:3774    20 -
+yoga   yoga-direct-pow      http://100.78.114.65:3774  20 -
+mini   mac-mini             http://100.64.195.11:3774  20 -
+m3mbp  m3mbp                http://100.122.145.42:3774 20 -
+f13pro f13pro               http://100.75.206.109:3774 20 -

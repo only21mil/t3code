@@ -1,0 +1,450 @@
+#!/usr/bin/env python3
+"""Enroll independent local launches; never send, prepare, or read ingress.
+
+Defaults are Victor's owner policy, not a notice_binding's recipient/priority.
+Atomic append-only merge under a stable sibling flock retains every old run.
+"""
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import stat
+import subprocess
+import sys
+import time
+import uuid
+
+RAW_RUN = re.compile(r'[0-9]{9,11}-[0-9]{9}')
+INVOCATION = re.compile(r'[a-fA-F0-9]{32}')
+LANE = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,199}')
+UNIT = re.compile(r'sats-lane-([A-Za-z0-9][A-Za-z0-9._-]{0,199})\.service')
+FIELDS = ('SATS_LANE', 'SATS_RUN', 'INVOCATION_ID')
+ACTIVE_STATES = ('active', 'activating', 'deactivating')
+MAX_JSON = 2 * 1024 * 1024
+
+
+def safe_file(path):
+    """Owner-local regular file, no writable/symlink ancestor or writable data."""
+    path = Path(path).absolute()
+    for part in (path, *path.parents):
+        info = part.lstat()
+        if stat.S_ISLNK(info.st_mode) or info.st_mode & 0o022:
+            raise ValueError('unsafe local source')
+        if info.st_uid not in (0, os.getuid()):
+            raise ValueError('foreign source owner')
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+        raise ValueError('owner regular file required')
+    return path
+
+
+def read_json(path):
+    path = safe_file(path)
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        raw = os.read(fd, MAX_JSON + 1)
+        if len(raw) > MAX_JSON:
+            raise ValueError('source too large')
+        def distinct_keys(pairs):
+            value = {}
+            for key, item in pairs:
+                if key in value:
+                    raise ValueError('duplicate JSON source key')
+                value[key] = item
+            return value
+        return json.loads(raw, object_pairs_hook=distinct_keys), hashlib.sha256(raw).hexdigest()
+    finally:
+        os.close(fd)
+
+
+def clean(value, limit=500):
+    return isinstance(value, str) and bool(value.strip()) and len(value) <= limit and \
+        not any(ord(c) < 32 or ord(c) == 127 or c in '\u0085\u2028\u2029' for c in value)
+
+
+def validate_binding(binding):
+    if not isinstance(binding, dict) or set(binding) - {'lane', 'run', 'recipient', 'priority', 'owner_thread_id'}:
+        raise ValueError('binding schema')
+    if not all(clean(binding.get(k)) for k in ('lane', 'run', 'recipient')) or binding.get('priority') is not True:
+        raise ValueError('binding values')
+    if binding['lane'].upper().startswith('TEST') or binding['recipient'].upper().startswith('TEST'):
+        raise ValueError('TEST is not an owner binding')
+    if 'owner_thread_id' in binding and not clean(binding['owner_thread_id']):
+        raise ValueError('owner thread')
+    return binding
+
+
+def run_key(lane, tail):
+    safe = re.sub(r'[^A-Za-z0-9._-]', '_', lane)[:60]
+    return '%s-%s-%s' % (safe, hashlib.sha256(lane.encode()).hexdigest()[:10], tail)
+
+
+def unit_key(lane, env, invocation):
+    raw = env.get('SATS_RUN')
+    if isinstance(raw, str) and RAW_RUN.fullmatch(raw):
+        return run_key(lane, 'run-' + raw), 'SATS_RUN'
+    if not isinstance(invocation, str) or not INVOCATION.fullmatch(invocation):
+        raise ValueError('valid invocation required for absent or malformed SATS_RUN')
+    return run_key(lane, 'run-bad-' + invocation), 'INVOCATION_ID'
+
+
+def binding(lane, run):
+    if not isinstance(lane, str) or not LANE.fullmatch(lane):
+        raise ValueError('unsafe lane')
+    return validate_binding({'lane': lane, 'run': run, 'recipient': 'Sats', 'priority': True})
+
+
+def from_unit(props):
+    match = UNIT.fullmatch(props.get('Id', ''))
+    if not match or props.get('ActiveState') not in ACTIVE_STATES:
+        return None
+    env = props.get('environment', {})
+    if not isinstance(env, dict):
+        raise ValueError('launch environment required')
+    # Do not remove restart suffixes. Missing SATS_LANE is a new policy label,
+    # not an assertion of what a legacy notifier emitted.
+    lane = env.get('SATS_LANE') if 'SATS_LANE' in env else match[1]
+    key, branch = unit_key(lane, env, props.get('InvocationID'))
+    return {'binding': binding(lane, key), 'authority': 'owner default from exact local unit launch',
+            'owner': 'Lightning', 'derivation': branch, 'unit': props['Id'],
+            'lane_observed': 'SATS_LANE' in env, 'emission_verified': False,
+            'source': {'InvocationID': props.get('InvocationID'), 'environment': {k:env[k] for k in FIELDS if k in env},
+                       'WorkingDirectory': props.get('WorkingDirectory')},
+            'notice_binding_used': False}
+
+
+def from_registration(record, path, source_sha256, existing=None):
+    """New launcher contract: independently derive from raw run and exact unit.
+
+    The notice_binding property is intentionally never consulted. Historical
+    manual mappings stay in the reviewed seed; arbitrary JSON is not a launch.
+    """
+    if not isinstance(record, dict):
+        raise ValueError('registration object')
+    lane = record.get('lane')
+    if not isinstance(lane, str) or not LANE.fullmatch(lane) or record.get('unit') != 'sats-lane-' + lane + '.service':
+        raise ValueError('registration unit/lane mismatch')
+    if record.get('lanedir') != str(Path(path).parent) or record.get('start_occurrence') != 'launch-start':
+        raise ValueError('launcher registration contract missing')
+    raw = record.get('run')
+    if not isinstance(raw, str) or not RAW_RUN.fullmatch(raw):
+        raise ValueError('registration raw launch run required')
+    started = record.get('started_at')
+    if isinstance(started, bool) or not isinstance(started, (int, float)) or abs(started - int(raw.split('-')[0])) > 1.01:
+        raise ValueError('registration launch timestamp mismatch')
+    if record.get('status') not in ('launching', 'active', 'terminal'):
+        raise ValueError('registration status')
+    key = run_key(lane, 'run-' + raw)
+    known = (existing or {}).get((lane, key))
+    value = dict(validate_binding(known)) if known else binding(lane, key)
+    if record.get('recipient') != value['recipient'] or record.get('owner') not in (None, 'Lightning'):
+        raise ValueError('registration contradicts owner policy')
+    if record.get('owner_thread_id') != value.get('owner_thread_id'):
+        # A producer thread ID is not new authority for an owner mapping.
+        raise ValueError('explicit owner thread needs reviewed owner mapping')
+    return {'binding': value, 'authority': 'independent launcher LANE.json',
+            'owner': 'Lightning', 'lane_observed': True, 'emission_verified': False,
+            'source': {'path': str(path), 'sha256': source_sha256, 'raw_run': raw, 'unit': record['unit']},
+            'notice_binding_used': False}
+
+
+def systemctl(argv):
+    # No execution cap: subprocess.run's timeout kills its child with SIGKILL.
+    # The only supported dispatches are local, read-only unit inspection.
+    if not argv or argv[0] not in ('list-units', 'show'):
+        raise ValueError('read-only systemctl inspection required')
+    return subprocess.run(['systemctl', '--user', *argv], check=True, text=True,
+                          capture_output=True).stdout
+
+
+def unit_names():
+    return sorted({line.split()[0] for line in systemctl([
+        'list-units', 'sats-lane-*', '--all', '--no-legend', '--plain', '--no-pager']).splitlines() if line.strip()})
+
+
+def show(unit):
+    props = dict(line.split('=', 1) for line in systemctl(['show', unit, '--no-pager',
+        '--property=Id,ActiveState,InvocationID,MainPID,WorkingDirectory,Environment']).splitlines() if '=' in line)
+    env = dict(x.split('=', 1) for x in shlex.split(props.pop('Environment', '')) if '=' in x)
+    props['environment'] = {k: env[k] for k in FIELDS if k in env}
+    return props
+
+
+def observed_unit(unit):
+    props = show(unit)
+    if props.get('MainPID', '0') != '0' and props.get('ActiveState') == 'active':
+        pid = int(props['MainPID'])
+        # Parse only the permitted fields; no output of a full environment.
+        raw = Path('/proc/%d/environ' % pid).read_bytes()
+        env = {}
+        for item in raw.split(b'\0'):
+            key, sep, value = item.partition(b'=')
+            if sep and key.decode(errors='replace') in FIELDS:
+                env[key.decode()] = value.decode()
+        if env.get('INVOCATION_ID') != props.get('InvocationID'):
+            raise ValueError('process/unit identity race')
+        props['environment'] = env
+    after = show(unit)
+    if (props.get('MainPID'), props.get('InvocationID'), props.get('ActiveState')) != \
+            (after.get('MainPID'), after.get('InvocationID'), after.get('ActiveState')):
+        raise ValueError('unit changed during read')
+    return props
+
+
+def registration_paths(roots):
+    # Current and retained canonical launches, never recursive fixture/payload dirs.
+    for root in roots:
+        root = Path(root)
+        if not root.is_dir():
+            continue
+        for directory in sorted(root.iterdir()):
+            if directory.is_dir() and not directory.is_symlink():
+                for launch_directory in (directory, directory / 'gates'):
+                    path = launch_directory / 'LANE.json'
+                    if path.exists():
+                        yield path
+                    if launch_directory.is_dir() and not launch_directory.is_symlink():
+                        for archive in sorted(launch_directory.glob('LANE.previous.*.json')):
+                            if re.fullmatch(r'LANE\.previous\.[0-9]+\.json', archive.name):
+                                # read_json/from_registration remain the authority;
+                                # the archive stamp never supplies a binding key.
+                                yield archive
+
+
+def collect(roots, existing=None):
+    entries, gaps, covered = [], [], []
+    existing = existing or {}
+    try:
+        units = unit_names()
+    except (OSError, ValueError, subprocess.SubprocessError):
+        units = []
+        gaps.append({'scope': 'current_active', 'disposition': 'unit_inventory_unavailable'})
+    for unit in units:
+        if not UNIT.fullmatch(unit):
+            continue
+        try:
+            props = observed_unit(unit)
+            if props.get('Id') != unit or props.get('ActiveState') not in (*ACTIVE_STATES, 'inactive', 'failed'):
+                raise ValueError('exact unit identity/state unavailable')
+            item = from_unit(props)
+            if item:
+                b = item['binding']
+                known = existing.get((b['lane'], b['run']))
+                if known:
+                    # Coverage also honors exact mappings during --check-only.
+                    item['binding'] = dict(known)
+                entries.append(item)
+            else:
+                # An inactive unit supplies no current enrollment claim. Keep
+                # its historical gap separate from required active coverage.
+                try:
+                    lane = props['environment'].get('SATS_LANE', UNIT.fullmatch(unit)[1])
+                    run, _ = unit_key(lane, props['environment'], props.get('InvocationID'))
+                    known = existing.get((lane, run))
+                except (KeyError, TypeError, ValueError):
+                    known = None
+                if known:
+                    covered.append({'unit': unit, 'binding': known, 'scope': 'historical_inactive',
+                                    'disposition': 'inactive exact launch already in reviewed registry'})
+                else:
+                    gaps.append({'unit': unit, 'scope': 'historical_inactive',
+                                 'disposition': 'inactive_unit_without_verified_retained_launch'})
+        except (OSError, ValueError, subprocess.SubprocessError):
+            # Unknown or racing unit state cannot prove active coverage.
+            gaps.append({'unit': unit, 'scope': 'current_active',
+                         'disposition': 'unsafe_or_unavailable_launch_evidence'})
+    for path in registration_paths(roots):
+        try:
+            record, digest = read_json(path)
+            entries.append(from_registration(record, path, digest, existing))
+        except (OSError, ValueError, TypeError):
+            # An old manual registration is never new enrollment authority. It
+            # may be acknowledged as covered only by an already reviewed key.
+            try:
+                record, digest = read_json(path)
+                if not isinstance(record, dict):
+                    raise ValueError('registration object')
+                key = (record.get('lane'), record.get('run'))
+                known = existing.get(key)
+                if known and record.get('recipient') == known['recipient']:
+                    covered.append({'path': str(path), 'sha256': digest, 'binding': known,
+                                    'disposition': 'legacy registration already in reviewed registry'})
+                    continue
+            except (OSError, ValueError, TypeError):
+                pass
+            gaps.append({'path': str(path), 'scope': 'historical_missing_launch',
+                         'disposition': 'not_verified_new_launcher_contract'})
+    return entries, gaps, covered
+
+
+def atomic_json(path, data):
+    path = Path(path)
+    # Same directory replacement: a reader sees a complete old or new list.
+    stage = path.with_name(path.name + '.stage-' + uuid.uuid4().hex)
+    fd = os.open(stage, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'w') as stream:
+        json.dump(data, stream, indent=2, sort_keys=True)
+        stream.write('\n')
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(stage, path)
+    fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def merge(path, entries, *, retain_existing=False):
+    path = safe_file(path)
+    lock_path = path.with_name(path.name + '.enrollment.lock')
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_nlink != 1:
+            raise ValueError('unsafe enrollment lock')
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        values, _ = read_json(path)
+        if not isinstance(values, list):
+            raise ValueError('one JSON list required')
+        index = {}
+        for value in values:
+            validate_binding(value)
+            key = (value['lane'], value['run'])
+            if key in index:
+                raise ValueError('duplicate existing binding')
+            index[key] = value
+        added = []
+        for entry in entries:
+            value = validate_binding(entry['binding'])
+            key = (value['lane'], value['run'])
+            if key in index:
+                if index[key] != value:
+                    if not retain_existing:
+                        raise ValueError('binding conflict; preserve original and hold')
+                    # A policy default is a proposal, never a replacement for
+                    # an exact owner-enrolled mapping. Return the held mapping
+                    # to local emitters/coverage checks under this same lock.
+                    entry['binding'] = dict(index[key])
+                continue
+            index[key] = value
+            values.append(value)
+            added.append(entry)
+        if added:
+            # Immutable write-ahead receipts survive a crash between audit/registry
+            # commits. They authorize no delivery and are not registry inputs.
+            audit = path.with_name(path.name + '.enrollment.jsonl')
+            audit_fd = os.open(audit, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+            try:
+                info = os.fstat(audit_fd)
+                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_nlink != 1:
+                    raise ValueError('unsafe enrollment audit')
+                recipients = {entry['binding']['recipient'] for entry in added}
+                data = (json.dumps({'observed_at': time.time(), 'owner': 'Lightning',
+                    'recipient': next(iter(recipients)) if len(recipients) == 1 else None,
+                    'policy_default_recipient': 'Sats',
+                    'operation': 'enrollment-only', 'entries': added}, sort_keys=True) + '\n').encode()
+                while data:
+                    n = os.write(audit_fd, data)
+                    if n == 0:
+                        raise OSError('short audit write')
+                    data = data[n:]
+                os.fsync(audit_fd)
+            finally:
+                os.close(audit_fd)
+            atomic_json(path, values)
+        return added, len(values)
+    finally:
+        os.close(fd)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--registry', required=True)
+    parser.add_argument('--report', required=True)
+    parser.add_argument('--launch-root', action='append', default=[])
+    parser.add_argument('--check-only', action='store_true')
+    args = parser.parse_args()
+    # A report target must be in a safe owner directory too.
+    target = Path(args.report).absolute()
+    registry = Path(args.registry).absolute()
+    if target in (registry, registry.with_name(registry.name + '.enrollment.lock'),
+                  registry.with_name(registry.name + '.enrollment.jsonl')) or target.name == 'LANE.json':
+        raise ValueError('report collides with registry or launch source')
+    if target.exists():
+        safe_file(target)
+    else:
+        for parent in (target.parent, *target.parent.parents):
+            info = parent.lstat()
+            if stat.S_ISLNK(info.st_mode) or info.st_mode & 0o022 or info.st_uid not in (0, os.getuid()):
+                raise ValueError('unsafe report directory')
+    try:
+        values, _ = read_json(args.registry)
+        if not isinstance(values, list):
+            raise ValueError('one JSON list required')
+        existing = {}
+        for value in values:
+            validate_binding(value)
+            key = (value['lane'], value['run'])
+            if key in existing:
+                raise ValueError('duplicate existing key')
+            existing[key] = value
+        roots = args.launch_root or ['/home/victor/work']
+        entries, gaps, covered = collect(roots, existing)
+        if any(str(target) == entry.get('source', {}).get('path') for entry in entries):
+            raise ValueError('report collides with enrollment source')
+        added, count = ([], len(values)) if args.check_only else merge(
+            args.registry, entries, retain_existing=True)
+        enrolled, _ = read_json(args.registry)
+        enrolled = {(b['lane'], b['run']): b for b in enrolled}
+        active_entries = [entry for entry in entries if entry.get('unit')]
+        for entry in active_entries:
+            b = entry['binding']
+            if enrolled.get((b['lane'], b['run'])) != b:
+                gaps.append({'unit': entry['unit'], 'scope': 'current_active',
+                             'disposition': 'required_active_binding_not_enrolled'})
+    except (OSError, ValueError, TypeError, subprocess.SubprocessError) as error:
+        # The target has passed its safety check. Report a value-free failure;
+        # never write source text, environments or subprocess stderr here.
+        report = {'status': 'BLOCKED', 'operation': 'enrollment-only', 'registry': str(registry),
+                  'observed_at': time.time(), 'error_type': type(error).__name__,
+                  'reason': 'invalid_or_unavailable_local_owner_evidence',
+                  'current_active_coverage': {'complete': False}, 'ingress_read': False,
+                  'delivery': 'not attempted'}
+        atomic_json(target, report)
+        print(json.dumps({'status': 'BLOCKED', 'report': str(target), 'delivery': 'not attempted'}))
+        return 2
+    active_gaps = [gap for gap in gaps if gap['scope'] == 'current_active']
+    historical_gaps = [gap for gap in gaps if gap['scope'] != 'current_active']
+    report = {'operation': 'enrollment-only', 'owner': 'Lightning', 'recipient': 'Sats', 'priority': True,
+              'status': 'BLOCKED' if active_gaps else 'CURRENT_ACTIVE_ENROLLMENT_COVERED',
+              'registry': str(registry),
+              'observed_at': time.time(), 'check_only': args.check_only, 'entries': entries, 'added': added,
+              'registry_count': count, 'gaps': gaps, 'covered_existing': covered,
+              'active_gaps': active_gaps, 'historical_gaps': historical_gaps,
+              'current_active_coverage': {'complete': not active_gaps,
+                  'observed_units': len(active_entries),
+                  'enrolled_units': sum(enrolled.get((e['binding']['lane'], e['binding']['run'])) == e['binding']
+                                        for e in active_entries),
+                  'inventory_observed': not any(g.get('disposition') == 'unit_inventory_unavailable' for g in gaps)},
+              'emission_verified': False,
+              'ingress_read': False, 'delivery': 'not attempted'}
+    atomic_json(target, report)
+    print(json.dumps({'status': report['status'], 'enrolled': len(added), 'observed': len(entries),
+                     'active_gaps': len(active_gaps), 'historical_gaps': len(historical_gaps),
+                     'delivery': 'not attempted'}))
+    return 1 if active_gaps else 0
+
+
+if __name__ == '__main__':
+    sys.dont_write_bytecode = True
+    os.umask(0o077)
+    try:
+        sys.exit(main())
+    except (OSError, ValueError, TypeError, subprocess.SubprocessError):
+        print('{"status":"BLOCKED","reason":"invalid_or_unavailable_local_owner_evidence","delivery":"not attempted"}')
+        sys.exit(2)

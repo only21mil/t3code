@@ -1,0 +1,52 @@
+[
+  {
+    "live_path": "/home/victor/.local/lib/sats-stall-watchdog/sats_stall_watchdog.py",
+    "frozen_path": "tests/preimage/sats_stall_watchdog.py",
+    "sha256": "2b9037fa02d073cc0be1883a1bee5c7bf9a3c831fe2b922e67998a289c7f4715"
+  },
+  {
+    "live_path": "/home/victor/.local/lib/sats-stall-watchdog/sats_stall_asks.py",
+    "frozen_path": "tests/preimage/sats_stall_asks.py",
+    "sha256": "570acb591d8dade6eb3e61f8e3cc86c340dc6f54e96b9c1942a21655445b84bf"
+  },
+  {
+    "live_path": "/home/victor/.local/bin/sats-completion-notify",
+    "frozen_path": "tests/preimage/sats-completion-notify",
+    "sha256": "38f1e6f9d2f95e2a70a58e56aa742ab2c79fc03573d54405c5c2044c9d86f29e"
+  },
+  {
+    "live_path": "/home/victor/.local/bin/p5b-owner-bindings-refresh",
+    "frozen_path": "tests/preimage/p5b-owner-bindings-refresh",
+    "sha256": "8b593dc5760a9240a6822b06433e153e99f746efb9bba242c5976abfc4bd5069"
+  },
+  {
+    "live_path": "/home/victor/work/p5b-med4-reader-20261013/candidate/lightning_consumer.py",
+    "frozen_path": "tests/preimage/lightning_consumer.py",
+    "sha256": "751d6384600ad535dbb27bf29332b5c972cca41430ff32b6a473bee57b5bd940"
+  },
+  {
+    "live_path": "/home/victor/.local/lib/sats-stall-watchdog/sats_stall_collector.py",
+    "frozen_path": "src/sats_stall_collector.py",
+    "sha256": "1a5acf4a0ff6bef48239393d02082a73d8429d8e0bafc7d2f76b5324b3ed8186"
+  },
+  {
+    "live_path": "/home/victor/.local/lib/sats-stall-watchdog/sats_stall_mcp.py",
+    "frozen_path": "src/sats_stall_mcp.py",
+    "sha256": "5b83c242da4b3ec34af957508f7ca27c07e1333733118a989f808854f18670bc"
+  },
+  {
+    "live_path": "/home/victor/.local/bin/sats-completion-notify (live 2026-10-20, read-only copy)",
+    "frozen_path": "tests/preimage/live-20261020/sats-completion-notify",
+    "sha256": "a1e138ca53c04fa37f6b701bc3b886d61cfa5292d9f26636cadbbf047f56318a"
+  },
+  {
+    "live_path": "/home/victor/.local/lib/sats-stall-watchdog/sats_stall_asks.py (round 5, installed 2026-10-20 14:27 CT)",
+    "frozen_path": "tests/preimage/r5/sats_stall_asks.py",
+    "sha256": "8144383d7bbeb46bdb764f7ab3cc066f64c3a4ecb5a3426fa71a23faf5b17f17"
+  },
+  {
+    "live_path": "code-round candidate/bin/sats-completion-notify (install target for /home/victor/.local/bin/sats-completion-notify: live a1e138ca plus the urgent kind)",
+    "frozen_path": "tests/preimage/candidate-20261020/sats-completion-notify",
+    "sha256": "ad1f0106f6f8d0fad97067d7fa2807bd41c9991af5c9fc12adae91b45fc1ae62"
+  }
+]

@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+import sys
+from pathlib import Path
+root = Path(__file__).resolve().parent
+if not (root / 'sats_stall_watchdog.py').is_file():
+    root = Path.home() / '.local' / 'lib' / 'sats-stall-watchdog'
+sys.path.insert(0, str(root))
+from sats_stall_watchdog import main
+raise SystemExit(main())
