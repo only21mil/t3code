@@ -1,27 +1,38 @@
 # Rollback: notice-package-20261023
 
 `install/rollback.sh <lane>/install-record-<ts>` undoes the live install. Like the install, it restarts no
-service and runs between watchdog ticks.
+service and runs between watchdog ticks, gated by the `watchdog_gate.py` the install copied into the record.
 
+0. Checks, before it changes anything, that every changed file has a restore source: the ORIGINAL base backup
+   the record names (`install.env` `BAK_<file>`, listed in `backups.txt`), a real file at the base sha256. For a
+   resumed install that is the backup the interrupted run wrote. A file that is neither its base nor the
+   installed candidate stops the rollback too.
 1. Disables and stops `sats-completion-requeue.timer` and its service, moves both unit files into the record
    (kept, not deleted), and runs `daemon-reload`.
 2. Runs the events down-migration with the candidate module copied into the record (`downgrade_events`, one
-   transaction, no VACUUM or checkpoint). The events table returns to its old DDL byte for byte. The first event
-   of each (thread, generation, state) stays. Later per-ask BLOCKED rows move to `events_parked`, a table the old
-   watchdog never reads. The rehearsal on the live DB copy round-trips byte-identical.
-3. Restores `sats_stall_asks.py`, `sats-completion-notify` and `mcp_call.py` from their
-   `.bak-notice-package-<ts>` files, with modes 644, 755 and 644, and drops the stale bytecode. The watchdog runs
-   the old module at its next tick.
-4. Canon is reverted separately and never force-pushed. `git revert` the pushed D (if pushed), C and B on a
-   fresh clone of main, then push. Keep A: it is the 406e3fd9/6ea2e6fb catch-up and matches the rolled-back live
-   install.
+   transaction, no VACUUM or checkpoint). The events table returns to its old DDL byte for byte. Each
+   (thread, generation, state) keeps one row: its legacy row when it has one, else its first per-ask row,
+   which takes the legacy event id (`per_ask_event_id` keeps the old one). The old watchdog then binds later asks
+   of that generation to the kept row: it neither claims a second BLOCKED nor binds to a missing id. The other
+   per-ask BLOCKED rows move to `events_parked`, a table the old watchdog never reads. The rehearsal on the live
+   DB copy round-trips byte-identical.
+3. Restores `sats_stall_asks.py`, `sats_stall_watchdog.py`, `sats-completion-notify` and `mcp_call.py` from
+   their recorded original backups, with modes 644, 644, 755 and 644, and drops the stale bytecode. The
+   watchdog runs the old modules at its next tick.
+4. Canon is reverted separately and never force-pushed. `git revert` the pushed F and D (if pushed), E, C and
+   B on a fresh clone of main, then push. Keep A: it is the 406e3fd9/6ea2e6fb catch-up and matches the
+   rolled-back live install.
 
 Safety notes:
 
-- Order is forgiving. The old module also runs on the per-ask schema, because `ask` is derived from the event
-  JSON and INSERTs still name five columns. `test_downgrade_parks_per_ask_rows_and_the_old_watchdog_runs_on_both_schemas`
-  shows it. So a restore without step 2 keeps the watchdog working under its old one-BLOCKED-per-generation rule.
+- Order matters. Step 2 runs before step 3, both inside one gated window. The old module on the per-ask schema
+  finds its legacy BLOCKED key free beside the per-ask rows, so a re-wake repeating an ask already sent
+  per ask would send a second BLOCKED
+  (`test_DSM3_the_old_module_on_the_per_ask_schema_can_send_a_second_blocked`). The reverse window is unsafe
+  as well: the candidate module re-upgrades a downgraded table on its next tick. So never restore the files
+  without the down-migration, and run both between the same two ticks.
 - Archived requeue entries stay archived. Moving them back would queue 18 stale DIED notices and 6 DONE entries,
   and DONE entries are never replayed. The manifest in each `requeue-archive-<date>/` names every entry.
-- Last resort only: restore `asks.sqlite3.bak-notice-package-<ts>` with the watchdog idle. Events claimed after
-  the install would be forgotten and could send again, so use the down-migration first.
+- Last resort only: restore the `asks.sqlite3` copy that `DB_BAK_ORIGINAL` in `install.env` names, with the
+  watchdog idle. Events claimed after the install would be forgotten and could send again, so use the
+  down-migration first.
