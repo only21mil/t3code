@@ -123,6 +123,13 @@ describe("parsePullRequestReference", () => {
     expect(parsePullRequestReference(url)).toBe(url);
   });
 
+  it.each([
+    "https://code.example.com/group/project?x=1/-/merge_requests/42",
+    "https://code.example.com/group/project#x/-/merge_requests/42",
+  ])("rejects a merge request marker outside the URL path %s", (url) => {
+    expect(parsePullRequestReference(url)).toBeNull();
+  });
+
   it("accepts gh pr checkout commands with raw numbers", () => {
     expect(parsePullRequestReference("gh pr checkout 42")).toBe("42");
   });
