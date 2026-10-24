@@ -94,6 +94,23 @@ TERMINAL_RUN = {"completed", "failed", "cancelled", "interrupted", "rolled_back"
 VERDICT = re.compile(r"(ACCEPT|REQUEST_CHANGES)\b")
 RESULT_PATH = re.compile(r"(/(?:home|Users)/[A-Za-z0-9._/-]+/RESULT\.md)")
 STILL_OPEN = re.compile(r"NEEDS-VICTOR|^[ \t>*_-]*(?:BLOCKED|FAILED|CANCEL+ED)\b", re.M)
+# A reviewer child: one that voted, or whose title or thread id names a review (review-and-babysit task names).
+REVIEWER = re.compile(r"review", re.I)
+# The F-D stall watchdog's install: its classify() is the ask detection a settle must agree with.
+WATCHDOG_LIB = "/home/victor/.local/lib/sats-stall-watchdog"
+TEXT_LIMIT = 20000
+
+
+def watchdog_classify():
+    """sats_stall_asks.classify from the installed watchdog, so a settle reads a reply's asks exactly as the
+    watchdog's notices do (SOL-5). Missing, the guard refuses rather than guess."""
+    if WATCHDOG_LIB not in sys.path:
+        sys.path.insert(0, WATCHDOG_LIB)
+    try:
+        import sats_stall_asks
+        return sats_stall_asks.classify
+    except (ImportError, AttributeError, SyntaxError):
+        raise SystemExit("settle guard: the stall watchdog's ask detection is unavailable; nothing settled") from None
 
 
 def sweep_settle_refusal(rpc, host: str, thread_id: str) -> str | None:
@@ -115,18 +132,26 @@ def sweep_settle_refusal(rpc, host: str, thread_id: str) -> str | None:
     if thread.get("activeRunId") or thread.get("pendingRequestCount"):
         return "thread has an active run or a pending request"
     tail = read("t3_thread_read", {"threadId": thread_id, "view": "messages", "runLimit": 1, "limit": 40,
-                                   "maxCharsPerItem": 4000, "afterPosition": max(0, thread["itemCount"] - 41)})
+                                   "maxCharsPerItem": TEXT_LIMIT, "afterPosition": max(0, thread["itemCount"] - 41)})
     items = tail["items"]
     done = [n for n, i in enumerate(items) if i["type"] == "assistant_message" and i["status"] == "completed"
             and i["text"].lstrip(" \t>*_-#").startswith("DONE")]
     if not done:
         return "no reply leads with DONE"
     final = items[done[-1]]["text"]
-    for later in items[done[-1] + 1:]:
-        if later["type"] == "user_message":
+    classify = watchdog_classify()
+    for n, later in enumerate(items[done[-1]:]):
+        if n and later["type"] == "user_message":
             return "a message arrived after the DONE reply"
-        if later["type"] == "assistant_message" and STILL_OPEN.search(later["text"]):
-            return "a reply after DONE is BLOCKED or asks Victor"
+        if later["type"] != "assistant_message":
+            continue
+        if later.get("textTruncated"):
+            return "a reply from the DONE reply on is too long to check whole"
+        # Every form the watchdog notifies (NEEDS-VICTOR, BLOCKED lines, bold **BLOCKED**, "Decision for you",
+        # Closed as BLOCKED, fenced or inline) keeps the thread open, in the DONE reply and every reply after it.
+        verdict = classify(later["text"], final=True)
+        if (verdict is not None and verdict[3] is not None) or (n and STILL_OPEN.search(later["text"])):
+            return ("the DONE reply" if not n else "a reply after DONE") + " is BLOCKED or asks Victor"
     children = []
     cursor = None
     while True:
@@ -147,14 +172,21 @@ def sweep_settle_refusal(rpc, host: str, thread_id: str) -> str | None:
                                        "maxCharsPerItem": 200, "afterPosition": max(0, state["thread"]["itemCount"] - 21)})
         said = [i for i in last["items"] if i["type"] == "assistant_message" and i["status"] == "completed"]
         verdict = VERDICT.match(said[-1]["text"].lstrip()) if said else None
-        if verdict:
-            # A reviewer seat is its model; its newest vote stands.
+        named = " ".join(str(v or "") for v in (child.get("title"), state["thread"].get("title"), child["threadId"]))
+        if verdict or REVIEWER.search(named):
+            # Every reviewer seat the parent started is required, and a seat is its model: its newest review
+            # stands. A review that ended without a verdict (BLOCKED, no reply, a failed or cancelled run) is that
+            # seat's missing vote (SOL-6).
             seat = state["thread"].get("model") or child["threadId"]
-            at = runs[0].get("completedAt") or ""
+            at = (runs[0].get("completedAt") or "") if runs else ""
+            vote = verdict.group(1) if verdict and runs and runs[0]["status"] == "completed" else "no ACCEPT"
             if seat not in votes or at > votes[seat][0]:
-                votes[seat] = (at, verdict.group(1))
-    if any(vote != "ACCEPT" for _, vote in votes.values()):
+                votes[seat] = (at, vote)
+    if any(vote == "REQUEST_CHANGES" for _, vote in votes.values()):
         return "a reviewer's newest vote is REQUEST_CHANGES"
+    missing = sorted(seat for seat, (_, vote) in votes.items() if vote != "ACCEPT")
+    if missing:
+        return f"reviewer {', '.join(missing)} ended without an ACCEPT (BLOCKED, no verdict or failed run)"
     path = RESULT_PATH.search(final)
     if path is None:
         return "final reply names no RESULT.md"

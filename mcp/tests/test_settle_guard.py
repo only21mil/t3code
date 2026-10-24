@@ -3,6 +3,7 @@ no live children and no pending votes. Offline: a fake MCP rpc, RESULT.md files 
 import importlib.util
 import json
 import os
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -13,6 +14,10 @@ spec = importlib.util.spec_from_file_location('mcp_call', ROOT / 'mcp_call.py')
 mcp_call = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mcp_call)
 guard = getattr(mcp_call, 'sweep_settle_refusal', None)
+# The guard reads replies with the stall watchdog's classify(); the candidate's own watchdog source stands in for the
+# installed one (WATCHDOG_SRC overrides, for a copy of these tests run elsewhere).
+if hasattr(mcp_call, 'WATCHDOG_LIB'):
+    mcp_call.WATCHDOG_LIB = os.environ.get('WATCHDOG_SRC') or str(ROOT.parent / 'tools/sats-stall-watchdog/src')
 
 
 def text(value):
@@ -55,9 +60,10 @@ class SettleGuardTests(unittest.TestCase):
         parent = {'thread': {'threadId': 'p', 'projectId': 'proj', 'activeRunId': active, 'pendingRequestCount': 0,
                              'itemCount': len(items) + 1, 'parentThreadId': None}, 'items': items}
         threads = {'p': parent}
-        for n, (status, verdict, model) in enumerate(children):
+        for n, (status, verdict, model, *title) in enumerate(children):
             tid = 'c%d' % n
             threads[tid] = {'thread': {'threadId': tid, 'projectId': 'proj', 'parentThreadId': 'p', 'model': model,
+                                       'title': title[0] if title else 'review-r1-' + model,
                                        'activeRunId': 'run' if status == 'running' else None, 'itemCount': 2},
                             'runs': [{'status': status, 'completedAt': '2026-10-23T23:%02d:00Z' % n}],
                             'items': [reply(1, verdict)]}
@@ -99,6 +105,57 @@ class SettleGuardTests(unittest.TestCase):
         self.assertIn('review is not required', guard(self.model(self.done()), 'fd', 'p'))
         self.result.write_text('DONE\nReview is not required: proof thread.\n')
         self.assertIsNone(guard(self.model(self.done()), 'fd', 'p'))
+
+    @unittest.skipIf(guard is None, 'no guard in this mcp_call.py')
+    def test_SOL5_every_watchdog_ask_form_from_the_done_reply_on_refuses(self):
+        # After a DONE reply and an accepted RESULT, the reply forms the watchdog notifies keep the thread open.
+        children = [('completed', 'ACCEPT', 'opus'), ('completed', 'ACCEPT', 'deepseek')]
+        later = {'decision for you': '**Decision for you:** may I also push T05 upstream?',
+                 'inline bold BLOCKED': 'The reviewed result is **BLOCKED**: RESULT.md:1 names the missing key.',
+                 'closed as BLOCKED': 'Closed as BLOCKED. The key never arrived.',
+                 'fenced NEEDS-VICTOR': 'Open asks:\n```\nNEEDS-VICTOR p pick A or B /x\n```',
+                 'decision from you, ask shape': 'C14 needs a decision from you before the push.'}
+        for name, text in later.items():
+            with self.subTest(name):
+                self.assertIn('a reply after DONE is BLOCKED or asks Victor',
+                              guard(self.model(self.done() + [reply(2, text)], children=children), 'fd', 'p') or '')
+        own = [reply(0, 'brief', 'user_message'), reply(1, 'DONE. Result: %s\n**Decision for you:** archive the lane?' % self.result)]
+        self.assertIn('the DONE reply is BLOCKED or asks Victor', guard(self.model(own, children=children), 'fd', 'p') or '')
+        for text in ('Those are late notices. The objective is DONE and settled.', 'Decision from Victor: GO, recorded.',
+                     'It reports here as a DONE or BLOCKED notice.'):
+            with self.subTest(text=text):
+                self.assertIsNone(guard(self.model(self.done() + [reply(2, text)], children=children), 'fd', 'p'))
+
+    @unittest.skipIf(guard is None, 'no guard in this mcp_call.py')
+    def test_SOL6_a_required_reviewer_without_accept_refuses(self):
+        refused = {
+            'BLOCKED peer': [('completed', 'ACCEPT', 'opus'), ('completed', 'BLOCKED: the provider rejected the review', 'deepseek')],
+            'peer with no reply': [('completed', 'ACCEPT', 'opus'), ('completed', '', 'deepseek')],
+            'peer run failed': [('completed', 'ACCEPT', 'opus'), ('failed', 'ACCEPT', 'deepseek')],
+            'newest review BLOCKED': [('completed', 'ACCEPT', 'deepseek'), ('completed', 'BLOCKED: rerun cap', 'deepseek')],
+        }
+        for name, children in refused.items():
+            with self.subTest(name):
+                self.assertIn('ended without an ACCEPT', guard(self.model(self.done(), children=children), 'fd', 'p') or '')
+        allowed = {
+            'all ACCEPT': [('completed', 'ACCEPT', 'opus'), ('completed', 'ACCEPT', 'deepseek')],
+            'BLOCKED review rerun to ACCEPT': [('completed', 'BLOCKED: provider rejected', 'deepseek'), ('completed', 'ACCEPT', 'opus'),
+                                               ('completed', 'ACCEPT', 'deepseek')],
+            'producer child is no vote': [('completed', 'DONE. Patch written.', 'opus', 'produce-fix'),
+                                          ('completed', 'ACCEPT', 'opus'), ('completed', 'ACCEPT', 'deepseek')],
+        }
+        for name, children in allowed.items():
+            with self.subTest(name):
+                self.assertIsNone(guard(self.model(self.done(), children=children), 'fd', 'p'))
+
+    @unittest.skipIf(guard is None, 'no guard in this mcp_call.py')
+    def test_SOL5_missing_watchdog_detection_refuses(self):
+        rpc = self.model(self.done(), children=[('completed', 'ACCEPT', 'opus')])
+        with patch.object(mcp_call, 'WATCHDOG_LIB', str(self.directory / 'absent')), \
+                patch.dict(sys.modules, {'sats_stall_asks': None}):
+            with self.assertRaises(SystemExit) as stop:
+                guard(rpc, 'fd', 'p')
+        self.assertIn('ask detection is unavailable', str(stop.exception))
 
     def main_calls(self, arguments, refusal):
         """Drive main() over a fake transport. Returns the tools/call names it sent and the guard's calls."""
