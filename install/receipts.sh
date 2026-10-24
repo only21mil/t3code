@@ -42,7 +42,7 @@ echo
 BW="$RUN/base-watchdog/tools/sats-stall-watchdog"
 mkdir -p "$(dirname "$BW")" && cp -r "$W" "$BW" && rm -rf "$BW/tests/.tmp"
 git -C "$CAND" show base:tools/sats-stall-watchdog/src/sats_stall_asks.py > "$BW/src/sats_stall_asks.py"
-block "new watchdog tests on live asks 406e3fd9" "$BW" python3 -m unittest \
+block "new watchdog tests on live asks 406e3fd9" "$BW/tests" python3 -m unittest \
   test_asks.DoneTriggerTests test_asks.MarkersAnywhereTests test_asks.PerAskTests test_asks.EventsMigrationTests \
   test_generations.EventTests.test_done_once_on_the_done_reply_never_on_settle \
   test_generations.EventTests.test_a_status_line_that_leads_with_done_is_the_generations_done \
@@ -68,7 +68,7 @@ echo "## 4. Migration and install rehearsals"
 echo
 cp "$LANE/evidence/asks-copy-20261023T204626.sqlite3" "$RUN/asks-rehearse.sqlite3"
 block "migration up and down on a copy of the live asks.sqlite3" "$CAND" python3 -I install/events_migration.py --lib tools/sats-stall-watchdog/src rehearse "$RUN/asks-rehearse.sqlite3"
-block "install and rollback in a sandbox HOME" "$CAND" bash install/rehearse.sh "$LANE/.tmp-run/rehearsal-$(date +%H%M%S)" \
+block "install and rollback in a sandbox HOME" "$CAND" bash install/rehearse.sh "$RUN/rehearsal" \
   "$LANE/evidence/asks-copy-20261023T204626.sqlite3" "$LANE/evidence/requeue-copy"
 block "shellcheck" "$CAND" shellcheck -S warning install/install.sh install/rollback.sh install/rehearse.sh install/receipts.sh
 block "systemd-analyze verify" "$CAND" systemd-analyze --user verify notify/systemd/sats-completion-requeue.service notify/systemd/sats-completion-requeue.timer

@@ -9,7 +9,7 @@ umask 077
 SB="${1:?sandbox dir}" DBCOPY="${2:?asks.sqlite3 copy}" RQCOPY="${3:?requeue copy dir}"
 CAND="$(cd "$(dirname "$0")/.." && pwd)"
 LANE="$(dirname "$CAND")"
-case "$(readlink -f "$SB")/" in "$LANE"/*) ;; *) echo "sandbox must be inside $LANE" >&2; exit 2 ;; esac
+case "$(realpath -m "$SB")/" in "$LANE"/*) ;; *) echo "sandbox must be inside $LANE" >&2; exit 2 ;; esac
 [ ! -e "$SB" ] || [ -z "$(ls -A "$SB")" ] || { echo "sandbox must be empty" >&2; exit 2; }
 H="$SB/home"
 mkdir -p "$SB/shim" "$H/.local/lib/sats-stall-watchdog" "$H/.local/bin" "$H/work/t3-mcp-connect-2026-10-07/scripts" \
