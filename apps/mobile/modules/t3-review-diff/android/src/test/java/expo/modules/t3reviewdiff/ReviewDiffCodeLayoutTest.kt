@@ -226,7 +226,8 @@ class ReviewDiffCodeLayoutTest {
     assertTrue(comment.startsWith(result.removeSuffix("...")))
     assertTrue(result.length > 3)
     assertTrue(paint.measureText(result) <= 300f)
-    assertTrue("measured ${counting.measuredChars} chars", counting.measuredChars <= 4 * comment.length)
+    val measured = counting.measuredChars
+    assertTrue("measured $measured chars", measured <= 4 * comment.length)
     assertEquals("Short", ellipsize("Short", paint, 300f))
   }
 

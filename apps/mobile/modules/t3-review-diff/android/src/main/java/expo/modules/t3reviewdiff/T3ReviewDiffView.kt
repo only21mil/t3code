@@ -1357,13 +1357,13 @@ private class DiffCanvasView(context: Context) : View(context) {
   )
 }
 
+// Runs on every draw. breakText measures the text once, where shrinking a prefix and
+// re-measuring it costs quadratic work on long comments.
 internal fun ellipsize(value: String, paint: Paint, width: Float): String {
-  if (paint.measureText(value) <= width) return value
+  if (paint.breakText(value, true, width, null) == value.length) return value
   val suffix = "..."
   val available = max(0f, width - paint.measureText(suffix))
-  var end = value.length
-  while (end > 0 && paint.measureText(value, 0, end) > available) end -= 1
-  return value.substring(0, end) + suffix
+  return value.substring(0, paint.breakText(value, true, available, null)) + suffix
 }
 
 private fun withAlpha(color: Int, alpha: Int): Int =
