@@ -24,9 +24,11 @@ An ask is an assistant message in a top-level thread of an allowed project
 that carries a NEEDS-VICTOR line or a decision ID, or, as the final message of
 a thread that is not running, asks Victor a question or for approval. It is
 open until a later user message answers it or the thread is settled or
-archived after it was written. Only an explicit NEEDS-VICTOR marker or BLOCKED
-line is the generation's BLOCKED; a final message that leads with FAILED or
-CANCELED is that event. Other asks stay local records. Assistant text is read
+archived after it was written. A NEEDS-VICTOR marker, a BLOCKED line, a bold
+**BLOCKED** in a final message or a "decision for you" line is a BLOCKED, each
+ask its own (notice-package-20261023 items 5 and 6); markers count inside fenced
+and inline code too. A final message that leads with FAILED or CANCELED is that
+event. Other asks stay local records. Assistant text is read
 in memory; only the notice line and the per-event evidence file carry an
 excerpt, never the watchdog log.
 
@@ -59,9 +61,15 @@ MESSAGE_LIMIT = 300
 EXCERPT_LIMIT = 1500
 TURN_GRACE = 60            # seconds after a turn stops before its asks are decided
 
-MARKER_RE = re.compile(r'^[ \t>*_-]*(?:\d+[.)][ \t]*)?[*_]*NEEDS-VICTOR\b.*$', re.M)
-# The notice shape "<thread|lane> BLOCKED <words> <path>" or a BLOCKED verdict line; final messages only.
-BLOCKED_LINE_RE = re.compile(r'^[ \t>*_-]*(?:[A-Za-z0-9:_%./-]{3,200}[ \t]+)?[*_]*BLOCKED\b.*$', re.M)
+# Markers count wherever they stand, fenced or inline code included: MBP 64539631 posted its 28 asks inside a
+# text fence (notice-package-20261023 item 5). A backtick may open the line or the token.
+MARKER_RE = re.compile(r'^[ \t>*_`-]*(?:\d+[.)][ \t]*)?[*_`]*NEEDS-VICTOR\b.*$', re.M)
+# The notice shape "<thread|lane> BLOCKED <words> <path>", "Closed as BLOCKED" or a BLOCKED verdict line; final
+# messages only. A negation before the token ("not BLOCKED") disqualifies it.
+BLOCKED_LINE_RE = re.compile(r'^[ \t>*_`-]*(?:(?i:closed[ \t]+as)[ \t]+|[A-Za-z0-9:_%./-]{3,200}[ \t]+)?[*_`]*(BLOCKED)\b.*$', re.M)
+# A bold BLOCKED inside a final message's line: "The reviewed result is **BLOCKED**" (F-D 7237c08a). A table row
+# reports other work's state and never counts.
+INLINE_BLOCKED_RE = re.compile(r'(\*\*|__)BLOCKED\1')
 # A final message whose first line leads with FAILED or CANCELED, in the same notice shape.
 TERMINAL_LINE_RE = re.compile(r'^[ \t>*_-]*(?:[A-Za-z0-9:_%./-]{3,200}[ \t]+)?[*_]*(FAILED|CANCEL+ED)\b')
 # A reply whose first line leads with DONE, in the same notice shape, is the generation's own DONE.
@@ -117,17 +125,36 @@ def one_line(text, limit):
     return text if len(text) <= limit else text[:limit - 3] + '...'
 
 
+def decision_for(line):
+    """True for a line that asks Victor for a decision ("**Decision for you:**"), unless a negation earlier in its
+    sentence cancels it ("That needs no decision from Victor")."""
+    return any(not NEGATION_RE.search(re.split(r'[.!?;]\s', line[:m.start()])[-1]) for m in DECISION_FOR_RE.finditer(line))
+
+
+def blocked_lines(text):
+    """A final message's BLOCKED lines: the notice shape or "Closed as BLOCKED", else lines with a bold BLOCKED
+    that are not table rows. A negation before the token, in its line or sentence, disqualifies it."""
+    lines = [found.group(0).strip(' \t>*_`-') for found in BLOCKED_LINE_RE.finditer(text)
+             if not NEGATION_RE.search(found.group(0)[:found.start(1) - found.start()])]
+    if not lines:
+        for line in text.splitlines():
+            found = INLINE_BLOCKED_RE.search(line)
+            if found and not line.lstrip().startswith('|') and not NEGATION_RE.search(re.split(r'[.!?;]\s', line[:found.start()])[-1]):
+                lines.append(line.strip(' \t>*_`-'))
+    return lines
+
+
 def classify(text, final):
     """(kind, excerpt, marker lines, event state) for an ask, else None.
 
-    Markers count in any assistant message. Prose counts only in a final
-    message, outside code and outside a trailing Next steps offer list. The
-    event is BLOCKED for a NEEDS-VICTOR marker or a BLOCKED line, FAILED or
-    CANCELED for a final message that leads with one, else None."""
+    Markers count in any assistant message, inside fenced and inline code too. Prose counts only in a final
+    message, outside code and outside a trailing Next steps offer list. The event is BLOCKED for a NEEDS-VICTOR
+    marker, a BLOCKED line or bold BLOCKED of a final message, or a "decision for you" line; FAILED or CANCELED
+    for a final message that leads with one; else None, and a DECISION- ID alone or a prose ask stays local."""
     if not isinstance(text, str) or not text.strip():
         return None
     body = FENCE_RE.sub('', text)
-    markers = [line.strip(' \t>*_-') for line in MARKER_RE.findall(body)]
+    markers = [line.strip(' \t>*_`-') for line in MARKER_RE.findall(text)]
     event = 'BLOCKED' if markers else None
     if not markers and final:
         head = next((line for line in body.splitlines() if line.strip()), '')
@@ -135,11 +162,12 @@ def classify(text, final):
         if found and not NEGATION_RE.search(head[:found.start(1)]):
             markers, event = [head.strip(' \t>*_-')], 'FAILED' if found.group(1) == 'FAILED' else 'CANCELED'
         else:
-            markers = [line.strip(' \t>*_-') for line in BLOCKED_LINE_RE.findall(body)]
+            markers = blocked_lines(text)
             event = 'BLOCKED' if markers else None
     if not markers:
-        markers = [line.strip() for line in body.splitlines() if DECISION_ID_RE.search(line) or any(
-                   not NEGATION_RE.search(re.split(r'[.!?;]\s', line[:m.start()])[-1]) for m in DECISION_FOR_RE.finditer(line))]
+        # "Decision for you:" asks Victor (c95235ec kept 17 of them local); a DECISION- ID only names a decision.
+        markers = [line.strip() for line in text.splitlines() if DECISION_ID_RE.search(line) or decision_for(line)]
+        event = 'BLOCKED' if any(decision_for(line) for line in markers) else None
     markers = [mask(one_line(line, EXCERPT_LIMIT)) for line in markers]
     excerpt = None
     if markers:

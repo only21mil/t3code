@@ -1006,5 +1006,110 @@ class DoneTriggerTests(Harness):
         self.assertEqual(self.occurrences(), [('t1', 'generation-1-START')])
 
 
+
+# Real timeline items read on 2026-10-23 for notice-package-20261023 (tests/fixtures; texts, ids and times unchanged).
+EVIDENCE = json.loads((ROOT / 'tests/fixtures/notice-package-20261023.json').read_text())
+
+
+def evidence_text(key, position):
+    return next(i['text'] for i in EVIDENCE['threads'][key]['items'] if i['position'] == position)
+
+
+def evidence_thread(key, upto=None, lead=None):
+    """A FakeT3 thread of real items up to position `upto`. lead: a synthetic opening user message at that position,
+    for a fixture whose real opening message was not frozen (it opens the generation; its text is not evidence)."""
+    record = EVIDENCE['threads'][key]
+    items = [dict(i) for i in record['items'] if upto is None or i['position'] <= upto]
+    if lead is not None:
+        first = items[0]
+        items.insert(0, dict(first, position=lead, type='user_message', text='brief (synthetic opening message)',
+                             messageId='message:synthetic-%d' % lead, itemId='item:synthetic-%d' % lead))
+    last = items[-1]
+    meta = {'threadId': record['threadId'], 'projectId': 'p1', 'title': record['title'], 'status': 'completed',
+            'latestRunId': last['runId'], 'settled': False, 'settledAt': None, 'archived': False, 'parentThreadId': None,
+            'relationshipToParent': None, 'pendingRequestCount': 0, 'updatedAt': last['updatedAt']}
+    return record['threadId'], {'meta': meta, 'items': items}
+
+
+def after_turn(t):
+    return asks.timestamp(t['meta']['updatedAt']) + 3600
+
+
+class MarkersAnywhereTests(Harness):
+    """notice-package-20261023 item 5: NEEDS-VICTOR, BLOCKED and DECISION- markers count inside fenced and inline
+    code; a leading "Closed as BLOCKED" and a bold **BLOCKED** of a final message are BLOCKED; "Decision for you:"
+    is an ask, not a local record; a negation still disqualifies."""
+
+    def test_fenced_asks_mbp_64539631(self):
+        kind, excerpt, markers, event = asks.classify(evidence_text('64539631', 171), final=False)
+        self.assertEqual((event, len(markers)), ('BLOCKED', 28))
+        self.assertTrue(all(m.startswith('NEEDS-VICTOR mcp:64539631-ea2a-480c-8e12-d64acb208816 ') for m in markers))
+        self.assertIn('P1 exporter diagnosis', markers[0])
+        self.assertIn('Shadow poller disposition', markers[-1])
+
+    def test_closed_as_blocked_mbp_64539631(self):
+        kind, excerpt, markers, event = asks.classify(evidence_text('64539631', 174), final=True)
+        self.assertEqual((kind, event), ('blocker', 'BLOCKED'))
+        self.assertTrue(markers[0].startswith('Closed as BLOCKED.'))
+        self.assertIsNone(asks.classify(evidence_text('64539631', 174), final=False))  # BLOCKED lines: final only
+
+    def test_inline_bold_blocked_fd_7237c08a(self):
+        kind, excerpt, markers, event = asks.classify(evidence_text('7237c08a', 25), final=True)
+        self.assertEqual((kind, event), ('blocker', 'BLOCKED'))
+        self.assertTrue(markers[0].startswith('The reviewed result is **BLOCKED**'))
+        # The same thread's earlier progress lines mention BLOCKED without the notice shape and are not final.
+        self.assertIsNone(asks.classify(evidence_text('7237c08a', 23), final=False))
+
+    def test_decision_for_you_is_an_ask_c95235ec(self):
+        kind, excerpt, markers, event = asks.classify(evidence_text('c95235ec-524', 524), final=True)
+        self.assertEqual((kind, event), ('decision', 'BLOCKED'))
+        self.assertTrue(markers[0].startswith('**Decision for you:** should P05 delete'))
+        stored = EVIDENCE['c95235ec_local_decision_asks']['asks']
+        self.assertEqual(len(stored), 17)  # the asks the live watchdog kept local in that thread
+        for ask in stored:
+            with self.subTest(position=ask['position']):
+                self.assertEqual(asks.classify('\n'.join(ask['markers']), final=False)[3], 'BLOCKED')
+
+    def test_markers_inside_inline_code_and_fences(self):
+        self.assertEqual(asks.classify('`NEEDS-VICTOR t1 pick A or B /x`', final=False)[3], 'BLOCKED')
+        self.assertEqual(asks.classify('Status:\n```\nNEEDS-VICTOR t1 pick A /x\n```', final=False)[3], 'BLOCKED')
+        self.assertEqual(asks.classify('Done.\n`BLOCKED` waiting on the key /x/RESULT.md', final=True)[3], 'BLOCKED')
+        self.assertEqual(asks.classify('```\nmcp:t1 BLOCKED no key /x\n```', final=True)[3], 'BLOCKED')
+        decision = asks.classify('Logged.\n```\nDECISION-PUSH-2 approve the push\n```', final=False)
+        self.assertEqual((decision[2], decision[3]), (['DECISION-PUSH-2 approve the push'], None))  # matched, stays local
+
+    def test_negations_and_reports_do_not_match(self):
+        for text in ('Not BLOCKED: the key arrived and the push went out.', 'not BLOCKED anymore /x',
+                     'The lane is no longer **BLOCKED**; it finished.', 'Nothing is **BLOCKED** now.',
+                     '| 7237c08a | hub-openrouter-check | **BLOCKED** |', 'It reports here as a DONE or BLOCKED notice.',
+                     'That needs no decision from Victor; it is written up as one blocker.'):
+            with self.subTest(text=text):
+                verdict = asks.classify(text, final=True)
+                self.assertTrue(verdict is None or verdict[3] is None, verdict)
+
+    def test_7237c08a_inline_blocked_is_an_ask_and_its_settle_sends_no_done(self):
+        tid, t = evidence_thread('7237c08a')
+        client = FakeT3(PROJECTS, {tid: t})
+        self.tick(client, now=after_turn(t))
+        rows = {a['position']: (a['event'], a['state']) for a in self.rows_for(tid)}
+        self.assertEqual(rows[25][0], 'BLOCKED')
+        self.assertIn(('fd', 'generation-1-START'), [(p['host'], p['occurrence']) for p in self.sent])
+        t['meta'].update(settled=True, settledAt='2026-10-24T00:39:26.701Z', updatedAt='2026-10-24T00:39:26.701Z')
+        self.tick(client, now=after_turn(t) + 7200)
+        self.assertNotIn('DONE', [p['occurrence'].split('-')[2] for p in self.sent])
+
+    def test_decision_for_you_sends_a_blocked_c95235ec(self):
+        tid, t = evidence_thread('c95235ec-524', upto=524, lead=0)
+        self.tick(FakeT3(PROJECTS, {tid: t}), now=after_turn(t))
+        self.assertEqual([(p['occurrence'].split('-')[2], p['kind']) for p in self.sent], [('START', 'start'), ('BLOCKED', 'blocker')])
+
+    def rows_for(self, tid):
+        state = asks.AskState(self.directory)
+        try:
+            return [value for _, value in state.rows('asks', 'ask-') if value['thread_id'] == tid]
+        finally:
+            state.close()
+
+
 if __name__ == '__main__':
     unittest.main()
