@@ -126,6 +126,8 @@ describe("parsePullRequestReference", () => {
   it.each([
     "https://code.example.com/group/project?x=1/-/merge_requests/42",
     "https://code.example.com/group/project#x/-/merge_requests/42",
+    "https://code.example.com?x=/group/project/-/merge_requests/42",
+    "https://code.example.com#/group/project/-/merge_requests/42",
   ])("rejects a merge request marker outside the URL path %s", (url) => {
     expect(parsePullRequestReference(url)).toBeNull();
   });

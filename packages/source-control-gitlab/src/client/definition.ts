@@ -8,7 +8,7 @@ import {
 
 const CHECKOUT_COMMAND = /^glab\s+mr\s+checkout\s+(.+)$/i;
 const CHANGE_REQUEST_REFERENCE =
-  /^https?:\/\/[^/\s]+\/[^?#\s]+\/-\/merge_requests\/(\d+)(?:[/?#].*)?$/i;
+  /^https?:\/\/[^/?#\s]+\/[^?#\s]+\/-\/merge_requests\/(\d+)(?:[/?#].*)?$/i;
 
 const KIND = SourceControlProviderKind.make("gitlab");
 
