@@ -193,6 +193,43 @@ class ReviewDiffCodeLayoutTest {
     assertFresh(rows)
   }
 
+  @Test
+  fun ellipsizeMeasuresLongTextInLinearWork() {
+    val counting = object : TextPaint(paint) {
+      var measuredChars = 0
+
+      override fun measureText(text: String): Float {
+        measuredChars += text.length
+        return super.measureText(text)
+      }
+
+      override fun measureText(text: String, start: Int, end: Int): Float {
+        measuredChars += end - start
+        return super.measureText(text, start, end)
+      }
+
+      override fun breakText(
+        text: String,
+        measureForwards: Boolean,
+        maxWidth: Float,
+        measuredWidth: FloatArray?
+      ): Int {
+        measuredChars += text.length
+        return super.breakText(text, measureForwards, maxWidth, measuredWidth)
+      }
+    }
+    val comment = "Please rename this before merging. ".repeat(60)
+
+    val result = ellipsize(comment, counting, 300f)
+
+    assertTrue(result.endsWith("..."))
+    assertTrue(comment.startsWith(result.removeSuffix("...")))
+    assertTrue(result.length > 3)
+    assertTrue(paint.measureText(result) <= 300f)
+    assertTrue("measured ${counting.measuredChars} chars", counting.measuredChars <= 4 * comment.length)
+    assertEquals("Short", ellipsize("Short", paint, 300f))
+  }
+
   private fun row(content: String) = DiffRow(
     kind = "line", id = "line", fileId = "file", filePath = "test.ts", previousPath = null,
     changeType = "modified", additions = 1, deletions = 0, text = "", content = content,

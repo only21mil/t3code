@@ -1339,15 +1339,6 @@ private class DiffCanvasView(context: Context) : View(context) {
     return (top + bottom) / 2f - (metrics.ascent + metrics.descent) / 2f
   }
 
-  private fun ellipsize(value: String, paint: Paint, width: Float): String {
-    if (paint.measureText(value) <= width) return value
-    val suffix = "..."
-    val available = max(0f, width - paint.measureText(suffix))
-    var end = value.length
-    while (end > 0 && paint.measureText(value, 0, end) > available) end -= 1
-    return value.substring(0, end) + suffix
-  }
-
   private data class StickyFileHeader(
     val index: Int,
     val top: Int,
@@ -1364,6 +1355,15 @@ private class DiffCanvasView(context: Context) : View(context) {
     val displayPath: String,
     val rect: RectF
   )
+}
+
+internal fun ellipsize(value: String, paint: Paint, width: Float): String {
+  if (paint.measureText(value) <= width) return value
+  val suffix = "..."
+  val available = max(0f, width - paint.measureText(suffix))
+  var end = value.length
+  while (end > 0 && paint.measureText(value, 0, end) > available) end -= 1
+  return value.substring(0, end) + suffix
 }
 
 private fun withAlpha(color: Int, alpha: Int): Int =
