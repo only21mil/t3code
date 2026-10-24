@@ -966,5 +966,45 @@ class UpgradeTests(Harness):
         self.assertEqual(len(self.rows()), 2)
 
 
+
+class DoneTriggerTests(Harness):
+    """notice-delay-rca-20261023 patch 1, round-1 H1 (.stage/check_tick.py): a due DONE held only by TURN_GRACE makes
+    the scan reread the thread next tick, although its listing never changes again after the turn ends."""
+
+    def reads(self, client):
+        return sum(1 for name, _ in client.calls if name == 't3_thread_read')
+
+    def test_done_inside_the_grace_is_reread_once_and_claimed(self):
+        end = T0 + 60
+        t1 = thread('t1', build(('user_message', 'go', T0), ('assistant_message', 'DONE. Verdict: trial K3.1 Pro.', end)))
+        client = FakeT3(PROJECTS, {'t1': t1})
+        self.tick(client, now=end + 30)
+        self.assertEqual(self.occurrences(), [('t1', 'generation-1-START')])
+        before = self.reads(client)
+        self.tick(client, now=end + 330)
+        self.assertEqual(self.reads(client) - before, 1)
+        self.assertEqual(self.occurrences(), [('t1', 'generation-1-START'), ('t1', 'generation-1-DONE')])
+        before = self.reads(client)
+        self.tick(client, now=end + 630)
+        self.assertEqual((self.reads(client) - before, len(self.sent)), (0, 2))
+
+    def test_done_then_blocked_and_no_done_line_send_no_done(self):
+        end = T0 + 60
+        threads = {tid: thread(tid, build(*[('user_message', 'go', T0)] + [('assistant_message', text, end) for text in texts]))
+                   for tid, texts in (('t1', ('DONE. first pass', 'BLOCKED waiting on key /x/RESULT.md')),
+                                      ('t2', ('Still working on it.',)))}
+        client = FakeT3(PROJECTS, threads)
+        for offset in (30, 330, 630):
+            self.tick(client, now=end + offset)
+        self.assertNotIn('generation-1-DONE', [o for _, o in self.occurrences()])
+        self.assertIn(('t1', 'generation-1-BLOCKED'), self.occurrences())
+
+    def test_negated_lead_and_settle_alone_send_no_done(self):
+        t1 = thread('t1', build(('user_message', 'go', T0), ('assistant_message', 'Not DONE yet, review pending.', T0 + 60)),
+                    settled=True, settled_at=T0 + 120)
+        self.tick(FakeT3(PROJECTS, {'t1': t1}))
+        self.assertEqual(self.occurrences(), [('t1', 'generation-1-START')])
+
+
 if __name__ == '__main__':
     unittest.main()

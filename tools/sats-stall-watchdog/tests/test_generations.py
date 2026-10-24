@@ -68,15 +68,20 @@ class EventTests(Generations):
         self.assertEqual(len(self.sent), 1)
         self.assertEqual([n for n, _ in self.generations()], [1])
 
-    def test_done_once_on_settle(self):
+    def test_done_once_on_the_done_reply_never_on_settle(self):
+        # notice-delay-rca-20261023 patch 1: DONE is the generation's own reply that leads with DONE, once its turn
+        # has ended and TURN_GRACE has passed. A settle neither sends it nor is needed for it.
         t1 = thread('t1', build(('user_message', 'brief', T0), ('assistant_message', 'All checks pass; RESULT.md written.', T0 + 60)))
-        client = FakeT3(PROJECTS, {'t1': t1})
-        self.assertEqual(self.tick(client)[0], 1)  # START; completed alone is not DONE
-        t1['meta'].update(settled=True, settledAt=iso(T0 + 120), updatedAt=iso(T0 + 120))
-        self.assertEqual(self.tick(client)[0], 1)
-        t1['meta'].update(settledAt=iso(T0 + 200), updatedAt=iso(T0 + 200))  # a second settle of the same work
-        self.assertEqual(self.tick(client, now=LATER)[0], 0)
-        self.assertEqual(self.sent_events(), [('t1', 'generation-1-START', 'start'), ('t1', 'generation-1-DONE', 'done')])
+        t2 = thread('t2', build(('user_message', 'brief', T0), ('assistant_message', 'DONE. All checks pass; RESULT.md written.', T0 + 60)))
+        client = FakeT3(PROJECTS, {'t1': t1, 't2': t2})
+        self.assertEqual(self.tick(client)[0], 3)  # START each, and t2's DONE; t1's report does not lead with DONE
+        for t in (t1, t2):
+            t['meta'].update(settled=True, settledAt=iso(T0 + 120), updatedAt=iso(T0 + 120))
+        self.assertEqual(self.tick(client, now=LATER)[0], 0)  # the settle sends nothing
+        t2['meta'].update(settledAt=iso(T0 + 200), updatedAt=iso(T0 + 200))  # a second settle of the same work
+        self.assertEqual(self.tick(client, now=LATER + 1)[0], 0)
+        self.assertEqual(sorted(self.sent_events()), [('t1', 'generation-1-START', 'start'), ('t2', 'generation-1-DONE', 'done'),
+                                                      ('t2', 'generation-1-START', 'start')])
 
     def test_needs_victor_and_blocked_line_are_one_blocked(self):
         t1 = thread('t1', build(('user_message', 'brief', T0), ('assistant_message', 'NEEDS-VICTOR t1 pick A or B /x', T0 + 60)))
@@ -181,7 +186,7 @@ class EventTests(Generations):
         client = FakeT3(PROJECTS, {'t1': t1})
         self.tick(client)
         self.add(t1, 'user_message', 'Victor: GO on option A', T0 + 4000, 'run:thread:t1:ordinal:2')
-        self.add(t1, 'assistant_message', 'Option A done.', T0 + 4100, 'run:thread:t1:ordinal:2')
+        self.add(t1, 'assistant_message', 'DONE: option A applied.', T0 + 4100, 'run:thread:t1:ordinal:2')
         self.tick(client, now=LATER)
         t1['meta'].update(settled=True, settledAt=iso(T0 + 4200), updatedAt=iso(T0 + 4200))
         self.tick(client, now=LATER + 1)
@@ -200,9 +205,10 @@ class EventTests(Generations):
         self.tick(client)
         self.add(t1, 'user_message', '[From Sats] also check the mini', T0 + 20, 'run:thread:t1:ordinal:1')
         self.add(t1, 'user_message', '[From Sats] status?', T0 + 30, 'run:thread:t1:ordinal:2')
-        self.add(t1, 'assistant_message', 'Both checked; done.', T0 + 40, 'run:thread:t1:ordinal:2')
-        self.tick(client, now=LATER)
-        t1['meta'].update(status='completed', settled=True, settledAt=iso(T0 + 50), updatedAt=iso(T0 + 50))
+        self.add(t1, 'assistant_message', 'DONE: both checked.', T0 + 40, 'run:thread:t1:ordinal:2')
+        self.tick(client, now=LATER)  # still running: its DONE waits for the turn to end
+        self.assertEqual([o for _, o, _ in self.sent_events()], ['generation-1-START'])
+        t1['meta'].update(status='completed', updatedAt=iso(T0 + 50))
         self.tick(client, now=LATER + 1)
         self.assertEqual([o for _, o, _ in self.sent_events()], ['generation-1-START', 'generation-1-DONE'])
 
@@ -216,13 +222,24 @@ class EventTests(Generations):
 
     def test_status_replies_and_milestones_send_nothing(self):
         texts = ('Status: 3 of 5 producers done; reviews start after.', 'Milestone 2 reached; RESULT.md updated.',
-                 'Answered your question: the key lives in the vault.', 'DONE with phase 1, starting phase 2.',
+                 'Answered your question: the key lives in the vault.', 'Done with phase 1, starting phase 2.',
                  'Should I also clean the logs?', 'Recorded as DECISION-PUSH-2 in DECISION-PUSH.md')
         rows = [('user_message', 'brief', T0)] + [('assistant_message', text, T0 + n) for n, text in enumerate(texts, 1)]
         client = FakeT3(PROJECTS, {'t1': thread('t1', build(*rows))})
         count, events = self.tick(client)
         self.assertEqual((count, self.sent_events()), (1, [('t1', 'generation-1-START', 'start')]))
         self.assertEqual({a['state'] for a in self.ask_rows()}, {'local'})
+        self.assertEqual(self.tick(client, now=LATER)[0], 0)
+
+    def test_a_status_line_that_leads_with_done_is_the_generations_done(self):
+        # Patch 1 keys DONE on a reply's first line wherever it sits in the turn: Kimi's DONE reply (mini 3e9f5d46)
+        # had two more replies after it. So a status line that leads with DONE is the generation's one DONE,
+        # claimed when the turn ends, and later replies of the generation add nothing.
+        rows = [('user_message', 'brief', T0), ('assistant_message', 'DONE with phase 1, starting phase 2.', T0 + 1),
+                ('assistant_message', 'Phase 2 running.', T0 + 2)]
+        client = FakeT3(PROJECTS, {'t1': thread('t1', build(*rows))})
+        self.assertEqual(self.tick(client)[0], 2)
+        self.assertEqual(self.sent_events(), [('t1', 'generation-1-START', 'start'), ('t1', 'generation-1-DONE', 'done')])
         self.assertEqual(self.tick(client, now=LATER)[0], 0)
 
 
@@ -403,15 +420,17 @@ class InertLiveHook(Generations):
 
     def test_thread_own_done_notice_suppresses_the_watchdog_done(self):
         import hashlib
-        t1 = thread('t1', build(('user_message', 'brief', T0), ('assistant_message', 'All checks pass.', T0 + 60)))
+        t1 = thread('t1', build(('user_message', 'brief', T0), ('assistant_message', 'DONE. All checks pass.', T0 + 60)),
+                    status='running')
+        t1['meta']['activeRunId'] = t1['meta']['latestRunId']
         client = FakeT3(PROJECTS, {'t1': t1})
         self.send = self.hook
-        self.tick(client)
+        self.tick(client)  # the turn still runs: START only
         run = t1['meta']['latestRunId']
         key = hashlib.sha256(json.dumps(['t3-t1', 't1', 'done', run], separators=(',', ':')).encode()).hexdigest()
         (self.directory / 'hook-state' / 'milestones' / (key + '.acceptance.json')).write_text(
-            json.dumps({'http_status': 200, 'recipient_run_id': UUID}))
-        t1['meta'].update(settled=True, settledAt=iso(T0 + 120), updatedAt=iso(T0 + 120))
+            json.dumps({'http_status': 200, 'recipient_run_id': UUID}))  # the turn posts its own DONE before it ends
+        t1['meta'].update(status='completed', activeRunId=None, updatedAt=iso(T0 + 120))
         self.tick(client, now=LATER)
         self.assertEqual([p['notice_occurrence'] for p in self.posts()], ['generation-1-START'])
         self.assertEqual({e['state']: e['status'] for e in self.events()}, {'START': 'sent', 'DONE': 'thread-notice'})
@@ -670,7 +689,7 @@ class FirstRunTests(Generations):
         threads['tb']['meta'].update(settledAt=iso(T0 + 4000), updatedAt=iso(T0 + 4000))
         self.assertEqual(self.tick(client, now=LATER)[0], 0)
         # tc's in-flight work finishes after the upgrade: one DONE, no START. Answers to ta and td are new work.
-        self.add(threads['tc'], 'assistant_message', 'All checks pass.', T0 + 5000, 'run:thread:tc:ordinal:2')
+        self.add(threads['tc'], 'assistant_message', 'DONE. All checks pass.', T0 + 5000, 'run:thread:tc:ordinal:2')
         threads['tc']['meta'].update(status='completed', settled=True, settledAt=iso(T0 + 5100), updatedAt=iso(T0 + 5100))
         self.add(threads['ta'], 'user_message', 'Victor: use the old key', T0 + 5000, 'run:thread:ta:ordinal:3')
         self.add(threads['td'], 'user_message', 'Victor: yes, delete them', T0 + 5000, 'run:thread:td:ordinal:2')
