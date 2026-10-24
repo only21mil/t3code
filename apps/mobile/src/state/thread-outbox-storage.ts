@@ -31,7 +31,7 @@ export async function flushThreadOutboxWrites(): Promise<void> {
 export class ThreadOutboxStorageError extends Schema.TaggedError<ThreadOutboxStorageError>()(
   "ThreadOutboxStorageError",
   {
-    operation: Schema.Literals(["load", "read-message", "write", "remove"]),
+    operation: Schema.Literals(["load", "read-message", "decode-message", "write", "remove"]),
     environmentId: Schema.NullOr(EnvironmentId),
     threadId: Schema.NullOr(ThreadId),
     messageId: Schema.NullOr(MessageId),
@@ -83,12 +83,15 @@ export const expoThreadOutboxStorage: ThreadOutboxStorage = {
         if (!(entry instanceof File) || !entry.name.endsWith(".json")) {
           continue;
         }
+        let operation: "read-message" | "decode-message" = "read-message";
         try {
-          messages.push(decodeQueuedThreadMessage(JSON.parse(await entry.text()) as unknown));
+          const text = await entry.text();
+          operation = "decode-message";
+          messages.push(decodeQueuedThreadMessage(JSON.parse(text) as unknown));
         } catch (cause) {
           errors.push(
             new ThreadOutboxStorageError({
-              operation: "read-message",
+              operation,
               environmentId: null,
               threadId: null,
               messageId: null,

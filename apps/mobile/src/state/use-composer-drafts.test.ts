@@ -171,6 +171,7 @@ import {
 } from "@t3tools/shared/composerContextReferences";
 import { appAtomRegistry } from "./atom-registry";
 import { threadOutboxManager } from "./thread-outbox";
+import type { QueuedThreadMessage } from "./thread-outbox-model";
 import {
   appendComposerDraftAttachments,
   captureComposerDraftInsertion,
@@ -2536,6 +2537,77 @@ describe("mobile composer drafts", () => {
       file.uploadEnvironmentId,
       [file.uploadedAttachmentId],
     );
+  });
+
+  it("moves queued messages across sign-out and sign-in past an outbox record this build cannot decode", async () => {
+    vi.resetModules();
+    const drafts = await import("./use-composer-drafts");
+    const { threadOutboxManager: manager } = await import("./thread-outbox");
+    const { expoThreadOutboxStorage: storage, ThreadOutboxStorageError } =
+      await import("./thread-outbox-storage");
+    const { appAtomRegistry: registry } = await import("./atom-registry");
+    onTestFinished(() => registry.dispose());
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    onTestFinished(() => warning.mockRestore());
+    const environmentId = EnvironmentId.make("environment-1");
+    const readable: QueuedThreadMessage = {
+      environmentId,
+      threadId: ThreadId.make("thread-1"),
+      messageId: MessageId.make("message-readable"),
+      commandId: CommandId.make("command-readable"),
+      text: "Send after signing back in",
+      attachments: [],
+      createdAt: "2026-09-04T00:00:00.000Z",
+    };
+    const unownedFile = {
+      id: "file-undecodable-owner",
+      type: "file" as const,
+      name: "owned-by-undecodable.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 42,
+      fileUri: "file:///documents/t3-composer-attachments/owned-by-undecodable.pdf",
+    };
+    const saved = new Map([[readable.messageId, readable]]);
+    const load = vi.spyOn(storage, "load").mockImplementation(async () => ({
+      messages: [...saved.values()],
+      errors: [
+        new ThreadOutboxStorageError({
+          operation: "decode-message",
+          environmentId: null,
+          threadId: null,
+          messageId: null,
+          fileName: "from-another-app-version.json",
+          cause: new Error("unsupported schema version"),
+        }),
+      ],
+    }));
+    const write = vi.spyOn(storage, "write").mockImplementation(async (message) => {
+      saved.set(message.messageId, message);
+    });
+    const remove = vi.spyOn(storage, "remove").mockImplementation(async (message) => {
+      saved.delete(message.messageId);
+    });
+    onTestFinished(() => {
+      load.mockRestore();
+      write.mockRestore();
+      remove.mockRestore();
+    });
+
+    await drafts.archiveCloudComposerDrafts("account-a", new Set([environmentId]));
+    expect(
+      registry.get(drafts.composerCloudDraftsAtom).signedOut["account-a"]?.queuedMessages,
+    ).toEqual([readable]);
+    await expect(manager.clearEnvironment(environmentId)).resolves.toEqual([readable]);
+    expect(saved.size).toBe(0);
+    await drafts.releaseUnusedComposerAttachmentFiles([unownedFile]);
+    expect(composerAttachmentCleanupMocks.remove).not.toHaveBeenCalled();
+
+    await drafts.restoreCloudComposerDrafts("account-a");
+    expect(registry.get(manager.queuedMessagesByThreadKeyAtom)).toEqual({
+      "environment-1:thread-1": [readable],
+    });
+    expect([...saved.values()]).toEqual([readable]);
+    expect(registry.get(drafts.composerCloudDraftsAtom).signedOut).toEqual({});
   });
 
   it("hydrates persisted drafts before a cold-start sweep deletes their files", async () => {

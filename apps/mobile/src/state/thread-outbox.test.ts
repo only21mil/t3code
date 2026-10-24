@@ -137,9 +137,13 @@ describe("thread outbox", () => {
       decodeQueuedThreadMessage(JSON.parse(JSON.stringify(encodeQueuedThreadMessage(message)))),
     ).toEqual(message);
   });
-  it.each(["read", "json", "schema"] as const)(
+  it.each([
+    ["read", "read-message"],
+    ["json", "decode-message"],
+    ["schema", "decode-message"],
+  ] as const)(
     "recovers usable messages without permitting cleanup after a record %s failure",
-    async (failure) => {
+    async (failure, operation) => {
       onTestFinished(() => outboxFiles.clear());
       const first = queuedMessage({
         messageId: "message-1",
@@ -163,7 +167,7 @@ describe("thread outbox", () => {
 
       await expect(expoThreadOutboxStorage.load()).resolves.toMatchObject({
         messages: [first],
-        errors: [{ operation: "read-message", fileName: "message-2.json" }],
+        errors: [{ operation, fileName: "message-2.json" }],
       });
 
       const registry = AtomRegistry.make();
@@ -184,9 +188,6 @@ describe("thread outbox", () => {
       const beforeRetry = registry.get(manager.queuedMessagesByThreadKeyAtom);
       await expect(manager.load()).resolves.toBe(false);
       expect(registry.get(manager.queuedMessagesByThreadKeyAtom)).toBe(beforeRetry);
-      await expect(manager.clearEnvironment(first.environmentId)).rejects.toMatchObject({
-        operation: "clear-environment-load",
-      });
       expect(outboxFiles.get("message-2.json")).toBe(unreadable);
       expect(outboxFiles.has("message-1.json")).toBe(true);
 
@@ -202,6 +203,61 @@ describe("thread outbox", () => {
         messages: [second],
         errors: [],
       });
+    },
+  );
+
+  it("keeps an environment's queued messages while one of its records cannot be read", async () => {
+    onTestFinished(() => outboxFiles.clear());
+    const first = queuedMessage({ messageId: "message-1", createdAt: "2026-06-08T10:00:01.000Z" });
+    const firstFile = JSON.stringify(encodeQueuedThreadMessage(first));
+    outboxFiles.set("message-1.json", firstFile);
+    outboxFiles.set("message-2.json", new Error("storage unavailable"));
+    const registry = AtomRegistry.make();
+    onTestFinished(() => registry.dispose());
+    const manager = createThreadOutboxManager({
+      registry,
+      storage: expoThreadOutboxStorage,
+      warn: () => {},
+    });
+
+    await expect(manager.load({ allowUndecodable: true })).resolves.toBe(false);
+    await expect(manager.clearEnvironment(first.environmentId)).rejects.toMatchObject({
+      operation: "clear-environment-load",
+    });
+    expect(outboxFiles.get("message-1.json")).toBe(firstFile);
+  });
+
+  it.each(["json", "schema"] as const)(
+    "clears an environment past a record this build cannot decode after a %s failure",
+    async (failure) => {
+      onTestFinished(() => outboxFiles.clear());
+      const first = queuedMessage({
+        messageId: "message-1",
+        createdAt: "2026-06-08T10:00:01.000Z",
+      });
+      const undecodable =
+        failure === "json"
+          ? "{"
+          : JSON.stringify({
+              ...queuedMessage({ messageId: "message-2", createdAt: "2026-06-08T10:00:02.000Z" }),
+              schemaVersion: 999,
+            });
+      outboxFiles.set("message-1.json", JSON.stringify(encodeQueuedThreadMessage(first)));
+      outboxFiles.set("message-2.json", undecodable);
+      const registry = AtomRegistry.make();
+      onTestFinished(() => registry.dispose());
+      const manager = createThreadOutboxManager({
+        registry,
+        storage: expoThreadOutboxStorage,
+        warn: () => {},
+      });
+
+      await expect(manager.clearEnvironment(first.environmentId)).resolves.toEqual([first]);
+      expect(outboxFiles.has("message-1.json")).toBe(false);
+      expect(outboxFiles.get("message-2.json")).toBe(undecodable);
+      expect(registry.get(manager.queuedMessagesByThreadKeyAtom)).toEqual({});
+      await expect(manager.load()).resolves.toBe(false);
+      await expect(manager.load({ allowUndecodable: true })).resolves.toBe(true);
     },
   );
 

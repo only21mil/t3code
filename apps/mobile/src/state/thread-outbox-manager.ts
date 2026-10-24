@@ -7,7 +7,7 @@ import {
   groupQueuedThreadMessages,
   type QueuedThreadMessage,
 } from "./thread-outbox-model";
-import type { ThreadOutboxStorage } from "./thread-outbox-storage";
+import type { ThreadOutboxStorage, ThreadOutboxStorageError } from "./thread-outbox-storage";
 
 export class ThreadOutboxManagerError extends Schema.TaggedError<ThreadOutboxManagerError>()(
   "ThreadOutboxManagerError",
@@ -31,6 +31,11 @@ export class ThreadOutboxManagerError extends Schema.TaggedError<ThreadOutboxMan
   }
 }
 
+// Decoding is deterministic, so a record that fails it stays unreadable until
+// another app version reads it. A read failure can clear on retry.
+const isUndecodable = (error: ThreadOutboxStorageError): boolean =>
+  error.operation === "decode-message";
+
 export interface ThreadOutboxManagerOptions {
   readonly registry: AtomRegistry.AtomRegistry;
   readonly storage: ThreadOutboxStorage;
@@ -46,7 +51,7 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
     ((message: string, error: unknown) => {
       console.warn(message, error);
     });
-  let loadPromise: Promise<boolean> | null = null;
+  let loadPromise: Promise<"complete" | "undecodable" | "failed"> | null = null;
   let mutationQueue: Promise<void> = Promise.resolve();
   const revisions = new Map<MessageId, number>();
   const bumpRevision = (messageId: MessageId): void => {
@@ -69,9 +74,21 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
     options.registry.set(queuedMessagesByThreadKeyAtom, groupQueuedThreadMessages(messages));
   };
 
-  // Readable messages can be used after a partial load. Only a complete load
-  // returns true, so cleanup cannot delete files owned by unreadable records.
-  const load = (): Promise<boolean> => {
+  const loadFailed = (cause: unknown): void => {
+    loadPromise = null;
+    warn(
+      "[thread-outbox] failed to load persisted messages",
+      new ThreadOutboxManagerError({
+        operation: "load",
+        environmentId: null,
+        threadId: null,
+        messageId: null,
+        cause,
+      }),
+    );
+  };
+
+  const loadStatus = () => {
     if (loadPromise !== null) {
       return loadPromise;
     }
@@ -83,25 +100,23 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
         (message) => !currentIds.has(message.messageId) && !revisions.has(message.messageId),
       );
       if (recovered.length > 0) setMessages([...recovered, ...current]);
-      if (result.errors.length > 0) {
-        throw new AggregateError(result.errors, "Some queued messages could not be read.");
-      }
-      return true;
+      if (result.errors.length === 0) return "complete" as const;
+      loadFailed(new AggregateError(result.errors, "Some queued messages could not be read."));
+      return result.errors.every(isUndecodable) ? ("undecodable" as const) : ("failed" as const);
     }).catch((cause) => {
-      loadPromise = null;
-      warn(
-        "[thread-outbox] failed to load persisted messages",
-        new ThreadOutboxManagerError({
-          operation: "load",
-          environmentId: null,
-          threadId: null,
-          messageId: null,
-          cause,
-        }),
-      );
-      return false;
+      loadFailed(cause);
+      return "failed" as const;
     });
     return loadPromise;
+  };
+
+  // Readable messages can be used after a partial load. Only a complete load
+  // returns true, so cleanup cannot delete files owned by unreadable records.
+  // Callers that release no attachment files can pass `allowUndecodable`,
+  // since retrying cannot make those records readable.
+  const load = async ({ allowUndecodable = false } = {}): Promise<boolean> => {
+    const status = await loadStatus();
+    return status === "complete" || (allowUndecodable && status === "undecodable");
   };
 
   const enqueue = (message: QueuedThreadMessage): Promise<void> => {
@@ -257,7 +272,9 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       const persisted = await options.storage
         .load()
         .then((result) => {
-          if (result.errors.length > 0) {
+          // An undecodable record keeps its file. Releasing the attachments of
+          // the messages removed here still waits for a complete load.
+          if (!result.errors.every(isUndecodable)) {
             throw new AggregateError(result.errors, "Some queued messages could not be read.");
           }
           return result.messages;
