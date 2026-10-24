@@ -339,18 +339,17 @@ export function useComposerPathSearch(target: ComposerPathSearchTarget) {
     canReadFiles && searchTarget !== null ? projectEnvironment.searchEntries(searchTarget) : null,
   );
   const hasTarget = searchTarget !== null;
+  const isDebouncing = normalizedTarget.query !== debouncedTarget.query;
 
   return {
     entries: result.data?.entries ?? [],
     error:
-      !hasTarget || fileAccess.isPending
+      isDebouncing || !hasTarget || fileAccess.isPending
         ? null
         : canReadFiles
           ? result.error
           : (fileAccess.error ?? "This connection cannot search host files."),
-    isPending:
-      normalizedTarget.query !== debouncedTarget.query ||
-      (hasTarget && (fileAccess.isPending || result.isPending)),
+    isPending: isDebouncing || (hasTarget && (fileAccess.isPending || result.isPending)),
     refresh: result.refresh,
   };
 }

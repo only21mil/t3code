@@ -45,3 +45,17 @@ export function emptyText(
       return "No results.";
   }
 }
+
+// File-search errors stay visible beside matching thread rows.
+export function commandMenuNotice(input: {
+  readonly triggerKind: ComposerTriggerKind | null;
+  readonly itemCount: number;
+  readonly isLoading: boolean;
+  readonly searchesThreads: boolean;
+  readonly error?: string | null | undefined;
+}): string | null {
+  if (input.error != null) return input.error;
+  return input.itemCount === 0
+    ? emptyText(input.triggerKind, input.isLoading, input.searchesThreads)
+    : null;
+}

@@ -17,7 +17,7 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { GlassSurface } from "../../components/ui/GlassSurface";
 import { PierreEntryIcon } from "../../components/PierreEntryIcon";
 import { pullRequestStatus } from "../pull-requests/pullRequestStatus";
-import { emptyText, groupLabel } from "./composerCommandLabels";
+import { commandMenuNotice, groupLabel } from "./composerCommandLabels";
 
 export type ComposerCommandItem =
   | {
@@ -168,6 +168,13 @@ export const ComposerCommandPopover = memo(function ComposerCommandPopover(
   props: ComposerCommandPopoverProps,
 ) {
   const label = groupLabel(props.triggerKind, props.searchesThreads);
+  const notice = commandMenuNotice({
+    triggerKind: props.triggerKind,
+    itemCount: props.items.length,
+    isLoading: props.isLoading,
+    searchesThreads: props.searchesThreads,
+    error: props.error,
+  });
 
   return (
     <PopoverSurface>
@@ -176,6 +183,11 @@ export const ComposerCommandPopover = memo(function ComposerCommandPopover(
           <Text className="text-3xs font-t3-bold tracking-[0.8px] uppercase text-foreground-muted">
             {label}
           </Text>
+        </View>
+      ) : null}
+      {notice ? (
+        <View className="px-3.5 py-2.5">
+          <Text className="text-xs text-foreground-tertiary">{notice}</Text>
         </View>
       ) : null}
       {props.items.length > 0 ? (
@@ -194,13 +206,7 @@ export const ComposerCommandPopover = memo(function ComposerCommandPopover(
             />
           ))}
         </ScrollView>
-      ) : (
-        <View className="px-3.5 py-2.5">
-          <Text className="text-xs text-foreground-tertiary">
-            {props.error ?? emptyText(props.triggerKind, props.isLoading, props.searchesThreads)}
-          </Text>
-        </View>
-      )}
+      ) : null}
     </PopoverSurface>
   );
 });

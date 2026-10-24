@@ -2,7 +2,7 @@ import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { matchComposerThreadItems } from "@t3tools/client-runtime/composerThreadItems";
 import { describe, expect, it } from "vite-plus/test";
 
-import { emptyText, groupLabel } from "./composerCommandLabels";
+import { commandMenuNotice, emptyText, groupLabel } from "./composerCommandLabels";
 
 const environmentId = EnvironmentId.make("mention-labels");
 const shells = [
@@ -46,5 +46,16 @@ describe("composer command labels", () => {
     expect(emptyText("pull-request", true, false)).toBe("Loading…");
     expect(groupLabel("slash-command", false)).toBe("Commands");
     expect(emptyText("slash-command", false, false)).toBe("No matching commands.");
+  });
+
+  it("shows a file-search error beside matching thread rows", () => {
+    const menu = { triggerKind: "path", isLoading: false, searchesThreads: true } as const;
+    expect(commandMenuNotice({ ...menu, itemCount: 1, error: "File search failed." })).toBe(
+      "File search failed.",
+    );
+    expect(commandMenuNotice({ ...menu, itemCount: 1, error: null })).toBeNull();
+    expect(commandMenuNotice({ ...menu, itemCount: 0, error: null })).toBe(
+      "No matching threads, files, or folders.",
+    );
   });
 });
