@@ -12,14 +12,14 @@ patch 1, never alone.
 
 | Item | Live path | Base sha256 | Candidate sha256 (repo path) |
 |---|---|---|---|
-| 1, 5, 6 | `~/.local/lib/sats-stall-watchdog/sats_stall_asks.py` | `cb8a6cc0…ad94`, the needs-victor fix installed 2026-10-23 22:55:52 CDT (canon source 4a02910). Its own `.bak-needs-victor-20261023T225552` beside it is `406e3fd9…0a22`, this package's first pin, and the install never touches it | `af27b66f…e71f` (`tools/sats-stall-watchdog/src/sats_stall_asks.py`), which carries every cb8a6cc0 behavior (RECEIPTS.md § 2c) |
+| 1, 5, 6 | `~/.local/lib/sats-stall-watchdog/sats_stall_asks.py` | `cb8a6cc0…ad94`, the needs-victor fix installed 2026-10-23 22:55:52 CDT (canon source 4a02910). Its own `.bak-needs-victor-20261023T225552` beside it is `406e3fd9…0a22`, this package's first pin, and the install never touches it | `46280245…35eb` (`tools/sats-stall-watchdog/src/sats_stall_asks.py`), which carries every cb8a6cc0 behavior (RECEIPTS.md § 2c) |
 | 6 | `~/.local/lib/sats-stall-watchdog/sats_stall_watchdog.py` | `6ea2e6fb…a06d` | `78b5b26a…a871` (`tools/sats-stall-watchdog/src/sats_stall_watchdog.py`): `AskTransport.notice_message`, which tells which ask a thread's own notice carried |
 | 6 | `~/.local/state/sats-stall-watchdog/asks.sqlite3` events table | one-per-generation key | per-ask key (`install/events_migration.py up`) |
-| 2 | `~/work/t3-mcp-connect-2026-10-07/scripts/mcp_call.py` | `d1bb0937…e4e7` | `b985f340…5331` (`mcp/mcp_call.py`); it reads asks with the installed watchdog's `classify()` |
+| 2 | `~/work/t3-mcp-connect-2026-10-07/scripts/mcp_call.py` | `d1bb0937…e4e7` | `a294dd2b…8823` (`mcp/mcp_call.py`); it reads asks with the installed watchdog's `classify()` |
 | 7b, 7c | `~/.local/bin/sats-completion-notify` | `ad1f0106…ae62` | `0bfdc3b9…5159` (`notify/sats-completion-notify`) |
 | 7a | `~/.config/systemd/user/sats-completion-requeue.{service,timer}` | absent | `notify/systemd/` (`9181dda6…`, `ffdbad43…`) |
 | 7a | `~/.local/state/sats-completion/requeue/` | 25 entries | 1 replay kept if its ask is still unanswered at install; the rest moved to `requeue-archive-<date>/` (`install/requeue-triage.json`, `TRIAGE.md`) |
-| 3, 4 | only21mil/victor-vault `main` | `ee57fda` (4a02910 below it) | canon-clone A-C, E, the merge M of `ee57fda` and the tools mirror E2, plus D, F and G if review accepts them |
+| 3, 4 | only21mil/victor-vault `main` | `ee57fda` (4a02910 below it) | canon-clone A-C, E, the merge M of `ee57fda` and the tools mirrors E2 and E3, plus D, F, G and H if review accepts them |
 
 ## Steps
 
@@ -63,10 +63,10 @@ patch 1, never alone.
      a file, it stops before changing anything. If the DB was already migrated, `DB_BAK_ORIGINAL` names the
      interrupted run's one-per-generation copy.
 3. **Canon, same window.** In `canon-clone/`, `git fetch origin && git merge --no-edit origin/main`. The branch
-   already merged `ee57fda` (M, `56e1fff`), so a merge keeps A-G's reviewed hashes and rewrites no history; a
+   already merged `ee57fda` (M, `56e1fff`), so a merge keeps A-H's reviewed hashes and rewrites no history; a
    rebase would flatten M and rewrite them. Rerun `tools/sats-stall-watchdog` tests, check that origin/main is an
-   ancestor, then `git push origin HEAD:main` with no force. If review drops D, drop F and G with it:
-   `git revert --no-edit <G> <F> <D>` before the merge. E and E2, the tools mirrors, stay. Record the pushed sha
+   ancestor, then `git push origin HEAD:main` with no force. If review drops D, drop F, G and H with it:
+   `git revert --no-edit <H> <G> <F> <D>` before the merge. E, E2 and E3, the tools mirrors, stay. Record the pushed sha
    in the close-out.
 4. **Check after the next watchdog tick.**
    - `journalctl --user -u sats-stall-watchdog --since -10min` shows a completed tick.

@@ -3,7 +3,7 @@
 Reviewable in place: `git log --oneline base..HEAD`, `git diff base..HEAD -- <path>`. Tags mark each step:
 `base` (live files and the suite frozen with them), `patch-1`, `patch-2`, `item-5`, `item-6`, `item-7`. The
 round-1 repairs follow the round-0 candidate `e6a95f42` (`git log --oneline e6a95f42..HEAD`), the round-2 repairs
-follow `a31f46b`.
+follow `a31f46b`, and the round-3 repairs follow `917f4de`.
 
 `base` holds the asks module 406e3fd9, where production started. Since 2026-10-23 22:55:52 CDT the live asks module
 is cb8a6cc0, the needs-victor fix (canon source 4a02910), frozen at

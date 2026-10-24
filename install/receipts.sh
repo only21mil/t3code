@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Done-check receipts for the candidate (RECEIPTS.md): every suite on the candidate, the new tests against the
-# unpatched live bases and the round-1 candidate (they must fail there), the live base's 19-case matrix, the vault
-# suite, the rehearsals and the live-state readback.
+# unpatched live bases and the round-1 and round-2 candidates (they must fail there), the round-3 reviewers' probes
+# (lane repair-r3/probes.py), the live base's 19-case matrix, the vault suite, the rehearsals and the live-state readback.
 #   receipts.sh > RECEIPTS.md        (writes only under <lane>/candidate/.tmp-run)
 set -uo pipefail
 CAND="$(cd "$(dirname "$0")/.." && pwd)"
@@ -13,6 +13,7 @@ W="$CAND/tools/sats-stall-watchdog"
 LIVEBASE="$W/tests/preimage/live-20261023-needs-victor/sats_stall_asks.py"  # cb8a6cc0, the live asks base
 DBCOPY="$LANE/repair-r2/asks-copy-20261023T233547.sqlite3"  # live copy 23:35 CDT, one cb8a6cc0 BLOCKED:<digest> row
 PREV=a31f46b69a08322ff2b5a7a5d5d73e80e0305025              # the round-1 candidate the round-2 review read
+PREV2=917f4de00c7e867d4202c868725ca508e5574034             # the round-2 candidate the round-3 review read
 
 block() {  # title, directory, command...: run, then print the command, exit code and output tail
   local title="$1" dir="$2" out code; shift 2
@@ -97,6 +98,23 @@ block "rehearsal with the a31f46b install.sh and rollback.sh on the cb8a6cc0 liv
   bash install/rehearse.sh "$RUN/rehearsal-round1" "$DBCOPY" "$LANE/evidence/requeue-copy"
 echo "The a31f46b dry run on a cb8a6cc0 HOME: \`$(head -n 3 "$RUN/rehearsal-round1/main/dry-run.txt" | grep -m1 STOP || echo 'no STOP line')\`"
 echo
+
+echo "## 2d. Review round-3 tests against the round-2 candidate 917f4de (must fail)"
+echo
+PRE2="$RUN/round2"
+mkdir -p "$PRE2/mcp"
+tests_on "$PRE2/tools/sats-stall-watchdog" <(git -C "$CAND" show "$PREV2:tools/sats-stall-watchdog/src/sats_stall_asks.py")
+git -C "$CAND" show "$PREV2:mcp/mcp_call.py" > "$PRE2/mcp/mcp_call.py" && cp -r "$CAND/mcp/tests" "$PRE2/mcp/"
+block "round-3 watchdog tests on 917f4de (asks $(git -C "$CAND" show "$PREV2:tools/sats-stall-watchdog/src/sats_stall_asks.py" | sha256sum | cut -c1-8))" \
+  "$PRE2/tools/sats-stall-watchdog/tests" python3 -m unittest \
+  test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done \
+  test_asks.ThreadNoticeTests.test_SOL2_r3_marker_words_paths_and_negated_sentences_decide_what_a_notice_carries \
+  test_asks.LiveBaseTests.test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate
+block "round-3 settle guard test on 917f4de mcp_call.py (R3-5)" "$PRE2/mcp" env WATCHDOG_SRC="$W/src" python3 -m unittest \
+  tests.test_settle_guard.SettleGuardTests.test_R35_a_producer_role_anywhere_is_no_seat_and_this_lanes_titles_read_as_named
+block "the reviewers' round-3 probes on 917f4de (repair-r3/probes.py)" "$CAND" python3 -B "$LANE/repair-r3/probes.py" \
+  "$PRE2/tools/sats-stall-watchdog/src/sats_stall_asks.py" "$PRE2/mcp/mcp_call.py"
+block "the reviewers' round-3 probes on the candidate" "$CAND" python3 -B "$LANE/repair-r3/probes.py" "$W/src/sats_stall_asks.py" "$CAND/mcp/mcp_call.py"
 
 echo "## 2c. The live base's own 19-case matrix (blocked-threads-rca-20261023, MBP)"
 echo

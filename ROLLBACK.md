@@ -21,8 +21,8 @@ service and runs between watchdog ticks, gated by the `watchdog_gate.py` the ins
    module returns to the live base the install backed up, cb8a6cc0 (the needs-victor fix), never to 406e3fd9.
    Its own `.bak-needs-victor-20261023T225552` (406e3fd9) stays beside it untouched. The watchdog runs the
    restored modules at its next tick.
-4. Canon is reverted separately and never force-pushed. On a fresh clone of main, `git revert` the pushed G, F
-   and D (if pushed), E2, E, C and B, newest first. Keep M, the merge of `ee57fda`: reverting it would undo
+4. Canon is reverted separately and never force-pushed. On a fresh clone of main, `git revert` the pushed H, G, F
+   and D (if pushed), E3, E2, E, C and B, newest first. Keep M, the merge of `ee57fda`: reverting it would undo
    other lanes' commits. Keep A. Then put the record's `asks.bak` (cb8a6cc0) at
    `tools/sats-stall-watchdog/src/sats_stall_asks.py` in one commit, so the vault source matches the restored
    live file rather than A's 406e3fd9 copy, and push.
