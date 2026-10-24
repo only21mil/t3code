@@ -1,8 +1,10 @@
 import { assert, it } from "@effect/vitest";
 import {
+  EventId,
   type ModelSelection,
   NodeId,
   type OrchestrationV2ProviderThread,
+  type OrchestrationV2StoredEvent,
   type OrchestrationV2ThreadProjection,
   ProjectId,
   ProviderDriverKind,
@@ -15,14 +17,18 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import * as EventSink from "./EventSink.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
@@ -122,6 +128,99 @@ function makeProjection(input: {
   };
 }
 
+function makeProviderThread(input: {
+  readonly now: DateTime.Utc;
+  readonly threadId: ThreadId;
+  readonly id: ProviderThreadId;
+  readonly providerSessionId: ProviderSessionId;
+}): OrchestrationV2ProviderThread {
+  return {
+    id: input.id,
+    driver,
+    providerInstanceId,
+    providerSessionId: input.providerSessionId,
+    appThreadId: input.threadId,
+    ownerNodeId: null,
+    nativeThreadRef: {
+      driver,
+      nativeId: "native-thread:restart-session",
+      strength: "strong",
+    },
+    nativeConversationHeadRef: null,
+    status: "not_loaded",
+    firstRunOrdinal: 1,
+    lastRunOrdinal: 1,
+    handoffIds: [],
+    forkedFrom: null,
+    createdAt: input.now,
+    updatedAt: input.now,
+  };
+}
+
+function makeRuntime(input: {
+  readonly now: DateTime.Utc;
+  readonly providerSessionId: ProviderSessionId;
+  readonly interruptTurn: ProviderAdapter.ProviderAdapterV2SessionRuntime["interruptTurn"];
+}): ProviderAdapter.ProviderAdapterV2SessionRuntime {
+  return {
+    instanceId: providerInstanceId,
+    driver,
+    providerSessionId: input.providerSessionId,
+    providerSession: {
+      id: input.providerSessionId,
+      driver,
+      providerInstanceId,
+      status: "running",
+      cwd: "/workspace",
+      model: modelSelection.model,
+      capabilities: CodexProviderCapabilitiesV2,
+      createdAt: input.now,
+      updatedAt: input.now,
+      lastError: null,
+    },
+    events: Stream.empty,
+    ensureThread: () => Effect.die("unused ensureThread"),
+    resumeThread: () => Effect.die("unused resumeThread"),
+    startTurn: () => Effect.die("unused startTurn"),
+    steerTurn: () => Effect.die("unused steerTurn"),
+    interruptTurn: input.interruptTurn,
+    respondToRuntimeRequest: () => Effect.die("unused respondToRuntimeRequest"),
+    readThreadSnapshot: () => Effect.die("unused readThreadSnapshot"),
+    rollbackThread: () => Effect.die("unused rollbackThread"),
+    forkThread: () => Effect.die("unused forkThread"),
+  };
+}
+
+function readControlContext(
+  projection: Ref.Ref<OrchestrationV2ThreadProjection>,
+  target: Parameters<ProjectionStore.ProjectionStoreV2Shape["getProviderControlContext"]>[1],
+) {
+  return Ref.get(projection).pipe(
+    Effect.map((current) => ({
+      providerThread: current.providerThreads.find(
+        (thread) => thread.id === target.providerThreadId,
+      ),
+      providerTurn: current.providerTurns.find((turn) => turn.id === target.providerTurnId),
+      attempt: current.attempts.find((attempt) => attempt.id === target.attemptId),
+      message: undefined,
+      run: undefined,
+    })),
+  );
+}
+
+function interruptTurn(
+  projection: OrchestrationV2ThreadProjection,
+  providerTurnId: ProviderTurnId,
+  now: DateTime.Utc,
+): OrchestrationV2ThreadProjection {
+  return {
+    ...projection,
+    providerTurns: projection.providerTurns.map((turn) =>
+      turn.id === providerTurnId ? { ...turn, status: "interrupted", completedAt: now } : turn,
+    ),
+  };
+}
+
 it.effect(
   "interrupts the historical session only for the exact committed restart replacement",
   () =>
@@ -138,73 +237,28 @@ it.effect(
       const providerThreadId = ProviderThreadId.make("provider-thread:restart-session");
       const providerTurnId = ProviderTurnId.make("provider-turn:restart-session");
       const attemptId = RunAttemptId.make("run-attempt:restart-session");
-      const providerThread: OrchestrationV2ProviderThread = {
+      const providerThread = makeProviderThread({
+        now,
+        threadId,
         id: providerThreadId,
-        driver,
-        providerInstanceId,
         providerSessionId: replacementSessionId,
-        appThreadId: threadId,
-        ownerNodeId: null,
-        nativeThreadRef: {
-          driver,
-          nativeId: "native-thread:restart-session",
-          strength: "strong",
-        },
-        nativeConversationHeadRef: null,
-        status: "not_loaded",
-        firstRunOrdinal: 1,
-        lastRunOrdinal: 1,
-        handoffIds: [],
-        forkedFrom: null,
-        createdAt: now,
-        updatedAt: now,
-      };
+      });
       const projection = yield* Ref.make(
         makeProjection({ now, threadId, providerThread, providerTurnId, attemptId }),
       );
       const interruptedThread = yield* Ref.make<OrchestrationV2ProviderThread | null>(null);
-      const providerSession = {
-        id: oldSessionId,
-        driver,
-        providerInstanceId,
-        status: "running" as const,
-        cwd: "/workspace",
-        model: modelSelection.model,
-        capabilities: CodexProviderCapabilitiesV2,
-        createdAt: now,
-        updatedAt: now,
-        lastError: null,
-      };
-      const runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime = {
-        instanceId: providerInstanceId,
-        driver,
+      const runtime = makeRuntime({
+        now,
         providerSessionId: oldSessionId,
-        providerSession,
-        events: Stream.empty,
-        ensureThread: () => Effect.die("unused ensureThread"),
-        resumeThread: () => Effect.die("unused resumeThread"),
-        startTurn: () => Effect.die("unused startTurn"),
-        steerTurn: () => Effect.die("unused steerTurn"),
         interruptTurn: ({ providerThread: target }) =>
           Effect.all(
             [
               Ref.set(interruptedThread, target),
-              Ref.update(projection, (current) => ({
-                ...current,
-                providerTurns: current.providerTurns.map((turn) =>
-                  turn.id === providerTurnId
-                    ? { ...turn, status: "interrupted" as const, completedAt: now }
-                    : turn,
-                ),
-              })),
+              Ref.update(projection, (current) => interruptTurn(current, providerTurnId, now)),
             ],
             { discard: true },
           ),
-        respondToRuntimeRequest: () => Effect.die("unused respondToRuntimeRequest"),
-        readThreadSnapshot: () => Effect.die("unused readThreadSnapshot"),
-        rollbackThread: () => Effect.die("unused rollbackThread"),
-        forkThread: () => Effect.die("unused forkThread"),
-      };
+      });
       const layerProjection = Layer.succeed(
         ProjectionStore.ProjectionStoreV2,
         ProjectionStore.ProjectionStoreV2.of({
@@ -238,20 +292,7 @@ it.effect(
           getThreadProviderContext: () => Effect.die("unused getThreadProviderContext"),
           getRuntimeResponseContext: () => Effect.die("unused getRuntimeResponseContext"),
           getPendingNativeUserInputs: () => Effect.die("unused getPendingNativeUserInputs"),
-          getProviderControlContext: (_threadId, target) =>
-            Ref.get(projection).pipe(
-              Effect.map((current) => ({
-                providerThread: current.providerThreads.find(
-                  (thread) => thread.id === target.providerThreadId,
-                ),
-                providerTurn: current.providerTurns.find(
-                  (turn) => turn.id === target.providerTurnId,
-                ),
-                attempt: current.attempts.find((attempt) => attempt.id === target.attemptId),
-                message: undefined,
-                run: undefined,
-              })),
-            ),
+          getProviderControlContext: (_threadId, target) => readControlContext(projection, target),
           getCheckpointContext: () => Effect.die("not used"),
           getCheckpointRollbackContext: () => Effect.die("unused rollback context"),
           getCheckpointCaptureContext: () => Effect.die("not used"),
@@ -281,7 +322,13 @@ it.effect(
         }),
       );
       const layerControl = ProviderTurnControlService.layer.pipe(
-        Layer.provide(Layer.merge(layerProjection, layerSessionManager)),
+        Layer.provide(
+          Layer.mergeAll(
+            layerProjection,
+            layerSessionManager,
+            Layer.mock(EventSink.EventSinkV2)({ latestSequence: () => Effect.succeed(0) }),
+          ),
+        ),
       );
 
       const [ordinaryInterrupt, unrelatedRestart] = yield* Effect.gen(function* () {
@@ -328,5 +375,81 @@ it.effect(
       assert.equal(interrupted?.providerSessionId, oldSessionId);
       assert.equal(interrupted?.id, providerThreadId);
       assert.equal(interrupted?.nativeThreadRef?.nativeId, "native-thread:restart-session");
+    }),
+);
+
+it.effect(
+  "restart waits for a terminal the provider commits after the restart starts waiting",
+  () =>
+    Effect.gen(function* () {
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:late-terminal");
+      const providerSessionId = ProviderSessionId.make("provider-session:late-terminal");
+      const providerThreadId = ProviderThreadId.make("provider-thread:late-terminal");
+      const providerTurnId = ProviderTurnId.make("provider-turn:late-terminal");
+      const attemptId = RunAttemptId.make("run-attempt:late-terminal");
+      const providerThread = makeProviderThread({
+        now,
+        threadId,
+        id: providerThreadId,
+        providerSessionId,
+      });
+      const projection = yield* Ref.make(
+        makeProjection({ now, threadId, providerThread, providerTurnId, attemptId }),
+      );
+      const committed = yield* Queue.unbounded<OrchestrationV2StoredEvent>();
+      const waiting = yield* Deferred.make<void>();
+      // The provider accepts the interrupt and reports its terminal later.
+      const runtime = makeRuntime({ now, providerSessionId, interruptTurn: () => Effect.void });
+      const layerControl = ProviderTurnControlService.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(ProjectionStore.ProjectionStoreV2)({
+              getProviderControlContext: (_threadId, target) =>
+                readControlContext(projection, target),
+            }),
+            Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
+              get: () => Effect.succeedSome(runtime),
+            }),
+            Layer.mock(EventSink.EventSinkV2)({
+              latestSequence: () => Effect.succeed(0),
+              stream: () =>
+                Stream.unwrap(
+                  Deferred.succeed(waiting, undefined).pipe(Effect.as(Stream.fromQueue(committed))),
+                ),
+            }),
+          ),
+        ),
+      );
+
+      yield* Effect.gen(function* () {
+        const control = yield* ProviderTurnControlService.ProviderTurnControlServiceV2;
+        const restart = yield* control
+          .interruptAndAwaitTerminal({
+            threadId,
+            providerSessionId,
+            providerThreadId,
+            providerTurnId,
+            interruptedAttemptId: attemptId,
+          })
+          .pipe(Effect.forkChild);
+        // A restart that gives up before the terminal arrives fails this race.
+        yield* Effect.raceFirst(Deferred.await(waiting), Fiber.join(restart));
+
+        const turn = (yield* Ref.get(projection)).providerTurns[0]!;
+        yield* Ref.update(projection, (current) => interruptTurn(current, providerTurnId, now));
+        yield* Queue.offer(committed, {
+          sequence: 1,
+          commandId: null,
+          event: {
+            id: EventId.make("event:late-terminal"),
+            type: "provider-turn.updated",
+            threadId,
+            occurredAt: now,
+            payload: { ...turn, status: "interrupted", completedAt: now },
+          },
+        });
+        yield* Fiber.join(restart);
+      }).pipe(Effect.provide(layerControl));
     }),
 );

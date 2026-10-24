@@ -15,21 +15,12 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import * as EventSink from "./EventSink.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
-
-const yieldToRuntime = Effect.yieldNow.pipe(
-  Effect.andThen(
-    Effect.promise(
-      () =>
-        new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        }),
-    ),
-  ),
-);
 
 export class ProviderTurnControlError extends Schema.TaggedError<ProviderTurnControlError>()(
   "ProviderTurnControlError",
@@ -84,10 +75,13 @@ export class ProviderTurnControlServiceV2 extends Context.Service<
 export const layer: Layer.Layer<
   ProviderTurnControlServiceV2,
   never,
-  ProjectionStore.ProjectionStoreV2 | ProviderSessionManager.ProviderSessionManagerV2
+  | EventSink.EventSinkV2
+  | ProjectionStore.ProjectionStoreV2
+  | ProviderSessionManager.ProviderSessionManagerV2
 > = Layer.effect(
   ProviderTurnControlServiceV2,
   Effect.gen(function* () {
+    const eventSink = yield* EventSink.EventSinkV2;
     const projections = yield* ProjectionStore.ProjectionStoreV2;
     const sessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
 
@@ -274,34 +268,41 @@ export const layer: Layer.Layer<
             return;
           }
 
+          const isTerminal = projections
+            .getProviderControlContext(input.threadId, {
+              providerThreadId: input.providerThreadId,
+              providerTurnId: input.providerTurnId,
+              attemptId: input.interruptedAttemptId,
+            })
+            .pipe(
+              Effect.map(
+                ({ providerTurn, attempt }) =>
+                  providerTurn !== undefined &&
+                  providerTurn.status !== "running" &&
+                  attempt !== undefined &&
+                  attempt.status !== "running",
+              ),
+            );
+          // Ingestion projects the provider's terminal on its own fiber, and
+          // the commit that does so publishes the thread's events. Replaying
+          // from before the interrupt means no terminal commit can slip past.
+          const afterSequence = yield* eventSink.latestSequence();
           yield* loaded.session.value.interruptTurn({
             providerThread: loaded.providerThread,
             providerTurnId: loaded.providerTurn.id,
           });
-
-          for (let remaining = 1_000; remaining > 0; remaining -= 1) {
-            const { providerTurn, attempt } = yield* projections.getProviderControlContext(
-              input.threadId,
-              {
-                providerThreadId: input.providerThreadId,
-                providerTurnId: input.providerTurnId,
-                attemptId: input.interruptedAttemptId,
-              },
+          if (yield* isTerminal) return;
+          const terminal = yield* eventSink
+            .stream({ threadId: input.threadId, afterSequence })
+            .pipe(
+              Stream.filterEffect(() => isTerminal),
+              Stream.runHead,
+              // Bounds only a provider that never acknowledges the interrupt.
+              // The bound is real time: a test clock would hold restart forever.
+              Effect.timeoutOption("10 seconds"),
+              Effect.provideService(Clock.Clock, Clock.Clock.defaultValue()),
             );
-            if (
-              providerTurn !== undefined &&
-              providerTurn.status !== "running" &&
-              attempt !== undefined &&
-              attempt.status !== "running"
-            ) {
-              return;
-            }
-            // Provider terminal events are projected on a detached ingestion
-            // fiber. Yield through the Node event loop instead of sleeping on
-            // Effect's clock so deterministic runtimes cannot deadlock a
-            // command that is waiting for that projection.
-            yield* yieldToRuntime;
-          }
+          if (Option.isSome(Option.flatten(terminal))) return;
           return yield* new ProviderTurnControlError({
             threadId: input.threadId,
             operation: "restart",
