@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import {
   NonNegativeInt,
   TrimmedNonEmptyString,
@@ -21,6 +22,14 @@ import {
 import * as SourceControlProvider from "@t3tools/source-control-core/server/SourceControlProvider";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+
+/**
+ * How many `az` processes this server has out at once, across every reader. Each is a Python
+ * start-up that loads its sign-in again (an `az devops login` token from the OS keyring), and a
+ * pull request sync sweep would otherwise start one for every linked pull request at once. Wide
+ * enough for one diff read at full width: both sides of four files.
+ */
+export const MAX_CONCURRENT_PROCESSES = 8;
 
 const azureDevOpsCommandErrorFields = {
   operation: Schema.Literal("execute"),
@@ -365,8 +374,9 @@ const classifyAzFailure = (stderr: string): VcsProcessExitFailureKind | null => 
 /** @public Service construction is part of the canonical Effect module API. */
 export const make = Effect.gen(function* () {
   const { process } = yield* SourceControlHost.SourceControlHost;
+  const slots = yield* Semaphore.make(MAX_CONCURRENT_PROCESSES);
 
-  const execute: AzureDevOpsCli["Service"]["execute"] = (input) =>
+  const run = (input: Parameters<AzureDevOpsCli["Service"]["execute"]>[0]) =>
     process
       .run({
         operation: "AzureDevOpsCli.execute",
@@ -391,6 +401,8 @@ export const make = Effect.gen(function* () {
           ),
         ),
       );
+
+  const execute: AzureDevOpsCli["Service"]["execute"] = (input) => slots.withPermits(1)(run(input));
 
   const executeJson = (input: Parameters<AzureDevOpsCli["Service"]["execute"]>[0]) =>
     execute({
@@ -546,8 +558,9 @@ export const make = Effect.gen(function* () {
         ),
         Effect.map((repo) => normalizeDefaultBranch(repo.defaultBranch)),
       ),
+    // A checkout fetches the branch, which can take far longer than a read, so it holds no slot.
     checkoutPullRequest: (input) =>
-      execute({
+      run({
         cwd: input.cwd,
         args: [
           "repos",

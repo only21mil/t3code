@@ -1,6 +1,5 @@
 import { resolvePullRequestAuthorFilter, SourceControlProviderKind } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import * as Semaphore from "effect/Semaphore";
 import type { PullRequestCapabilities, PullRequestViewerPermissions } from "@t3tools/contracts";
 
 import * as AzureDevOpsPullRequestCli from "./AzureDevOpsPullRequestCli.ts";
@@ -40,13 +39,6 @@ import { definition } from "../shared/definition.ts";
  * one after another is most of what the Code tab waits for.
  */
 const DIFF_FILE_CONCURRENCY = 4;
-
-/**
- * How many `az` processes this build will have out at once, counted across every reader rather than
- * per request. Held at what one request at full width spends, so a second reader waits behind the
- * first instead of adding to it.
- */
-export const MAX_DIFF_SPAWNS = 2 * DIFF_FILE_CONCURRENCY;
 
 export const LOCATION_CACHE_CAPACITY = 128;
 
@@ -126,9 +118,6 @@ function toChangeRequest(pullRequest: AzureDevOpsPullRequest): ProviderChangeReq
 
 export const make = Effect.gen(function* () {
   const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
-  const diffSpawns = yield* Semaphore.make(MAX_DIFF_SPAWNS);
-  const readItemContent = (input: Parameters<typeof cli.readItemContent>[0]) =>
-    diffSpawns.withPermits(1)(cli.readItemContent(input));
 
   const fail =
     (operation: string) => (error: AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCliError) =>
@@ -212,7 +201,7 @@ export const make = Effect.gen(function* () {
       [
         input.change.changeKind === "new"
           ? Effect.succeed(EMPTY_ITEM)
-          : readItemContent({
+          : cli.readItemContent({
               cwd: input.cwd,
               location: input.location,
               path: input.change.oldPath,
@@ -220,7 +209,7 @@ export const make = Effect.gen(function* () {
             }),
         input.change.changeKind === "deleted"
           ? Effect.succeed(EMPTY_ITEM)
-          : readItemContent({
+          : cli.readItemContent({
               cwd: input.cwd,
               location: input.location,
               path: input.change.path,

@@ -1,6 +1,8 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it, afterEach, describe, vi } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
@@ -269,6 +271,65 @@ describe("AzureDevOpsCli.layer", () => {
 
       assert.instanceOf(error, AzureDevOpsCli.AzureDevOpsCliRateLimitError);
       assert.strictEqual(error.cause, cause);
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("starts at most a fixed number of az processes at once, across every reader", () =>
+    Effect.gen(function* () {
+      const readers = AzureDevOpsCli.MAX_CONCURRENT_PROCESSES + 4;
+      const release = yield* Deferred.make<void>();
+      let running = 0;
+      let peak = 0;
+      mockRun.mockImplementation(() =>
+        Effect.gen(function* () {
+          running += 1;
+          peak = Math.max(peak, running);
+          yield* Deferred.await(release);
+          running -= 1;
+          return processOutput("");
+        }),
+      );
+
+      const az = yield* AzureDevOpsCli.AzureDevOpsCli;
+      // Each reader runs until it waits, so one not running now is queued for a process slot.
+      const fibers = yield* Effect.forEach(Array.from({ length: readers }), () =>
+        az
+          .listPullRequests({ cwd: "/repo", headSelector: "feature", state: "all" })
+          .pipe(Effect.forkChild({ startImmediately: true })),
+      );
+      assert.strictEqual(running, AzureDevOpsCli.MAX_CONCURRENT_PROCESSES);
+
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.joinAll(fibers);
+      assert.strictEqual(mockRun.mock.calls.length, readers);
+      assert.strictEqual(peak, AzureDevOpsCli.MAX_CONCURRENT_PROCESSES);
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("checks out a pull request while reads hold every process slot", () =>
+    Effect.gen(function* () {
+      const release = yield* Deferred.make<void>();
+      mockRun.mockImplementation((input) =>
+        input.args.includes("checkout")
+          ? Effect.succeed(processOutput(""))
+          : Deferred.await(release).pipe(Effect.as(processOutput(""))),
+      );
+
+      const az = yield* AzureDevOpsCli.AzureDevOpsCli;
+      const reads = yield* Effect.forEach(
+        Array.from({ length: AzureDevOpsCli.MAX_CONCURRENT_PROCESSES }),
+        () =>
+          az
+            .listPullRequests({ cwd: "/repo", headSelector: "feature", state: "all" })
+            .pipe(Effect.forkChild({ startImmediately: true })),
+      );
+      const checkout = yield* az
+        .checkoutPullRequest({ cwd: "/repo", reference: "42" })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      assert.isDefined(checkout.pollUnsafe());
+
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.joinAll(reads);
     }).pipe(Effect.provide(layer)),
   );
 });
