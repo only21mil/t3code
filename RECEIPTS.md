@@ -1,7 +1,7 @@
 # Receipts: notice-package-20261023 candidate
 
-Generated 2026-10-23 23:43 CDT on framework-desktop by `install/receipts.sh`. Candidate HEAD tested:
-`6d86cf3afbb9ce6d0f47d50a027ba6e256678f0e`. Raw outputs: `candidate/.tmp-run/receipts/`.
+Generated 2026-10-24 00:33 CDT on framework-desktop by `install/receipts.sh`. Candidate HEAD tested:
+`de051cff50e9b7e32a3a34997a62bbbe01835672`. Raw outputs: `candidate/.tmp-run/receipts/`.
 
 Two failures recur in every run of the frozen suite, base included:
 `test_bad_delivery_data_does_not_hide_a_live_lane` and `test_real_collector_excludes_terminal_pending_approval_and_child`.
@@ -18,10 +18,9 @@ package's first pin, 406e3fd9, is its backup and the candidate's `base` tag; § 
 `cd candidate/tools/sats-stall-watchdog && python3 -m unittest discover -s tests -p test_*.py` → exit 1
 
 ```
-.................../usr/lib64/python3.14/json/encoder.py:254: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7ff7019c9300>
-  _iterencode = c_make_encoder(
+.................<frozen genericpath>:51: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7f74ab1c18a0>
 ResourceWarning: Enable tracemalloc to get the object allocation traceback
-............................................................F................................................................F.........
+................................................................F.................................................................F.........
 ======================================================================
 FAIL: test_bad_delivery_data_does_not_hide_a_live_lane (test_delivery_checkins.DeliveryCheckinTests.test_bad_delivery_data_does_not_hide_a_live_lane)
 ----------------------------------------------------------------------
@@ -41,7 +40,7 @@ Traceback (most recent call last):
 AssertionError: 0 != 1
 
 ----------------------------------------------------------------------
-Ran 154 tests in 12.891s
+Ran 157 tests in 26.189s
 
 FAILED (failures=2)
 ```
@@ -53,7 +52,7 @@ FAILED (failures=2)
 ```
 .......
 ----------------------------------------------------------------------
-Ran 7 tests in 0.095s
+Ran 7 tests in 0.129s
 
 OK
 ```
@@ -63,9 +62,9 @@ OK
 `cd candidate/mcp && python3 -m unittest discover -s tests -p test_*.py` → exit 0
 
 ```
-.........
+..........
 ----------------------------------------------------------------------
-Ran 9 tests in 0.039s
+Ran 10 tests in 0.068s
 
 OK
 ```
@@ -77,7 +76,7 @@ OK
 ```
 .........
 ----------------------------------------------------------------------
-Ran 9 tests in 0.869s
+Ran 9 tests in 1.187s
 
 OK
 ```
@@ -121,7 +120,7 @@ OK
 1 FAIL: test_start_and_done_stay_one_per_generation (test_asks.PerAskTests.test_start_and_done_stay_one_per_generation)
 1 FAIL: test_two_asks_are_two_hook_notices_and_a_repeat_is_none (test_notice_package_hook.InertNoticePackageHook.test_two_asks_are_two_hook_notices_and_a_repeat_is_none)
 ----------------------------------------------------------------------
-Ran 28 tests in 2.861s
+Ran 28 tests in 1.596s
 
 FAILED (failures=22, errors=9)
 ```
@@ -164,7 +163,7 @@ FAILED (failures=22, errors=9)
 1 FAIL: test_start_and_done_stay_one_per_generation (test_asks.PerAskTests.test_start_and_done_stay_one_per_generation)
 1 FAIL: test_two_asks_are_two_hook_notices_and_a_repeat_is_none (test_notice_package_hook.InertNoticePackageHook.test_two_asks_are_two_hook_notices_and_a_repeat_is_none)
 ----------------------------------------------------------------------
-Ran 28 tests in 2.431s
+Ran 28 tests in 1.210s
 
 FAILED (failures=24, errors=8)
 ```
@@ -187,7 +186,7 @@ FAILED (failures=24, errors=8)
 1 FAIL: test_codes_are_bounded_and_scrubbed (test_item7.ItemSevenTests.test_codes_are_bounded_and_scrubbed)
 1 FAIL: test_http_error_projection_reaches_the_requeue_log_line (test_item7.ItemSevenTests.test_http_error_projection_reaches_the_requeue_log_line)
 ----------------------------------------------------------------------
-Ran 7 tests in 0.103s
+Ran 7 tests in 0.117s
 
 FAILED (failures=10, errors=2)
 ```
@@ -197,7 +196,7 @@ FAILED (failures=10, errors=2)
 `cd candidate/.tmp-run/receipts/base-mcp && env WATCHDOG_SRC=/home/victor/.t3-nightly/scratch/2026-10-24-you-are-now-running-as-5aa90f48/candidate/tools/sats-stall-watchdog/src python3 -m unittest discover -s tests -p test_*.py` → exit 1
 
 ```
-ssssssFss
+sssssssFss
 ======================================================================
 FAIL: test_guard_exists (test_settle_guard.SettleGuardTests.test_guard_exists)
 ----------------------------------------------------------------------
@@ -208,9 +207,9 @@ Traceback (most recent call last):
 AssertionError: False is not true : mcp_call.py has no sweep_settle_refusal
 
 ----------------------------------------------------------------------
-Ran 9 tests in 0.001s
+Ran 10 tests in 0.001s
 
-FAILED (failures=1, skipped=8)
+FAILED (failures=1, skipped=9)
 ```
 
 ### frozen live suite on its own base (reference)
@@ -238,7 +237,7 @@ Traceback (most recent call last):
 AssertionError: 0 != 1
 
 ----------------------------------------------------------------------
-Ran 103 tests in 11.946s
+Ran 103 tests in 15.460s
 
 FAILED (failures=2)
 ```
@@ -258,6 +257,15 @@ FAILED (failures=2)
 1 FAIL: test_LIVE1_rows_the_live_base_wrote_carry_over_the_install_and_its_rollback (test_asks.LiveBaseTests.test_LIVE1_rows_the_live_base_wrote_carry_over_the_install_and_its_rollback)
 1 FAIL: test_LIVE1_the_live_base_fixture_matrix_passes_on_the_candidate_and_the_live_base (test_asks.LiveBaseTests.test_LIVE1_the_live_base_fixture_matrix_passes_on_the_candidate_and_the_live_base) (module='src')
 1 FAIL: test_LIVE2_prose_that_names_the_markers_is_no_ask_and_asks_in_the_same_shapes_send (test_asks.LiveBaseTests.test_LIVE2_prose_that_names_the_markers_is_no_ask_and_asks_in_the_same_shapes_send)
+1 FAIL: test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate (test_asks.LiveBaseTests.test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate)
+1 FAIL: test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate (test_asks.LiveBaseTests.test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate) (mention='BLOCKED lines are now counted anywhere.')
+1 FAIL: test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate (test_asks.LiveBaseTests.test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate) (mention='Decisions for Victor count as asks now.')
+1 FAIL: test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate (test_asks.LiveBaseTests.test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate) (mention='NEEDS-VICTOR AND BLOCKED markers count anywhere.')
+1 FAIL: test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate (test_asks.LiveBaseTests.test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate) (mention='NEEDS-VICTOR detection is covered by 3 tests.')
+1 FAIL: test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate (test_asks.LiveBaseTests.test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate) (mention='NEEDS-VICTOR matches inside fences and inline code.')
+1 FAIL: test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate (test_asks.LiveBaseTests.test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate) (mention='NEEDS-VICTOR now matches inside code spans.')
+1 FAIL: test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate (test_asks.LiveBaseTests.test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate) (mention='NEEDS-VICTOR Or BLOCKED lines count.')
+1 FAIL: test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate (test_asks.LiveBaseTests.test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate) (mention='NEEDS-VICTOR status is now covered by the suite.')
 1 FAIL: test_SOL1_r2_progress_and_qualified_restatements_after_a_done_led_line_send_no_done (test_generations.EventTests.test_SOL1_r2_progress_and_qualified_restatements_after_a_done_led_line_send_no_done)
 1 FAIL: test_SOL1_r2_progress_and_qualified_restatements_after_a_done_led_line_send_no_done (test_generations.EventTests.test_SOL1_r2_progress_and_qualified_restatements_after_a_done_led_line_send_no_done) (text='Assuming the vote lands, the research stays DONE.')
 1 FAIL: test_SOL1_r2_progress_and_qualified_restatements_after_a_done_led_line_send_no_done (test_generations.EventTests.test_SOL1_r2_progress_and_qualified_restatements_after_a_done_led_line_send_no_done) (text='I cannot say the objective is DONE yet.')
@@ -275,9 +283,9 @@ FAILED (failures=2)
 1 FAIL: test_SOL1_r2_progress_and_qualified_restatements_after_a_done_led_line_send_no_done (test_generations.EventTests.test_SOL1_r2_progress_and_qualified_restatements_after_a_done_led_line_send_no_done) (text='The objective was DONE until review reopened it.')
 1 FAIL: test_SOL2_r2_complete_decision_ids_and_a_phrase_of_one_ask_only (test_asks.ThreadNoticeTests.test_SOL2_r2_complete_decision_ids_and_a_phrase_of_one_ask_only)
 ----------------------------------------------------------------------
-Ran 8 tests in 0.746s
+Ran 9 tests in 3.087s
 
-FAILED (failures=22, errors=2)
+FAILED (failures=31, errors=2)
 ```
 
 ### round-2 settle guard test on a31f46b mcp_call.py (NEW-2)
@@ -305,7 +313,7 @@ Traceback (most recent call last):
 AssertionError: 'reviewer sol ended without an ACCEPT (BLOCKED, no verdict or failed run)' is not None
 
 ----------------------------------------------------------------------
-Ran 1 test in 0.015s
+Ran 1 test in 0.024s
 
 FAILED (failures=2)
 ```
@@ -327,7 +335,7 @@ FAILED (failures=2)
 1 FAIL: test_SOLR21_systemctl_errors_unknown_states_and_missing_units_fail_closed (tests.test_install.GateTests.test_SOLR21_systemctl_errors_unknown_states_and_missing_units_fail_closed) [unknown service state]
 1 FAIL: test_SOLR21_systemctl_errors_unknown_states_and_missing_units_fail_closed (tests.test_install.GateTests.test_SOLR21_systemctl_errors_unknown_states_and_missing_units_fail_closed) [unknown timer state]
 ----------------------------------------------------------------------
-Ran 2 tests in 0.294s
+Ran 2 tests in 0.451s
 
 FAILED (failures=11)
 ```
@@ -361,7 +369,7 @@ PASS resume: rollback of the resumed install restores the events schema
 FAIL first-pin: a live 406e3fd9 stops the install before any change (LIVE-1)
 ```
 
-The a31f46b dry run on a cb8a6cc0 HOME: `23:43:37 STOP: asks live hash cb8a6cc0f676ab0062b31ecbde7a59c2137e3bb9cb197b9fd066dd603925ad94 is neither the base nor the candidate`
+The a31f46b dry run on a cb8a6cc0 HOME: `00:34:05 STOP: asks live hash cb8a6cc0f676ab0062b31ecbde7a59c2137e3bb9cb197b9fd066dd603925ad94 is neither the base nor the candidate`
 
 ## 2c. The live base's own 19-case matrix (blocked-threads-rca-20261023, MBP)
 
@@ -475,21 +483,118 @@ PASS start-unchanged starts=['generation-4-START']
 MATRIX FAIL 13/19 sats_stall_asks.py
 ```
 
+## 2d. Review round-3 tests against the round-2 candidate 917f4de (must fail)
+
+### round-3 watchdog tests on 917f4de (asks af27b66f)
+
+`cd candidate/.tmp-run/receipts/round2/tools/sats-stall-watchdog/tests && python3 -m unittest test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done test_asks.ThreadNoticeTests.test_SOL2_r3_marker_words_paths_and_negated_sentences_decide_what_a_notice_carries test_asks.LiveBaseTests.test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate` → exit 1
+
+```
+1 ERROR: test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate (test_asks.LiveBaseTests.test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate) (ask='BLOCKED: lines 40-60 were not applied. Which branch?')
+1 ERROR: test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate (test_asks.LiveBaseTests.test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate) (ask='BLOCKED: prefix check fails on F-D; may I bypass?')
+1 ERROR: test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate (test_asks.LiveBaseTests.test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate) (ask='Decision for you: lines 40 or 60 for the fix?')
+1 ERROR: test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate (test_asks.LiveBaseTests.test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate) (ask='NEEDS-VICTOR and BLOCKED: pick A or B before I can proceed.')
+1 ERROR: test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate (test_asks.LiveBaseTests.test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate) (ask='NEEDS-VICTOR: tags on release r3 are wrong; which set?')
+1 ERROR: test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate (test_asks.LiveBaseTests.test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate) (ask='NEEDS-VICTOR tokens expired.')
+1 ERROR: test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate (test_asks.LiveBaseTests.test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate) (ask='NEEDS-VICTOR tokens expired; approve replacing the credentials.')
+1 ERROR: test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate (test_asks.LiveBaseTests.test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate) (ask='NEEDS-VICTOR: tokens for the T05 push expire tomorrow; rotate now?')
+1 FAIL: test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate (test_asks.LiveBaseTests.test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate)
+1 FAIL: test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate (test_asks.LiveBaseTests.test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate) (mention='Decisions for Victor count as asks now.')
+1 FAIL: test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate (test_asks.LiveBaseTests.test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate) (mention='NEEDS-VICTOR AND BLOCKED markers count anywhere.')
+1 FAIL: test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate (test_asks.LiveBaseTests.test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate) (mention='NEEDS-VICTOR detection is covered by 3 tests.')
+1 FAIL: test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate (test_asks.LiveBaseTests.test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate) (mention='NEEDS-VICTOR matches inside fences and inline code.')
+1 FAIL: test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate (test_asks.LiveBaseTests.test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate) (mention='NEEDS-VICTOR now matches inside code spans.')
+1 FAIL: test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate (test_asks.LiveBaseTests.test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate) (mention='NEEDS-VICTOR Or BLOCKED lines count.')
+1 FAIL: test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate (test_asks.LiveBaseTests.test_LIVE2_r3_a_label_or_a_request_asks_and_a_mention_needs_joined_names_or_a_detection_predicate) (mention='NEEDS-VICTOR status is now covered by the suite.')
+1 FAIL: test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done (test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done)
+1 FAIL: test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done (test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done) (kept='All work is DONE.')
+1 FAIL: test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done (test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done) (kept='No remaining items. The objective is DONE.')
+1 FAIL: test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done (test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done) (kept='Nothing is pending. The work is DONE.')
+1 FAIL: test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done (test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done) (kept='Nothing is running. The objective is DONE.')
+1 FAIL: test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done (test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done) (kept='No work is pending. The objective is DONE.')
+1 FAIL: test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done (test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done) (kept='The assignment is DONE.')
+1 FAIL: test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done (test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done) (kept='The delivery is DONE.')
+1 FAIL: test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done (test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done) (kept='The migration is DONE.')
+1 FAIL: test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done (test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done) (kept='The objective is DONE now.')
+1 FAIL: test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done (test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done) (kept='The repair is DONE.')
+1 FAIL: test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done (test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done) (kept='The review is DONE.')
+1 FAIL: test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done (test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done) (kept='The whole work is DONE.')
+1 FAIL: test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done (test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done) (kept='The work is done.')
+1 FAIL: test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done (test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done) (progress='2 of 5 checks pass. The objective is DONE.')
+1 FAIL: test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done (test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done) (progress="I'll post the logs. The objective is DONE.")
+1 FAIL: test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done (test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done) (progress='It is false that:\n\nThe objective is DONE.')
+1 FAIL: test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done (test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done) (progress='It is false that:\nThe objective is DONE.')
+1 FAIL: test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done (test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done) (progress='More results to come. The objective is DONE.')
+1 FAIL: test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done (test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done) (progress='No tests passed. The objective is DONE.')
+1 FAIL: test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done (test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done) (progress='Phase 2 is not finished. The objective is DONE.')
+1 FAIL: test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done (test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done) (progress='Phase 2 is ongoing. The objective is DONE.')
+1 FAIL: test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done (test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done) (progress='Phase 2 is underway. The objective is DONE.')
+1 FAIL: test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done (test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done) (progress='Phase 2 log:\n```\nstarting phase 2\n```\nThe objective is DONE.')
+1 FAIL: test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done (test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done) (progress='Should I rerun it? The objective is DONE.')
+1 FAIL: test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done (test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done) (progress='The following sentence is a template, not a completion claim:\n> The objective is DONE.')
+1 FAIL: test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done (test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done) (progress='The last check is in flight. The work is DONE.')
+1 FAIL: test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done (test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done) (progress='The nightly re-run is still going. The objective is DONE.')
+1 FAIL: test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done (test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done) (progress='- The objective is DONE.')
+1 FAIL: test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done (test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done) (progress='The rerun is queued for tonight. The objective is DONE.')
+1 FAIL: test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done (test_generations.EventTests.test_SOL1_r3_clause_negation_quotes_and_whole_work_subjects_decide_a_kept_done) (progress='Two checks are outstanding. The objective is DONE.')
+1 FAIL: test_SOL2_r3_marker_words_paths_and_negated_sentences_decide_what_a_notice_carries (test_asks.ThreadNoticeTests.test_SOL2_r3_marker_words_paths_and_negated_sentences_decide_what_a_notice_carries)
+----------------------------------------------------------------------
+Ran 3 tests in 1.492s
+
+FAILED (failures=40, errors=8)
+```
+
+### round-3 settle guard test on 917f4de mcp_call.py (R3-5)
+
+`cd candidate/.tmp-run/receipts/round2/mcp && env WATCHDOG_SRC=/home/victor/.t3-nightly/scratch/2026-10-24-you-are-now-running-as-5aa90f48/candidate/tools/sats-stall-watchdog/src python3 -m unittest tests.test_settle_guard.SettleGuardTests.test_R35_a_producer_role_anywhere_is_no_seat_and_this_lanes_titles_read_as_named` → exit 1
+
+```
+1 FAIL: test_R35_a_producer_role_anywhere_is_no_seat_and_this_lanes_titles_read_as_named (tests.test_settle_guard.SettleGuardTests.test_R35_a_producer_role_anywhere_is_no_seat_and_this_lanes_titles_read_as_named) (producer='Notice package review round 2 repair by Sol')
+1 FAIL: test_R35_a_producer_role_anywhere_is_no_seat_and_this_lanes_titles_read_as_named (tests.test_settle_guard.SettleGuardTests.test_R35_a_producer_role_anywhere_is_no_seat_and_this_lanes_titles_read_as_named) (reviewer='DeepSeek V4.1 Flash high - re-review of notice package')
+1 FAIL: test_R35_a_producer_role_anywhere_is_no_seat_and_this_lanes_titles_read_as_named (tests.test_settle_guard.SettleGuardTests.test_R35_a_producer_role_anywhere_is_no_seat_and_this_lanes_titles_read_as_named) (reviewer='DeepSeek V4.1 Flash high - re-review of the repair')
+1 FAIL: test_R35_a_producer_role_anywhere_is_no_seat_and_this_lanes_titles_read_as_named (tests.test_settle_guard.SettleGuardTests.test_R35_a_producer_role_anywhere_is_no_seat_and_this_lanes_titles_read_as_named) (reviewer='Sol 6.1 High - review of repair round 2')
+----------------------------------------------------------------------
+Ran 1 test in 0.021s
+
+FAILED (failures=4)
+```
+
+### the reviewers' round-3 probes on 917f4de (repair-r3/probes.py)
+
+`cd candidate && python3 -B /home/victor/.t3-nightly/scratch/2026-10-24-you-are-now-running-as-5aa90f48/repair-r3/probes.py /home/victor/.t3-nightly/scratch/2026-10-24-you-are-now-running-as-5aa90f48/candidate/.tmp-run/receipts/round2/tools/sats-stall-watchdog/src/sats_stall_asks.py /home/victor/.t3-nightly/scratch/2026-10-24-you-are-now-running-as-5aa90f48/candidate/.tmp-run/receipts/round2/mcp/mcp_call.py` → exit 1
+
+```
+OK    seat   'DeepSeek High review · review_notice_package_20261023_r1' -> True
+WRONG seat   'Notice package review round 2 repair by Sol' -> True
+OK    seat   'Opus 5.5 XHigh repair · repair_notice_package_20261023_r3' -> False
+wrong: 34
+```
+
+### the reviewers' round-3 probes on the candidate
+
+`cd candidate && python3 -B /home/victor/.t3-nightly/scratch/2026-10-24-you-are-now-running-as-5aa90f48/repair-r3/probes.py /home/victor/.t3-nightly/scratch/2026-10-24-you-are-now-running-as-5aa90f48/candidate/tools/sats-stall-watchdog/src/sats_stall_asks.py /home/victor/.t3-nightly/scratch/2026-10-24-you-are-now-running-as-5aa90f48/candidate/mcp/mcp_call.py` → exit 0
+
+```
+OK    seat   'DeepSeek High review · review_notice_package_20261023_r1' -> True
+OK    seat   'Notice package review round 2 repair by Sol' -> False
+OK    seat   'Opus 5.5 XHigh repair · repair_notice_package_20261023_r3' -> False
+wrong: 0
+```
+
 ## 3. victor-vault tools/sats-stall-watchdog (canon-clone, item 4)
 
-Staged, not pushed: `176ca99 canon (G, proposed with D and F): round-2 ask and DONE wording;  the live needs-victor fix's rules; bf31f4d tools/sats-stall-watchdog: notice-package round-2 repairs and the live base's behavior (equals the candidate); 56e1fff Merge origin/main ee57fda into notice-package-20261023 (canon 4a02910 as ancestor); 0fad1e3 canon (proposed with D): each ask decided on its own;  the DONE reply is the final reply; e131c2d tools/sats-stall-watchdog: notice-package round-1 repairs (equals the candidate); 8558a4e canon (proposed, droppable): watchdog asks for notice-package items 5 and 6; 18cc3fd canon: watchdog DONE is the DONE reply, never a settle (notice-package-20261023 item 3); b278b7c tools/sats-stall-watchdog: DONE on the DONE reply, markers anywhere, one BLOCKED per ask; 390f1ff tools/sats-stall-watchdog: catch up to the live F-D install; `
+Staged, not pushed: `9ae00cc canon (H, proposed with D, F and G): round-3 ask and DONE wording; 2762218 tools/sats-stall-watchdog: notice-package round-3 repairs (equals the candidate); 176ca99 canon (G, proposed with D and F): round-2 ask and DONE wording;  the live needs-victor fix's rules; bf31f4d tools/sats-stall-watchdog: notice-package round-2 repairs and the live base's behavior (equals the candidate); 56e1fff Merge origin/main ee57fda into notice-package-20261023 (canon 4a02910 as ancestor); 0fad1e3 canon (proposed with D): each ask decided on its own;  the DONE reply is the final reply; e131c2d tools/sats-stall-watchdog: notice-package round-1 repairs (equals the candidate); 8558a4e canon (proposed, droppable): watchdog asks for notice-package items 5 and 6; 18cc3fd canon: watchdog DONE is the DONE reply, never a settle (notice-package-20261023 item 3); b278b7c tools/sats-stall-watchdog: DONE on the DONE reply, markers anywhere, one BLOCKED per ask; 390f1ff tools/sats-stall-watchdog: catch up to the live F-D install; `
 
 4a02910 is an ancestor of HEAD: yes. origin/main is an ancestor (the push fast-forwards): yes.
 
-### vault suite at HEAD (catch-up + items 1, 5, 6, round-2 repairs)
+### vault suite at HEAD (catch-up + items 1, 5, 6, round-1 to round-3 repairs)
 
 `cd canon-clone/tools/sats-stall-watchdog && python3 -m unittest discover -s tests -p test_*.py` → exit 1
 
 ```
-..................../usr/lib64/python3.14/json/encoder.py:105: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7f1c425cdf30>
-  def __init__(self, *, skipkeys=False, ensure_ascii=True,
+................<frozen codecs>:189: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x7fc93fbd6020>
 ResourceWarning: Enable tracemalloc to get the object allocation traceback
-...........................................................F......................................................F.........
+.................................................................F.......................................................F.........
 ======================================================================
 FAIL: test_bad_delivery_data_does_not_hide_a_live_lane (test_delivery_checkins.DeliveryCheckinTests.test_bad_delivery_data_does_not_hide_a_live_lane)
 ----------------------------------------------------------------------
@@ -509,7 +614,7 @@ Traceback (most recent call last):
 AssertionError: 0 != 1
 
 ----------------------------------------------------------------------
-Ran 144 tests in 12.095s
+Ran 147 tests in 19.873s
 
 FAILED (failures=2)
 ```
