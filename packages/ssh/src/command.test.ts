@@ -239,4 +239,32 @@ describe("ssh command", () => {
       assert.deepEqual(reported, [url]);
     }).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, TestClock.layer())));
   });
+
+  it.effect("ignores a Tailscale SSH check link with an overlong token", () => {
+    const reported: Array<string> = [];
+    const spawner = ChildProcessSpawner.make(() =>
+      Effect.succeed(
+        makeFailedProcess({
+          stdout: "",
+          stderr: `# To authenticate, visit: https://login.tailscale.com/a/${"a".repeat(65)}\n`,
+        }),
+      ),
+    );
+    return Effect.gen(function* () {
+      yield* Effect.flip(
+        runSshCommand(
+          { alias: "devbox", hostname: "devbox", username: null, port: null },
+          { onTailscaleCheck: (link) => Effect.sync(() => reported.push(link)) },
+        ),
+      );
+      assert.deepEqual(reported, []);
+    }).pipe(
+      Effect.provide(
+        Layer.merge(
+          NodeServices.layer,
+          Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        ),
+      ),
+    );
+  });
 });

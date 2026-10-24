@@ -220,6 +220,105 @@ describe("ssh tunnel scripts", () => {
     }),
   );
 
+  it.effect("gives a pairing command held on a Tailscale SSH check the launch window", () =>
+    Effect.gen(function* () {
+      const url = "https://login.tailscale.com/a/1a2b3c4d5e6f";
+      const stderrRead = yield* Deferred.make<void>();
+      const approved = yield* Deferred.make<void>();
+      const spawner = ChildProcessSpawner.make(() =>
+        Effect.succeed({
+          ...makeSuccessfulProcess('{"credential":"LCL4R2TPHDKQ"}\n'),
+          stderr: Stream.make(new TextEncoder().encode(`# To authenticate, visit: ${url}\n`)).pipe(
+            Stream.ensuring(Deferred.succeed(stderrRead, undefined)),
+          ),
+          exitCode: Deferred.await(approved).pipe(Effect.as(ChildProcessSpawner.ExitCode(0))),
+        }),
+      );
+      const pairing = yield* Effect.forkChild(
+        SshTunnel.issueRemotePairingToken(
+          { alias: "devbox", hostname: "devbox", username: null, port: null },
+          { onTailscaleCheck: () => Effect.void },
+          { nodeScriptPath: "/srv/t3/apps/server/dist/bin.mjs" },
+        ).pipe(
+          Effect.provide(
+            Layer.merge(
+              NodeServices.layer,
+              Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+            ),
+          ),
+        ),
+      );
+      yield* Deferred.await(stderrRead);
+      yield* TestClock.adjust(Duration.seconds(61));
+      yield* Deferred.succeed(approved, undefined);
+
+      const result = yield* Fiber.join(pairing);
+      assert.equal(result.credential, "LCL4R2TPHDKQ");
+    }),
+  );
+
+  it.effect("keeps a tunnel held on a Tailscale SSH check waiting for approval", () =>
+    Effect.gen(function* () {
+      const url = "https://login.tailscale.com/a/1a2b3c4d5e6f";
+      const stderrRead = yield* Deferred.make<void>();
+      const opened: Array<string> = [];
+      let approved = false;
+      const spawner = ChildProcessSpawner.make((command) =>
+        Effect.sync(() =>
+          commandArgs(command).includes("-N")
+            ? {
+                ...makeRunningProcess(() => {}),
+                stderr: Stream.make(
+                  new TextEncoder().encode(`# To authenticate, visit: ${url}\n`),
+                ).pipe(Stream.ensuring(Deferred.succeed(stderrRead, undefined))),
+              }
+            : makeSuccessfulProcess('{"remotePort":3773}\n'),
+        ),
+      );
+      // The forward answers only after the user approves the tunnel's check.
+      const approvalHttpClient = HttpClient.make((request) =>
+        Effect.sync(() =>
+          HttpClientResponse.fromWeb(request, new Response("", { status: approved ? 200 : 503 })),
+        ),
+      );
+      const layer = Layer.mergeAll(
+        NodeServices.layer,
+        Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Layer.succeed(HttpClient.HttpClient, approvalHttpClient),
+        Layer.succeed(NetService.NetService, testNetService),
+        Layer.succeed(
+          SshAuth.SshPasswordPrompt,
+          SshAuth.SshPasswordPrompt.of({
+            isAvailable: true,
+            request: () => Effect.die("unexpected password prompt"),
+            openApprovalUrl: (link) => Effect.sync(() => opened.push(link)),
+          }),
+        ),
+        SshTunnel.SshEnvironmentManager.layer({ resolveCliRunner: Effect.succeed(ARCHIVE) }),
+      );
+      yield* Effect.gen(function* () {
+        const manager = yield* SshTunnel.SshEnvironmentManager;
+        const target = { alias: "devbox", hostname: "devbox", username: null, port: null };
+        const first = yield* Effect.forkChild(manager.ensureEnvironment(target));
+        yield* Deferred.await(stderrRead);
+        assert.deepEqual(opened, [url]);
+
+        const retry = yield* Effect.result(manager.ensureEnvironment(target));
+        assert.isTrue(Result.isFailure(retry));
+        if (Result.isFailure(retry)) {
+          assert.include(retry.failure.message, url);
+        }
+
+        yield* TestClock.adjust(Duration.seconds(30));
+        approved = true;
+        yield* TestClock.adjust(Duration.seconds(1));
+        yield* Fiber.join(first);
+        yield* manager.ensureEnvironment(target);
+        assert.deepEqual(opened, [url]);
+      }).pipe(Effect.provide(layer), Effect.scoped);
+    }),
+  );
+
   it.effect("retains a bounded diagnostic tail when the tunnel exits before readiness", () =>
     Effect.gen(function* () {
       const diagnostic = "Connection refused: café";

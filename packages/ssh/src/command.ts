@@ -136,9 +136,13 @@ const collectProcessOutput = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.E
   );
 
 // Tailscale SSH "check" mode prints this link and holds the session open until
-// someone approves it, so stderr must be read while ssh is still running.
+// someone approves it, so stderr must be read while ssh is still running. The
+// token bound rejects an overlong match instead of putting it in error messages.
 const TAILSCALE_CHECK_URL_PATTERN =
-  /To authenticate, visit: (https:\/\/login\.tailscale\.com\/a\/[\w-]+)\r?\n/u;
+  /To authenticate, visit: (https:\/\/login\.tailscale\.com\/a\/[\w-]{1,64})\r?\n/u;
+
+export const findTailscaleCheckUrl = (output: string): string | undefined =>
+  TAILSCALE_CHECK_URL_PATTERN.exec(output)?.[1];
 
 const collectSshStderr = <E>(
   stream: Stream.Stream<Uint8Array, E>,
@@ -152,8 +156,8 @@ const collectSshStderr = <E>(
           () => "",
           (acc, chunk) => {
             const output = acc + chunk;
-            const url = TAILSCALE_CHECK_URL_PATTERN.exec(output)?.[1];
-            return url === undefined || TAILSCALE_CHECK_URL_PATTERN.test(acc)
+            const url = findTailscaleCheckUrl(output);
+            return url === undefined || findTailscaleCheckUrl(acc) !== undefined
               ? Effect.succeed(output)
               : onTailscaleCheck(url).pipe(Effect.as(output));
           },

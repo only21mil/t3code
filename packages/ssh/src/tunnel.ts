@@ -26,6 +26,7 @@ import * as SshAuth from "./auth.ts";
 import {
   baseSshArgs,
   buildSshHostSpecEffect,
+  findTailscaleCheckUrl,
   getLastNonEmptyOutputLine,
   remoteStateKey,
   resolveSshCommand,
@@ -46,6 +47,8 @@ import {
 const DEFAULT_REMOTE_PORT = 3773;
 const REMOTE_PORT_SCAN_WINDOW = 200;
 const SSH_READY_TIMEOUT_MS = 20_000;
+// A tunnel held on a Tailscale SSH check gets the packaged launch's approval window.
+const SSH_TAILSCALE_CHECK_READY_TIMEOUT_MS = 900_000;
 const SSH_READY_PROBE_TIMEOUT_MS = 1_000;
 const TUNNEL_SHUTDOWN_TIMEOUT_MS = 2_000;
 const TUNNEL_STDERR_TAIL_CHARS = 16_384;
@@ -953,7 +956,9 @@ export const issueRemotePairingToken = Effect.fn("ssh/tunnel.issueRemotePairingT
   const result = yield* runSshCommand(target, {
     remoteCommandArgs: ["sh", "-s"],
     stdin: buildRemotePairingScript(stateKey, runner),
-    ...(isNodeScriptRunner(runner) ? {} : { timeoutMs: REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS }),
+    timeoutMs: isNodeScriptRunner(runner)
+      ? REMOTE_LAUNCH_TIMEOUT_MS
+      : REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS,
     ...(input?.authSecret === undefined ? {} : { authSecret: input.authSecret }),
     ...(input?.batchMode === undefined ? {} : { batchMode: input.batchMode }),
     ...(input?.interactiveAuth === undefined ? {} : { interactiveAuth: input.interactiveAuth }),
@@ -1234,13 +1239,22 @@ const startSshTunnel = Effect.fn("ssh/tunnel.startSshTunnel")(function* (input: 
   };
   // Readiness cancels the exit waiter, but diagnostics must drain until the tunnel closes.
   let stderrTail = "";
+  // Report a check only before readiness settles: the caller clears the pending
+  // approval link when this operation ends, and a later report would never clear.
+  let awaitingReadiness = true;
+  let tailscaleCheckUrl: string | undefined;
+  const { onTailscaleCheck } = input.authOptions;
   const stderrDrain = yield* child.stderr.pipe(
     Stream.decodeText(),
-    Stream.runForEach((chunk) =>
-      Effect.sync(() => {
-        stderrTail = (stderrTail + chunk).slice(-TUNNEL_STDERR_TAIL_CHARS);
-      }),
-    ),
+    Stream.runForEach((chunk) => {
+      const output = stderrTail + chunk;
+      stderrTail = output.slice(-TUNNEL_STDERR_TAIL_CHARS);
+      if (!awaitingReadiness || tailscaleCheckUrl !== undefined || onTailscaleCheck === undefined) {
+        return Effect.void;
+      }
+      tailscaleCheckUrl = findTailscaleCheckUrl(output);
+      return tailscaleCheckUrl === undefined ? Effect.void : onTailscaleCheck(tailscaleCheckUrl);
+    }),
     // Diagnostics are best-effort: a failed read must not hide the real exit.
     Effect.ignore,
     Effect.forkIn(scope),
@@ -1285,13 +1299,25 @@ const startSshTunnel = Effect.fn("ssh/tunnel.startSshTunnel")(function* (input: 
       }).pipe(Effect.andThen(Effect.fail(error)));
     }),
   );
-  yield* Effect.raceFirst(
-    waitForHttpReady({
-      baseUrl: input.httpBaseUrl,
-      timeoutMs: SSH_READY_TIMEOUT_MS,
-    }),
-    exitFailure,
-  ).pipe(
+  const readiness = waitForHttpReady({
+    baseUrl: input.httpBaseUrl,
+    timeoutMs: SSH_READY_TIMEOUT_MS,
+  }).pipe(
+    Effect.catch((error) =>
+      tailscaleCheckUrl === undefined
+        ? Effect.fail(error)
+        : waitForHttpReady({
+            baseUrl: input.httpBaseUrl,
+            timeoutMs: SSH_TAILSCALE_CHECK_READY_TIMEOUT_MS,
+          }),
+    ),
+  );
+  yield* Effect.raceFirst(readiness, exitFailure).pipe(
+    Effect.ensuring(
+      Effect.sync(() => {
+        awaitingReadiness = false;
+      }),
+    ),
     Effect.tap(() =>
       Effect.logInfo("ssh.tunnel.ready", {
         ...sshTargetLogFields(input.resolvedTarget),
