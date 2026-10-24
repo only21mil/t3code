@@ -2040,7 +2040,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           readonly waitForNativeStart?: boolean;
         }) {
           const existing = (yield* Ref.get(activeTurns)).get(input.nativeTurnId);
-          if (existing !== undefined) {
+          // turn/start can return a turn an earlier run left open, such as one
+          // whose message was rewound. Its output now answers this run.
+          if (existing !== undefined && existing.input.attemptId === input.turnInput.attemptId) {
             return existing;
           }
           const providerTurnId = idAllocator.derive.providerTurn({

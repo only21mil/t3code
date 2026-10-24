@@ -1337,6 +1337,87 @@ describe("CodexAdapterV2 post-settle continuation", () => {
         event.type === "message.updated" && event.message.role === "assistant",
     );
 
+  it.effect("gives a new run the native turn turn/start returns while an earlier run held it", () =>
+    Effect.gen(function* () {
+      const nativeThreadId = "reused-turn-thread";
+      const nativeTurnId = "reused-turn";
+      const firstPrompt = "Start the work.";
+      const secondPrompt = "Do the work this way instead.";
+      const transcript = makeCodexReplayTranscript({
+        scenario: "reused-native-turn",
+        entries: [
+          ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: firstPrompt }),
+          ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: secondPrompt })
+            .slice(5, 7)
+            .map((entry) => withReplayRequestId(entry, 4)),
+          {
+            type: "emit_inbound",
+            label: "item/completed/answer",
+            frame: {
+              method: "item/completed",
+              params: {
+                item: {
+                  type: "agentMessage",
+                  id: "reused-turn-answer",
+                  text: "Done.",
+                  phase: "final_answer",
+                  memoryCitation: null,
+                },
+                threadId: nativeThreadId,
+                turnId: nativeTurnId,
+                completedAtMs: 1782622441000,
+              },
+            },
+          },
+          {
+            type: "emit_inbound",
+            label: "turn/completed",
+            frame: {
+              method: "turn/completed",
+              params: {
+                threadId: nativeThreadId,
+                turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+              },
+            },
+          },
+        ],
+      });
+      const harness = yield* makeCodexReplayHarness(transcript);
+      const turnInput = (attemptId: string, text: string) =>
+        DateTime.now.pipe(
+          Effect.map((now) =>
+            makeCodexTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now,
+              attemptId: RunAttemptId.make(attemptId),
+              text,
+            }),
+          ),
+        );
+      yield* harness.runtime.startTurn(yield* turnInput("reused-turn-attempt-a", firstPrompt));
+      const second = yield* turnInput("reused-turn-attempt-b", secondPrompt);
+      yield* harness.runtime.startTurn(second);
+      yield* harness.firstTerminal;
+
+      const completedTurns = harness.events.flatMap((event) =>
+        event.type === "provider_turn.updated" && event.providerTurn.status === "completed"
+          ? [event.providerTurn.runAttemptId]
+          : [],
+      );
+      assert.deepEqual(completedTurns, [second.attemptId]);
+      assert.deepEqual(
+        assistantMessages(harness.events).map((event) => event.message.runId),
+        [second.runId],
+      );
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
+  );
+
   it.effect("keeps an asynchronous Codex question actionable after the turn completes", () =>
     Effect.scoped(
       Effect.gen(function* () {
