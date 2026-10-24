@@ -117,7 +117,7 @@ s=sqlite3.connect("file:%s?mode=ro" % sys.argv[1], uri=True, timeout=30); d=sqli
   "$DB" "$DB.bak-notice-package-$TS"
 cp -p "$CAND/tools/sats-stall-watchdog/src/sats_stall_asks.py" "$RECORD/sats_stall_asks.candidate.py"  # rollback runs its down-migration
 cp -p "$CAND/install/events_migration.py" "$RECORD/"
-printf 'TS=%s\nRECORD=%s\nHEAD=%s\nWD_TIMER_BEFORE=%s\n' "$TS" "$RECORD" "$(git -C "$CAND" rev-parse HEAD)" "$WD_TIMER_BEFORE" > "$RECORD/install.env"
+printf 'TS=%q\nRECORD=%q\nHEAD=%q\nWD_TIMER_BEFORE=%q\n' "$TS" "$RECORD" "$(git -C "$CAND" rev-parse HEAD)" "$WD_TIMER_BEFORE" > "$RECORD/install.env"  # sourced by rollback.sh
 say "backups written ($TS)"
 
 # ---- 3. place files (same-directory temp, then rename) ---------------------------------------------------
