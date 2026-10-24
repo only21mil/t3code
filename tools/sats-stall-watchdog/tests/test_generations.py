@@ -237,16 +237,143 @@ class EventTests(Generations):
         self.assertEqual({a['state'] for a in self.ask_rows()}, {'local'})
         self.assertEqual(self.tick(client, now=LATER)[0], 0)
 
-    def test_a_status_line_that_leads_with_done_is_the_generations_done(self):
-        # Patch 1 keys DONE on a reply's first line wherever it sits in the turn: Kimi's DONE reply (mini 3e9f5d46)
-        # had two more replies after it. So a status line that leads with DONE is the generation's one DONE,
-        # claimed when the turn ends, and later replies of the generation add nothing.
+    def test_SOL1_a_done_led_progress_line_then_a_final_progress_reply_sends_no_done(self):
+        # Sol's two-phase probe: DONE is the generation's final reply at claim time, so a DONE-led status line that a
+        # later progress reply follows is progress. Read in one tick and across ticks, the turn ends with no DONE.
         rows = [('user_message', 'brief', T0), ('assistant_message', 'DONE with phase 1, starting phase 2.', T0 + 1),
                 ('assistant_message', 'Phase 2 running.', T0 + 2)]
         client = FakeT3(PROJECTS, {'t1': thread('t1', build(*rows))})
-        self.assertEqual(self.tick(client)[0], 2)
+        self.assertEqual(self.tick(client)[0], 1)
+        t2 = thread('t2', build(*rows[:2]), status='running')
+        t2['meta']['activeRunId'] = t2['items'][-1]['runId']
+        client.threads['t2'] = t2
+        self.tick(client, now=T0 + 100)  # the DONE-led line is read while its turn still runs
+        self.add(t2, 'assistant_message', 'Phase 2 running.', T0 + 200, t2['items'][-1]['runId'])
+        t2['meta'].update(status='completed', activeRunId=None)
+        self.tick(client, now=LATER)
+        self.assertEqual(sorted(self.sent_events()), [('t1', 'generation-1-START', 'start'), ('t2', 'generation-1-START', 'start')])
+        self.assertEqual(self.tick(client, now=LATER + 1)[0], 0)
+        # Phase 2 finishes with its own DONE-led final reply: that is the generation's one DONE.
+        self.add(t2, 'assistant_message', 'DONE. Both phases pass.', T0 + 300, t2['items'][-1]['runId'])
+        self.tick(client, now=LATER + 2)
+        self.assertEqual([o for t, o, _ in self.sent_events() if t == 't2'], ['generation-1-START', 'generation-1-DONE'])
+        self.assertEqual([e['position'] for e in self.events('t2') if e['state'] == 'DONE'], [3])
+
+    def test_SOL1_kimi_replies_that_restate_done_keep_it_on_the_done_replys_run(self):
+        # mini 3e9f5d46 (RCA check_done.py texts): the DONE reply, then two later replies that restate DONE, the last
+        # in a background-task wake run. The DONE still sends, once, for the DONE reply and its own run.
+        kimi = ['DONE. Verdict: trial K3.1 Pro for bounded hard coding. Not fleet-wide yet.',
+                'Those are late notices. The objective is DONE and settled.', 'Stale background scans stopped. The research stays DONE.']
+        t1 = thread('t1', build(('user_message', 'brief', T0), *[('assistant_message', text, T0 + n) for n, text in enumerate(kimi, 1)]))
+        t1['items'][-1]['runId'] = t1['meta']['latestRunId'] = 'run:thread:t1:ordinal:4'  # the wake
+        self.assertEqual(self.tick(FakeT3(PROJECTS, {'t1': t1}))[0], 2)
         self.assertEqual(self.sent_events(), [('t1', 'generation-1-START', 'start'), ('t1', 'generation-1-DONE', 'done')])
-        self.assertEqual(self.tick(client, now=LATER)[0], 0)
+        done = next(e for e in self.events() if e['state'] == 'DONE')
+        self.assertEqual((done['position'], done['turn_run']), (1, 'run:thread:t1:ordinal:1'))
+        self.assertTrue(asks.keeps_done(kimi[1]) and asks.keeps_done(kimi[2]))
+        self.assertFalse(any(asks.keeps_done(text) for text in ('Phase 2 running.', 'Phase 1 is DONE; phase 2 is running.',
+                                                                'The objective is not DONE.', 'Nothing is DONE yet.')))
+
+    def test_DSH2_single_read_message_after_a_done_reply_opens_a_generation(self):
+        # DeepSeek's single-read probe: one read holds the DONE reply and Victor's follow-up. The follow-up closes
+        # generation 1, whose DONE is claimed first for the DONE reply's own run, and opens generation 2 with its own
+        # START; generation 2's progress reply sends nothing.
+        t1 = thread('t1', build(('user_message', 'brief', T0), ('assistant_message', 'DONE. Report written.', T0 + 60),
+                                ('user_message', 'Victor: also check the mini', T0 + 200),
+                                ('assistant_message', 'Checking the mini now.', T0 + 260)))
+        for item in t1['items'][2:]:
+            item['runId'] = 'run:thread:t1:ordinal:2'
+        self.assertEqual(self.tick(FakeT3(PROJECTS, {'t1': t1}))[0], 3)
+        self.assertEqual(self.sent_events(), [('t1', 'generation-1-START', 'start'), ('t1', 'generation-1-DONE', 'done'),
+                                              ('t1', 'generation-2-START', 'start')])
+        done = next(e for e in self.events() if e['state'] == 'DONE')
+        self.assertEqual((done['generation'], done['position'], done['turn_run']), (1, 1, 'run:thread:t1:ordinal:1'))
+        self.assertEqual([(n, g['position'], g.get('done_at')) for n, g in self.generations()], [(1, 0, 1), (2, 2, None)])
+
+    def test_DSH2_grace_reread_message_after_a_done_reply_opens_a_generation(self):
+        # DeepSeek's grace-reread probe: the DONE waits inside TURN_GRACE, then Victor's follow-up starts run 2 before
+        # the reread. The reread claims generation 1's DONE for run 1 and opens generation 2; run 2 ends without a DONE.
+        end = T0 + 60
+        t1 = thread('t1', build(('user_message', 'brief', T0), ('assistant_message', 'DONE. Report written.', end)))
+        client = FakeT3(PROJECTS, {'t1': t1})
+        self.tick(client, now=end + 30)
+        self.assertEqual(self.sent_events(), [('t1', 'generation-1-START', 'start')])
+        self.add(t1, 'user_message', 'Victor: also check the mini', end + 100, 'run:thread:t1:ordinal:2')
+        t1['meta'].update(status='running', activeRunId='run:thread:t1:ordinal:2')
+        self.tick(client, now=end + 330)
+        self.assertEqual(self.sent_events(), [('t1', 'generation-1-START', 'start'), ('t1', 'generation-1-DONE', 'done'),
+                                              ('t1', 'generation-2-START', 'start')])
+        self.assertEqual(next(e['turn_run'] for e in self.events() if e['state'] == 'DONE'), 'run:thread:t1:ordinal:1')
+        self.add(t1, 'assistant_message', 'Checked the mini; one more log to read.', end + 400, 'run:thread:t1:ordinal:2')
+        t1['meta'].update(status='completed', activeRunId=None)
+        self.assertEqual(self.tick(client, now=end + 1000)[0], 0)
+        self.assertEqual(len(self.sent), 3)
+
+    def test_DSH2_a_follow_up_inside_the_done_replys_grace_claims_that_done_after_the_grace(self):
+        # The follow-up lands while the DONE reply's turn is inside TURN_GRACE: generation 2 opens at once and
+        # generation 1's DONE goes out on the next tick, for run 1.
+        end = T0 + 60
+        t1 = thread('t1', build(('user_message', 'brief', T0), ('assistant_message', 'DONE. Report written.', end),
+                                ('user_message', 'Victor: thanks, archive it', end + 10)))
+        t1['items'][-1]['runId'] = 'run:thread:t1:ordinal:2'
+        client = FakeT3(PROJECTS, {'t1': t1})
+        self.tick(client, now=end + 20)
+        self.assertEqual(self.sent_events(), [('t1', 'generation-1-START', 'start'), ('t1', 'generation-2-START', 'start')])
+        self.tick(client, now=end + 330)
+        self.assertEqual(self.sent_events()[2:], [('t1', 'generation-1-DONE', 'done')])
+        self.assertEqual(self.tick(client, now=end + 630)[0], 0)
+
+
+class RepairRound1Tests(Generations):
+    """notice-package-20261023 round 1: SOL-3 (a record read while its message streamed is decided on its completed
+    text) and SOL-4 (an ask's decision ID is its identity)."""
+
+    def test_SOL3_a_streamed_decision_id_line_that_completes_as_decision_for_you_sends(self):
+        t1 = thread('t1', build(('user_message', 'brief', T0)), status='running')
+        t1['meta']['activeRunId'] = 'run:thread:t1:ordinal:1'
+        streaming = self.add(t1, 'assistant_message', 'Recording DECISION-P05-DELETE on the board', T0 + 10,
+                             'run:thread:t1:ordinal:1', status='streaming')
+        client = FakeT3(PROJECTS, {'t1': t1})
+        self.tick(client, now=T0 + 20)
+        self.assertEqual([(a['state'], a['event']) for a in self.ask_rows()], [('local', None)])  # an ID alone is local
+        streaming.update(status='completed', text='Recording DECISION-P05-DELETE on the board.\n'
+                                                   '**Decision for you:** should P05 delete `[mcp_servers.t3]` from the F-D config?')
+        t1['meta'].update(status='completed', activeRunId=None, updatedAt=iso(T0 + 30))
+        self.tick(client, now=LATER)
+        self.assertEqual([o for _, o, _ in self.sent_events()], ['generation-1-START', 'generation-1-BLOCKED'])
+        self.assertEqual([(a['state'], a['event']) for a in self.ask_rows()], [('bound', 'BLOCKED')])
+        self.assertEqual(self.tick(client, now=LATER + 1)[0], 0)
+
+    def test_SOL3_a_pending_ask_whose_completed_text_asks_nothing_stays_local(self):
+        t1 = thread('t1', build(('user_message', 'brief', T0)), status='running')
+        t1['meta']['activeRunId'] = 'run:thread:t1:ordinal:1'
+        streaming = self.add(t1, 'assistant_message', 'NEEDS-VICTOR t1 pick A or B /x', T0 + 10, 'run:thread:t1:ordinal:1', status='streaming')
+        client = FakeT3(PROJECTS, {'t1': t1})
+        self.tick(client, now=T0 + 20)
+        self.assertEqual([a['state'] for a in self.ask_rows()], ['pending'])
+        streaming.update(status='completed', text='Picked A myself; the brief allows it. Report written.')
+        t1['meta'].update(status='completed', activeRunId=None, updatedAt=iso(T0 + 30))
+        self.tick(client, now=LATER)
+        self.assertEqual([o for _, o, _ in self.sent_events()], ['generation-1-START'])
+        self.assertEqual([(a['state'], a['event']) for a in self.ask_rows()], [('local', None)])
+
+    def test_SOL4_a_reworded_ask_with_the_same_decision_id_is_one_notice(self):
+        threads = {tid: thread(tid, build(('user_message', 'brief', T0),
+                                          ('assistant_message', 'NEEDS-VICTOR DECISION-PUSH-2 approve pushing T05 /x/RESULT.md', T0 + 1)))
+                   for tid in ('t1', 't2')}
+        client = FakeT3(PROJECTS, threads)
+        self.assertEqual(self.tick(client)[0], 4)
+        # A re-wake rewords t1's ask under the same decision ID, and asks t2 a second decision under its own ID.
+        self.add(threads['t1'], 'assistant_message', 'Still waiting.\nNEEDS-VICTOR DECISION-PUSH-2: is T05 OK to push upstream? /x/RESULT.md',
+                 T0 + 300, 'run:thread:t1:ordinal:2')
+        self.add(threads['t2'], 'assistant_message', 'NEEDS-VICTOR DECISION-KEY-3 rotate the hub key /y/RESULT.md',
+                 T0 + 300, 'run:thread:t2:ordinal:2')
+        self.tick(client, now=LATER)
+        blocked = sorted((t, o) for t, o, _ in self.sent_events() if o == 'generation-1-BLOCKED')
+        self.assertEqual(blocked, [('t1', 'generation-1-BLOCKED'), ('t2', 'generation-1-BLOCKED'), ('t2', 'generation-1-BLOCKED')])
+        self.assertEqual(asks.decision_ids({'markers': ['Recorded as DECISION-PUSH-2 in DECISION-PUSH.md']}), [])  # a cited ID
+        self.assertEqual(asks.ask_key({'markers': ['NEEDS-VICTOR DECISION-PUSH-2 approve /x']}),
+                         asks.ask_key({'markers': ['NEEDS-VICTOR DECISION-PUSH-2: OK to push? /x', 'Logged DECISION-OLD-1']}))
 
 
 class SolLifecycleTests(Generations):
@@ -429,6 +556,7 @@ class InertLiveHook(Generations):
         t1 = thread('t1', build(('user_message', 'brief', T0), ('assistant_message', 'DONE. All checks pass.', T0 + 60)),
                     status='running')
         t1['meta']['activeRunId'] = t1['meta']['latestRunId']
+        t1['items'][-1]['runId'] = t1['meta']['latestRunId']  # the DONE reply is the running turn's; it posts its own DONE
         client = FakeT3(PROJECTS, {'t1': t1})
         self.send = self.hook
         self.tick(client)  # the turn still runs: START only

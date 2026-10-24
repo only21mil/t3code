@@ -758,6 +758,13 @@ class Transport:
 RECIPIENT_RUN_RE = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', re.ASCII)
 
 
+def delivered(proof):
+    """True for a hook acceptance proof that names the Sats run it started: a 2xx other than 299 with a recipient run id."""
+    status, run_id = proof.get('http_status'), proof.get('recipient_run_id')
+    return (type(status) is int and 200 <= status < 300 and status != 299
+            and isinstance(run_id, str) and RECIPIENT_RUN_RE.fullmatch(run_id) is not None)
+
+
 class AskTransport:
     """Deliver one T3 generation event to Sats as a start, blocker, done or urgent milestone through the hook.
 
@@ -782,10 +789,7 @@ class AskTransport:
         the acceptance proof is written and a requeue entry created inside it, and the drainer removes an
         entry only after retry_milestone has written the proof. So a locked read that finds neither proof nor
         entry is final for a turn that has ended, and the lock is released before the ask pass sends."""
-        lane = 't3-' + re.sub(r'[^A-Za-z0-9_.-]', '-', ask['thread_id'])
-        directory = Path(self.config.get('hook_state_dir', '~/.local/state/sats-completion')).expanduser()
-        keys = [hashlib.sha256(json.dumps([lane, ask['thread_id'], kind, ask['run']], separators=(',', ':')).encode()).hexdigest()
-                for kind in kinds]
+        directory, keys = self.notice_keys(ask, kinds)
         held, busy = [], False
         try:
             for key in keys:
@@ -800,10 +804,7 @@ class AskTransport:
                     busy = True  # a hook process holds it: the notice is in flight
             for key in keys:
                 try:
-                    proof = json.loads((directory / 'milestones' / (key + '.acceptance.json')).read_text())
-                    status, run_id = proof.get('http_status'), proof.get('recipient_run_id')
-                    if (type(status) is int and 200 <= status < 300 and status != 299
-                            and isinstance(run_id, str) and RECIPIENT_RUN_RE.fullmatch(run_id)):
+                    if delivered(json.loads((directory / 'milestones' / (key + '.acceptance.json')).read_text())):
                         return 'delivered'
                 except (OSError, ValueError, AttributeError):
                     pass
@@ -813,6 +814,31 @@ class AskTransport:
         finally:
             for fd in held:
                 os.close(fd)
+
+    def notice_keys(self, ask, kinds):
+        """The hook state directory and the hook's _emit_milestone identity hash of the thread's notice of each kind."""
+        lane = 't3-' + re.sub(r'[^A-Za-z0-9_.-]', '-', ask['thread_id'])
+        directory = Path(self.config.get('hook_state_dir', '~/.local/state/sats-completion')).expanduser()
+        return directory, [hashlib.sha256(json.dumps([lane, ask['thread_id'], kind, ask['run']], separators=(',', ':')).encode()).hexdigest()
+                           for kind in kinds]
+
+    def notice_message(self, ask, kinds=('blocker', 'decision')):
+        """The message of the thread's own delivered notice for this ask's turn, else None: milestone_message of the
+        hook's frozen payload (milestones/<key>.json) for the first kind whose acceptance proof delivered. The ask
+        pass reads it after thread_notice() returned 'delivered', so it decides which of the turn's asks that notice
+        carried (sats_stall_asks.notice_covers). The hook writes the payload once, under the occurrence lock,
+        before its first post."""
+        directory, keys = self.notice_keys(ask, kinds)
+        for key in keys:
+            try:
+                if not delivered(json.loads((directory / 'milestones' / (key + '.acceptance.json')).read_text())):
+                    continue
+                message = json.loads((directory / 'milestones' / (key + '.json')).read_text()).get('milestone_message')
+            except (OSError, ValueError, AttributeError):
+                continue
+            if isinstance(message, str):
+                return message
+        return None
 
     def __call__(self, plan):
         lane = 't3-' + plan['host'] + '-' + hashlib.sha256(plan['thread_id'].encode()).hexdigest()[:32]

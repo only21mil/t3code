@@ -8,18 +8,24 @@ Victor GO 3:18 PM CT 2026-10-20 (t3-watchdog-r5-install-20261020): a notice is
 keyed on host:threadId, durable generation and event state, never on a run or
 turn. Sats gets START, BLOCKED (NEEDS-VICTOR included), DONE and URGENT. START,
 DONE and URGENT go at most once per generation; BLOCKED goes once per ask, keyed
-on the ask's own marker lines, so a new ask sends while a re-wake repeating the
-same ask does not (notice-package-20261023 item 6). FAILED and CANCELED keep
+on the ask's decision ID when its ask lines carry one, else on its marker lines,
+so a new ask sends while a re-wake repeating or rewording the same ask does not
+(notice-package-20261023 item 6). FAILED and CANCELED keep
 their own event state in the key and reach Sats with the BLOCKED kind. Status,
 replies, milestones, stalls and prose asks send nothing.
 
 A generation is one piece of work. Its origin is an accepted user message in a
 top-level thread: the first one, a Victor answer after BLOCKED, FAILED or
-CANCELED, or a new message after DONE. A message while the work is unfinished
-is a steer and joins it. A re-wake starts a run with no user message, so it
-never opens one. Each origin and each (thread, generation, event state, ask)
-is a unique row, claimed in the transaction that commits the scan, before any
-send.
+CANCELED, or a new message after DONE, its DONE reply included. A message while
+the work is unfinished is a steer and joins it. A re-wake starts a run with no
+user message, so it never opens one. Each origin and each (thread, generation,
+event state, ask) is a unique row, claimed in the transaction that commits the
+scan, before any send.
+
+A generation's DONE is its final reply when that reply leads with DONE, or its
+last reply that does, when every reply after it restates the DONE ("The research
+stays DONE."). It is claimed a minute after that reply's turn ends; any other
+later reply supersedes it as progress.
 Threads known before this round start from a baseline generation 0, so their
 history sends nothing.
 
@@ -39,7 +45,10 @@ A thread's own terminal notice (sats-pm-visible-swarm § T3 terminal notice)
 is posted inside the turn, so a marker ask waits while its turn runs, then the
 send's thread_notice check under the hook's occurrence lock decides: delivered
 records the event without a send, queued or in flight waits, anything else
-claims the event for the generation (t3-terminal-notice-20261020).
+claims the event for the generation (t3-terminal-notice-20261020). A delivered
+notice covers only the asks it carried: the turn's one ask, or with several
+asks those whose decision ID or marker words its message holds; each other ask
+of the turn still sends its own BLOCKED.
 """
 from __future__ import annotations
 from contextlib import contextmanager
@@ -77,6 +86,9 @@ INLINE_BLOCKED_RE = re.compile(r'(\*\*|__)BLOCKED\1')
 TERMINAL_LINE_RE = re.compile(r'^[ \t>*_-]*(?:[A-Za-z0-9:_%./-]{3,200}[ \t]+)?[*_]*(FAILED|CANCEL+ED)\b')
 # A reply whose first line leads with DONE, in the same notice shape, is the generation's own DONE.
 DONE_LINE_RE = re.compile(r'^[ \t>*_-]*(?:[A-Za-z0-9:_%./-]{3,200}[ \t]+)?[*_]*(DONE)\b')
+# A later reply whose last sentence restates that DONE keeps it: "The objective is DONE and settled.", "The
+# research stays DONE." (Kimi, mini 3e9f5d46). Any other later reply is progress and supersedes it.
+DONE_KEPT_RE = re.compile(r'\b(?:is|are|was|were|stays|remains|still)[ \t]+[*_]*DONE\b')
 # URGENT is a line that leads with the token and names one of Victor's three cases on that line.
 URGENT_RE = re.compile(r'^[ \t>*_-]*(?:\d+[.)][ \t]*)?[*_]*URGENT\b.*?(?i:\b(?:security|data[ -]at[ -]risk|destructive))', re.M)
 # Event state -> the hook's --kind. URGENT rides its own urgent kind (sats-completion-notify MILESTONE_KINDS and
@@ -86,7 +98,14 @@ EVENT_ORDER = ('START', 'URGENT', 'BLOCKED', 'FAILED', 'CANCELED', 'DONE')
 TERMINAL_STATES = ('DONE', 'BLOCKED', 'FAILED', 'CANCELED')
 ASK_STATES = ('BLOCKED', 'FAILED', 'CANCELED')  # a later reply or settle closes them before they send
 DECISION_ID_RE = re.compile(r'\bDECISION-[A-Z0-9][A-Z0-9_-]*')
-DECISION_FOR_RE = re.compile(r'\bdecisions? (?:for|from) (?:you|victor)\b', re.I)
+# A decision line asks Victor when it is "for" him ("**Decision for you:**", "Two decisions for you") or in an ask
+# shape ("C14 needs a decision from you."). A report of his decision ("Decision from Victor: GO") stays local.
+_WHO = r'[*_]{0,2}(?:you|victor)\b'
+DECISION_FOR_RE = re.compile(r'\bdecisions?[*_]{0,2}[ \t]+for[ \t]+' + _WHO +
+                             r"|\b(?:needs?|needed|requires?|required|awaits?|awaiting|waiting[ \t]+(?:on|for)|asks?[ \t]+for)"
+                             r"[ \t]+(?:an?[ \t]+|your[ \t]+|victor'?s[ \t]+)?decisions?[ \t]+(?:from|by)[ \t]+" + _WHO +
+                             r'|\bdecisions?[ \t]+(?:from|by)[ \t]+' + _WHO + r'[*_]{0,2}[ \t]+(?:is[ \t]+|are[ \t]+)?(?:needed|required|pending)\b',
+                             re.I)
 FENCE_RE = re.compile(r'^[ \t]*```.*?^[ \t]*```[^\n]*$', re.M | re.S)
 INLINE_CODE_RE = re.compile(r'`[^`\n]*`')
 NEXT_STEPS_RE = re.compile(r'^[ \t>#*_]*next steps\b', re.I | re.M)
@@ -155,6 +174,16 @@ def blocked_lines(text):
             if found and not line.lstrip().startswith('|') and not NEGATION_RE.search(re.split(r'[.!?;]\s', line[:found.start()])[-1]):
                 lines.append(line.strip(' \t>*_`-'))
     return lines
+
+
+def keeps_done(text):
+    """True for a reply whose last sentence restates the generation's DONE, outside code, without a negation."""
+    rows = [row for row in FENCE_RE.sub('', text).splitlines() if row.strip()] if isinstance(text, str) else []
+    if not rows:
+        return False
+    sentence = [part for part in re.split(r'(?<=[.!?;])\s+', rows[-1].strip()) if part.strip()][-1]
+    found = DONE_KEPT_RE.search(sentence)
+    return found is not None and not NEGATION_RE.search(sentence[:found.start()])
 
 
 def classify(text, final):
@@ -369,14 +398,23 @@ def upgrade_events(db, now):
 
 
 def downgrade_events(db, now):
-    """The tested rollback of upgrade_events, inside the caller's transaction: events returns to EVENTS_V1. The first
-    row of each (thread, generation, state) stays; later per-ask BLOCKED rows move to events_parked, a table the
-    older watchdog never reads. No VACUUM, no checkpoint."""
+    """The tested rollback of upgrade_events, inside the caller's transaction: events returns to EVENTS_V1. One row
+    of each (thread, generation, state) stays: its legacy row when it has one, else its first per-ask row, which
+    takes the legacy event id the older watchdog looks up, so that watchdog binds later asks of the generation to
+    it instead of claiming a second BLOCKED or binding to a missing id (DS-M3). The other per-ask BLOCKED rows move
+    to events_parked, a table the older watchdog never reads. No VACUUM, no checkpoint."""
     db.execute('ALTER TABLE events RENAME TO events_v2')
     db.execute(EVENTS_V1)
-    first = 'rowid IN (SELECT min(rowid) FROM events_v2 GROUP BY thread, generation, state)'
+    first = ("rowid IN (SELECT coalesce(min(CASE WHEN ask = '' THEN rowid END), min(rowid)) FROM events_v2"
+             ' GROUP BY thread, generation, state)')
     db.execute('INSERT INTO events (rowid, %s) SELECT rowid, %s FROM events_v2 WHERE %s ORDER BY rowid'
                % (EVENT_COLUMNS, EVENT_COLUMNS, first))
+    for rowid, data in db.execute("SELECT rowid, data FROM events_v2 WHERE ask != '' AND %s ORDER BY rowid" % first).fetchall():
+        value = json.loads(data)
+        value['per_ask_event_id'] = value['event_id']
+        value['event_id'] = event_key(value['host'], value['thread_id'], value['generation'], value['state'])
+        value.pop('ask', None)
+        db.execute('UPDATE events SET id=?, data=? WHERE rowid=?', (value['event_id'], json.dumps(value, separators=(',', ':')), rowid))
     if db.execute('SELECT 1 FROM events_v2 WHERE NOT ' + first).fetchone():
         db.execute('CREATE TABLE IF NOT EXISTS events_parked (id TEXT PRIMARY KEY, thread TEXT NOT NULL, generation INTEGER NOT NULL,'
                    ' state TEXT NOT NULL, data TEXT NOT NULL, parked_at REAL NOT NULL)')
@@ -385,12 +423,66 @@ def downgrade_events(db, now):
     db.execute("DELETE FROM migrations WHERE name='events-per-ask'")
 
 
+def decision_ids(ask):
+    """The decision IDs on the ask's own ask lines. A line that only cites an ID ("Recorded as DECISION-PUSH-2")
+    names a past decision and gives none."""
+    lines = [str(line) for line in ask.get('markers') or []]
+    asking = [line for line in lines if 'NEEDS-VICTOR' in line or re.search(r'\bBLOCKED\b', line) or decision_for(line)]
+    return sorted({found for line in asking for found in DECISION_ID_RE.findall(line)})
+
+
 def ask_key(ask):
-    """A BLOCKED event's per-ask key: the ask's own marker lines. A new ask is its own notice, while a re-wake or
-    duplicate message repeating the same ask is not (Victor GO 3:18 PM CT 2026-10-20: re-wakes, retries and
-    duplicates each yield exactly one notice)."""
-    lines = sorted(set(str(line) for line in ask.get('markers') or [ask.get('excerpt') or '']))
+    """A BLOCKED event's per-ask key: the ask's decision ID when its ask lines carry one, so a re-wake that rewords
+    the same decision is the same notice (SOL-4), else its own marker lines. A new ask is its own notice, while a
+    re-wake or duplicate message repeating the same ask is not (Victor GO 3:18 PM CT 2026-10-20: re-wakes,
+    retries and duplicates each yield exactly one notice)."""
+    ids = decision_ids(ask)
+    lines = ['decision:' + found for found in ids] or sorted(set(str(line) for line in ask.get('markers') or [ask.get('excerpt') or '']))
     return 'ask-' + hashlib.sha256('\n'.join(lines).encode()).hexdigest()[:32]
+
+
+def ask_identity(host, thread_id, message_id):
+    return 'ask-' + hashlib.sha256('|'.join((host, thread_id, message_id)).encode()).hexdigest()[:40]
+
+
+def words(text, thread_id):
+    """The lower-case words of a notice or marker line, without the thread id's own words."""
+    own = set(re.findall(r'[a-z0-9]+', thread_id.lower()))
+    return {word for word in re.findall(r'[a-z0-9]+', text.lower()) if word not in own}
+
+
+def notice_carries(message, ask):
+    """True when a thread's own notice message carries this ask: it names one of the ask's decision IDs, or the
+    words of the message and of one of the ask's marker lines contain each other, at least three of them
+    ("mcp:<id> BLOCKED review round cap, decision needed" carries "BLOCKED review round cap, decision needed /x")."""
+    if not isinstance(message, str) or not message.strip():
+        return False
+    if any(found in message for found in decision_ids(ask)):
+        return True
+    notice = words(re.sub(r'^\s*\S*:\S*\s+', '', message), ask['thread_id'])  # without its leading "<thread>" token
+    for line in ask.get('markers') or []:
+        marker = words(str(line), ask['thread_id'])
+        if min(len(notice), len(marker)) >= 3 and (notice <= marker or marker <= notice):
+            return True
+    return False
+
+
+def blocked_ask(ask):
+    """True for an ask that is a BLOCKED event, a record the round-4 watchdog wrote included."""
+    if 'event' in ask:
+        return ask['event'] == 'BLOCKED'
+    return ask.get('kind') == 'blocker' or any(MARKER_RE.match(str(line)) for line in ask.get('markers') or [])
+
+
+def notice_covers(state, send, ask):
+    """True when the thread's delivered notice for this ask's turn carried this ask (SOL-2): it is the turn's only
+    open ask, or the notice's message carries it (notice_carries). Every other ask of the turn sends its own."""
+    turn = {ask_key(prior) for _, prior in state.rows('asks', 'ask-')
+            if prior.get('host') == ask['host'] and prior.get('thread_id') == ask['thread_id'] and prior.get('run') == ask['run']
+            and prior.get('state') in ('pending', 'attempting', 'bound') and blocked_ask(prior)}
+    if turn <= {ask_key(ask)}:
+        return True
+    return notice_carries(send.notice_message(ask) if hasattr(send, 'notice_message') else None, ask)
 
 
 def event_key(host, thread_id, generation, state, ask=''):
@@ -413,12 +505,14 @@ def event(host, thread_id, generation, state, position, at, status='pending', de
 
 
 def closed(state, thread, number, record, position):
-    """True when generation `number` ended before `position`: a terminal event or an observed event marker
-    (`ended`, kept whether or not its notice is ever sent) at an earlier item, or a baseline taken while the
-    thread was not running."""
+    """True when generation `number` ended before `position`: a terminal event, an observed event marker
+    (`ended`, kept whether or not its notice is ever sent) or its standing DONE reply (`done_at`, DS-H2) at an
+    earlier item, or a baseline taken while the thread was not running."""
     if record.get('baseline') and record.get('closed') and type(record.get('position')) is int and record['position'] < position:
         return True
     if type(record.get('ended')) is int and record['ended'] < position:
+        return True
+    if type(record.get('done_at')) is int and record['done_at'] < position:
         return True
     return any(e['generation'] == number and e['state'] in TERMINAL_STATES and e['position'] < position
                for e in state.events(thread))
@@ -478,9 +572,10 @@ def read_thread(client, thread_id, after):
 
 
 def find_asks(client, host, thread_id, meta, items, emit):
-    """Open asks in this window, the asks a later user reply or settle overrides, open URGENT lines, and the
-    positions of completed replies whose first line leads with DONE."""
-    found, overridden, urgent, done = [], [], [], []
+    """Open asks in this window, the asks a later user reply or settle overrides, open URGENT lines, and done:
+    {position: True} for each completed reply whose first line leads with DONE, {position: False} for one whose
+    last sentence restates it (keeps_done)."""
+    found, overridden, urgent, done = [], [], [], {}
     status = meta.get('status')
     settled_at = timestamp(meta.get('settledAt')) if meta.get('settled') or meta.get('archived') else None
     if (meta.get('settled') or meta.get('archived')) and settled_at is None:
@@ -507,7 +602,9 @@ def find_asks(client, host, thread_id, meta, items, emit):
         head = next((row for row in FENCE_RE.sub('', text).splitlines() if row.strip()), '') if isinstance(text, str) else ''
         lead = DONE_LINE_RE.match(head)
         if item.get('status') == 'completed' and lead and not NEGATION_RE.search(head[:lead.start(1)]):
-            done.append(item['position'])
+            done[item['position']] = True
+        elif item.get('status') == 'completed' and keeps_done(text):
+            done[item['position']] = False
         verdict = classify(text, final)
         if verdict is None:
             continue
@@ -522,19 +619,49 @@ def find_asks(client, host, thread_id, meta, items, emit):
         ask = {'host': host, 'thread_id': thread_id, 'message_id': message_id, 'run': run, 'at': at,
                'turn': run if item.get('runId') else None, 'event': verdict[3],
                'kind': verdict[0], 'excerpt': verdict[1], 'markers': verdict[2], 'position': item['position'],
-               'ask_id': 'ask-' + hashlib.sha256('|'.join((host, thread_id, message_id)).encode()).hexdigest()[:40]}
+               'ask_id': ask_identity(host, thread_id, message_id)}
         answered = any(later.get('type') == 'user_message' for later in items[index + 1:])
         (overridden if answered or (settled_at is not None and settled_at >= at) else found).append(ask)
     return found, overridden, urgent, done
 
 
-def allocate(state, host, thread_id, meta, items, history, marked, now, done=()):
+def allocate(state, host, thread_id, meta, items, history, marked, now, done=None):
     """Open a generation at each accepted user message of this read, track the last assistant reply, and claim
     START and DONE, inside the scan transaction. Returns (spans, absorbed, waiting): absorbed is a baseline thread's
     first read, whose items are history for generations; its open marker asks still become baseline BLOCKED.
     waiting is a DONE held only by TURN_GRACE.
-    marked: positions of this read's messages that carry an event marker, which never end a generation as DONE."""
+    marked: positions of this read's messages that carry an event marker, which never end a generation as DONE.
+    done: find_asks' DONE replies, {position: True} leading with DONE, {position: False} restating it."""
     thread = host + ':' + thread_id
+    done = done if isinstance(done, dict) else dict.fromkeys(done or (), True)
+
+    def claim_done(number, record):
+        """Claim generation `number`'s DONE when its DONE reply is due; True while TURN_GRACE alone holds it.
+
+        DONE is the generation's own DONE reply (done_at), claimed once its turn has ended and TURN_GRACE has
+        passed, when it is later than every other terminal event of the generation and no later reply superseded
+        it. Settling neither sends DONE nor is needed for it. Keying DONE on the settle held the notice for every
+        thread that failed to self-settle, and a bulk settle then announced unfinished threads
+        (notice-delay-rca-20261023). A generation a user message closed (closed_by) has its final reply: its DONE
+        waits only for the DONE reply's own run (DS-H2). The current generation's final reply may still change, so
+        its DONE waits while the thread runs. The DONE's turn is the DONE reply's own run."""
+        done_at = record.get('done_at')
+        if type(done_at) is not int:
+            return False
+        ends = [e['position'] for e in state.events(thread) if e['generation'] == number and e['state'] in TERMINAL_STATES]
+        ends += [record['ended']] if type(record.get('ended')) is int else []
+        if done_at <= max([record['position'] if type(record.get('position')) is int else -1] + ends):
+            return False
+        closing = type(record.get('closed_by')) is int
+        if not closing and meta.get('status') in ACTIVE:
+            return False
+        if turn_running(meta, {'run': record.get('done_run') if closing else None}, now):
+            return True
+        state.claim(event(host, thread_id, number, 'DONE', done_at, (record.get('done_time') or now) if closing else now,
+                          turn_run=record.get('done_run') or meta.get('latestRunId'),
+                          detail=mask(one_line(str(meta.get('title') or ''), 120))))
+        return False
+
     rows = state.generations(thread)
     visible = [item for item in items if item.get('visibility') != 'inherited']
     if not rows and visible and (history or visible[0].get('type') != 'user_message'):
@@ -557,8 +684,14 @@ def allocate(state, host, thread_id, meta, items, history, marked, now, done=())
             # have changed); an item before it or before the origin never moves it back.
             if item.get('status') == 'completed' and position > origin_at and position >= current.get('last_assistant', -1):
                 current.update(last_assistant=position, last_assistant_at=timestamp(item.get('updatedAt')), last_marked=position in marked)
-            if position in done and position > origin_at and position > current.get('done_at', -1):
-                current['done_at'] = position
+            if item.get('status') == 'completed' and position > origin_at:
+                lead = done.get(position)
+                if lead and position > current.get('done_at', -1):
+                    current.update(done_at=position, done_run=item.get('runId'), done_time=timestamp(item.get('updatedAt')))
+                elif lead is None and type(current.get('done_at')) is int and position > current['done_at']:
+                    # A later reply that neither leads with DONE nor restates it: that DONE was progress (SOL-1).
+                    for key in ('done_at', 'done_run', 'done_time'):
+                        current.pop(key, None)
             continue
         message_id = item.get('messageId') or item.get('itemId')
         at = timestamp(item.get('updatedAt'))
@@ -568,6 +701,12 @@ def allocate(state, host, thread_id, meta, items, history, marked, now, done=())
         if state.origin_known(thread, origin) or (current is not None and not closed(state, thread, number, current, position)):
             continue  # already allocated, or a steer that joins the unfinished generation
         if current is not None:
+            if type(current.get('done_at')) is int and current['done_at'] < position:
+                # The generation's DONE reply is its final reply: its DONE is claimed before this message opens the
+                # next generation, or as soon as the DONE reply's run is over (DS-H2).
+                current['closed_by'] = position
+                if claim_done(number, current):
+                    current['done_pending'] = True
             state.put_generation(thread, number, current)
         number = 1 if current is None else number + 1
         current = {'host': host, 'thread_id': thread_id, 'origin': origin, 'position': position, 'at': at,
@@ -578,22 +717,17 @@ def allocate(state, host, thread_id, meta, items, history, marked, now, done=())
         return [], False, False
     if absorbed:
         current['position'] = max([-1] + [item['position'] for item in visible])
-    # DONE is the generation's own DONE reply, claimed once its turn has ended and TURN_GRACE has passed: a reply
-    # after the origin whose first line leads with DONE, later than any other terminal event of the generation.
-    # Settling neither sends DONE nor is needed for it. Keying DONE on the settle held the notice for every thread
-    # that failed to self-settle, and a bulk settle then announced unfinished threads (notice-delay-rca-20261023).
     # waiting: a due DONE inside TURN_GRACE. The thread's listing usually never changes again after its turn ends,
     # so the caller rereads it next tick instead of leaving the DONE to the next listing change.
-    done_at, waiting = current.get('done_at'), False
-    if type(done_at) is int and meta.get('status') not in ACTIVE:
-        ends = [e['position'] for e in state.events(thread) if e['generation'] == number and e['state'] in TERMINAL_STATES]
-        ends += [current['ended']] if type(current.get('ended')) is int else []
-        if done_at > max([current['position']] + ends):
-            waiting = turn_running(meta, {'run': None}, now)
-            if not waiting:
-                state.claim(event(host, thread_id, number, 'DONE', done_at, now, turn_run=meta.get('latestRunId'),
-                                  detail=mask(one_line(str(meta.get('title') or ''), 120))))
+    waiting = claim_done(number, current)
     state.put_generation(thread, number, current)
+    for earlier, record in state.generations(thread):
+        if earlier != number and record.get('done_pending'):
+            if claim_done(earlier, record):
+                waiting = True
+            else:
+                record.pop('done_pending')
+                state.put_generation(thread, earlier, record)
     return spans(state, thread), absorbed, waiting
 
 
@@ -767,17 +901,33 @@ def tick_host(client, host, state, emit, send, scope, now, max_notices=10, evide
                 record['sig'] = None  # read again next tick, whatever its listing
             for ask in found:
                 prior = state.get('asks', ask['ask_id'])
-                if prior is None:
+                # A record nothing has notified yet, read while its message streamed or before it was final, is
+                # decided again on the text read now: a streamed DECISION- line that completes as "Decision for
+                # you:" is an ask (SOL-3).
+                refresh = prior is not None and 'event' in prior and prior.get('state') in ('local', 'pending') and any(
+                    prior.get(key) != ask[key] for key in ('event', 'kind', 'excerpt', 'markers'))
+                if prior is None or refresh:
                     # Only a marker or terminal line in a known generation is an event.
                     ask['generation'] = generation_at(boundaries, ask['position'])
                     ask.update(state='local' if ask['event'] is None or ask['generation'] is None else 'pending', attempts=0,
                                title=record['title'], project_id=record['project_id'])
                     state.put('asks', ask['ask_id'], ask)
-                    if ask['state'] == 'local':
+                    if ask['state'] == 'local' and (prior is None or prior.get('state') != 'local'):
                         local.append(ask)
                 elif 'turn' not in prior:
                     prior['turn'] = ask['turn']  # a record the round-4 watchdog wrote; kept for its evidence
                     state.put('asks', ask['ask_id'], prior)
+            # A pending record whose completed text no longer asks anything stays a local record.
+            asking = {ask['ask_id'] for ask in found + overridden}
+            completed = {ask_identity(host, tid, item.get('messageId') or item.get('itemId')) for item in items
+                         if in_scope and item.get('type') == 'assistant_message' and item.get('status') == 'completed'
+                         and MESSAGE_ID_RE.fullmatch(str(item.get('messageId') or item.get('itemId') or ''))}
+            for ask_id in completed - asking:
+                prior = state.get('asks', ask_id)
+                if prior is not None and 'event' in prior and prior.get('state') == 'pending':
+                    prior.update(state='local', event=None)
+                    state.put('asks', ask_id, prior)
+                    local.append(prior)
             for line in [] if absorbed else urgent:
                 generation = generation_at(boundaries, line['position'])
                 if generation is None:
@@ -819,7 +969,7 @@ def tick_host(client, host, state, emit, send, scope, now, max_notices=10, evide
     # A later reply in any thread read this tick has already marked its asks overridden.
     pending = sorted((value for _, value in state.rows('asks', 'ask-') if value.get('host') == host and value.get('state') in ('pending', 'attempting')),
                      key=lambda a: a['at'])
-    # One decision per event: a BLOCKED event belongs to one ask (its marker lines), a FAILED or CANCELED event to
+    # One decision per event: a BLOCKED event belongs to one ask (ask_key), a FAILED or CANCELED event to
     # the generation. An event already claimed binds every later ask of it, and once one ask of an unclaimed event
     # has been looked at this tick, the event's other asks wait for a later tick.
     looked = set()
@@ -862,6 +1012,8 @@ def tick_host(client, host, state, emit, send, scope, now, max_notices=10, evide
             carried = send.thread_notice(ask) if hasattr(send, 'thread_notice') else None
             if carried == 'pending':
                 continue  # the hook still holds the thread's notice, queued or in flight; a later tick looks again
+            if carried == 'delivered' and slot and not notice_covers(state, send, ask):
+                carried = None  # the turn's notice carried another of its asks: this one sends its own (SOL-2)
             value = event(host, tid, ask['generation'], ask['event'], ask['position'], ask['at'],
                           status='thread-notice' if carried == 'delivered' else 'pending', detail=notice_line(ask), ask=slot,
                           source=ask['ask_id'], message_id=ask['message_id'], excerpt=ask['excerpt'],

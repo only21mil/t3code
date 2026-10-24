@@ -853,6 +853,39 @@ class ThreadNoticeTests(Harness):
                          [('t1', 'bound', 'event-')] * 2 + [('t2', 'bound', 'event-')] * 2)
         self.assertEqual(events, {'t1': 'sent', 't2': 'thread-notice'})
 
+    def payload(self, tid, kind, message):
+        """The hook's frozen payload of the thread's own notice (milestones/<key>.json), as _emit_milestone writes it."""
+        self.notice(tid, kind, 'json').write_text(json.dumps({'milestone_message': message, 'event': 'milestone'}))
+
+    def test_SOL2_a_delivered_turn_notice_covers_only_the_asks_it_carried(self):
+        # Two distinct asks in one run. The thread's delivered notice carried one of them, so the other still gets its
+        # fallback BLOCKED; with no readable message, neither is shown carried and both send.
+        self.transport()
+        first, second = 'NEEDS-VICTOR pick route A or B for T01 /x/RESULT.md', 'NEEDS-VICTOR rotate the hub key /y/RESULT.md'
+        rows = build(('user_message', 'brief', T0), ('assistant_message', first, T0 + 1), ('assistant_message', second, T0 + 2))
+        client = FakeT3(PROJECTS, {tid: thread(tid, [dict(i) for i in rows]) for tid in ('t1', 't2', 't3')})
+        for tid in ('t1', 't2', 't3'):
+            self.proof(tid, 'blocker', self.UUID)
+        self.payload('t1', 'blocker', 'mcp:t1 NEEDS-VICTOR pick route A or B for T01')
+        self.payload('t2', 'blocker', 'mcp:t2 rotate the hub key')
+        for _ in range(3):
+            self.tick(client)
+        self.assertEqual(self.hooked(), ['t1', 't2', 't3', 't3'])
+        state = asks.AskState(self.directory)
+        try:
+            statuses = {tid: [(e['position'], e['status']) for e in state.events('fd:' + tid) if e['state'] == 'BLOCKED']
+                        for tid in ('t1', 't2', 't3')}
+        finally:
+            state.close()
+        self.assertEqual(statuses, {'t1': [(1, 'thread-notice'), (2, 'sent')], 't2': [(1, 'sent'), (2, 'thread-notice')],
+                                    't3': [(1, 'sent'), (2, 'sent')]})
+        # The message test itself: decision IDs, or the words of a marker line, either way round.
+        ask = {'thread_id': 'mcp:t9', 'markers': ['NEEDS-VICTOR DECISION-PUSH-2 approve the T05 push /x']}
+        self.assertTrue(asks.notice_carries('mcp:t9 BLOCKED DECISION-PUSH-2', ask))
+        self.assertTrue(asks.notice_carries('mcp:t9 NEEDS-VICTOR approve the T05 push', ask))
+        self.assertFalse(asks.notice_carries('mcp:t9 NEEDS-VICTOR rotate the key', ask))
+        self.assertFalse(asks.notice_carries(None, ask))
+
 
 class UpgradeTests(Harness):
     """Ask state the round-4 watchdog wrote (tests/preimage/sats_stall_asks.py, live 570acb59) has no turn or event.
@@ -1096,6 +1129,21 @@ class MarkersAnywhereTests(Harness):
                 verdict = asks.classify(text, final=True)
                 self.assertTrue(verdict is None or verdict[3] is None, verdict)
 
+    def test_DSM2_decision_reports_stay_local_and_decision_asks_send(self):
+        # A decision line sends only when it is for Victor or asks for his decision; a report of one stays local.
+        for text in ('**Decision from Victor:** GO on P05.', 'Decisions from Victor: A, then B.', 'Decision from you: approved at 21:40.',
+                     '**Decisions from Victor** are in DECISIONS-CURRENT.md.', 'That needs no decision from Victor; it is one blocker.'):
+            with self.subTest(text=text):
+                verdict = asks.classify(text, final=True)
+                self.assertTrue(verdict is None or verdict[3] is None, verdict)
+        for text in ('**Decision for you:** may P03 have a 4th review round?', '- **Two decisions for you:**',
+                     '**C14 needs a decision from you.** The repair found no maintained hub client.',
+                     'This needs a decision from **Victor**: which key?', '**Decisions for Victor:** pick A or B.',
+                     'A decision from Victor is needed before the push.'):
+            with self.subTest(text=text):
+                self.assertEqual(asks.classify(text, final=True)[3], 'BLOCKED')
+                self.assertEqual(asks.classify(text, final=False)[3], 'BLOCKED')
+
     def test_7237c08a_inline_blocked_is_an_ask_and_its_settle_sends_no_done(self):
         tid, t = evidence_thread('7237c08a')
         client = FakeT3(PROJECTS, {tid: t})
@@ -1313,6 +1361,76 @@ class EventsMigrationTests(Harness):
             self.assertEqual(sorted(e['state'] for e in state.events('fd:t1')), ['BLOCKED', 'START'])
         finally:
             state.close()
+
+    def downgrade(self):
+        connection = sqlite3.connect(str(self.directory / 'asks.sqlite3'), isolation_level=None)
+        try:
+            connection.execute('BEGIN IMMEDIATE')
+            asks.downgrade_events(connection, T0)
+            connection.execute('COMMIT')
+        finally:
+            connection.close()
+
+    def per_ask_only(self):
+        """A generation opened after the install: its two asks are per-ask BLOCKED rows only, both sent."""
+        first, second = 'NEEDS-VICTOR t1 O19 exact text OK /x', 'NEEDS-VICTOR t1 T01 pick route /y'
+        t1 = thread('t1', build(('user_message', 'brief', T0), ('assistant_message', first, T0 + 1), ('assistant_message', second, T0 + 2)))
+        client = FakeT3(PROJECTS, {'t1': t1})
+        self.assertEqual(self.tick(client)[0], 3)
+        return t1, client, first
+
+    def rewake(self, t1, position, text, at, run=None, kind='assistant_message'):
+        t1['items'].append(dict(build((kind, text, at))[0], position=position, messageId='message:%d' % position,
+                                itemId='item:%d' % position, runId=run or 'run:thread:t1:ordinal:%d' % position))
+        t1['meta'].update(updatedAt=iso(at))
+
+    def test_DSM3_a_per_ask_only_generation_downgrades_to_the_legacy_key(self):
+        t1, client, first = self.per_ask_only()
+        self.downgrade()
+        connection = sqlite3.connect(str(self.directory / 'asks.sqlite3'))
+        try:
+            kept = [(i, json.loads(d)) for i, d in connection.execute("SELECT id, data FROM events WHERE state='BLOCKED'")]
+            parked = connection.execute('SELECT count(*) FROM events_parked').fetchone()[0]
+        finally:
+            connection.close()
+        legacy = asks.event_key('fd', 't1', 1, 'BLOCKED')
+        self.assertEqual(([i for i, _ in kept], [d['event_id'] for _, d in kept], parked), ([legacy], [legacy], 1))
+        self.assertNotIn('ask', kept[0][1])
+        self.assertEqual(kept[0][1]['per_ask_event_id'], asks.event_key('fd', 't1', 1, 'BLOCKED', asks.ask_key({'markers': [first]})))
+        old, sent = preimage_live(), len(self.sent)
+        state = old.AskState(self.directory)
+        try:
+            with state.transaction():
+                self.assertFalse(state.claim(old.event('fd', 't1', 1, 'BLOCKED', 9, T0)))  # already sent: nothing more
+            # A re-wake repeats the first ask and adds a third: the old one-per-generation rule binds both to the kept
+            # row, so neither sends; Victor's answer opens generation 2, whose new ask sends once.
+            self.rewake(t1, 3, 'Still waiting.\n' + first, T0 + 300)
+            self.rewake(t1, 4, 'NEEDS-VICTOR t1 also rotate the key /z', T0 + 301)
+            old.tick_host(client, 'fd', state, lambda action, **f: None, self.send, scope=SCOPE, now=T0 + 7200, evidence_dir=self.directory / 'asks')
+            self.assertEqual(len(self.sent), sent)
+            bound = [a for _, a in state.rows('asks', 'ask-') if a['state'] == 'bound' and a['position'] >= 3]
+            self.assertEqual(len(bound), 2)
+            self.assertTrue(all(state.event(a['event_id']) is not None for a in bound))  # bound to the kept row, not a missing id
+            self.rewake(t1, 5, 'Victor: use the old key', T0 + 400, kind='user_message')
+            self.rewake(t1, 6, 'NEEDS-VICTOR t1 confirm the old key is still valid /k', T0 + 401, run='run:thread:t1:ordinal:5')
+            old.tick_host(client, 'fd', state, lambda action, **f: None, self.send, scope=SCOPE, now=T0 + 9000, evidence_dir=self.directory / 'asks')
+            old.tick_host(client, 'fd', state, lambda action, **f: None, self.send, scope=SCOPE, now=T0 + 9600, evidence_dir=self.directory / 'asks')
+        finally:
+            state.close()
+        self.assertEqual([(p['occurrence'], p['kind']) for p in self.sent[sent:]], [('generation-2-START', 'start'), ('generation-2-BLOCKED', 'blocker')])
+
+    def test_DSM3_the_old_module_on_the_per_ask_schema_can_send_a_second_blocked(self):
+        # Why rollback.sh runs the down-migration before it restores the old module: on the per-ask schema the old
+        # module's legacy BLOCKED key is free beside the per-ask rows, so a repeated ask sends a second BLOCKED.
+        t1, client, first = self.per_ask_only()
+        old, sent = preimage_live(), len(self.sent)
+        state = old.AskState(self.directory)
+        try:
+            self.rewake(t1, 3, 'Still waiting.\n' + first, T0 + 300)
+            old.tick_host(client, 'fd', state, lambda action, **f: None, self.send, scope=SCOPE, now=T0 + 7200, evidence_dir=self.directory / 'asks')
+        finally:
+            state.close()
+        self.assertEqual([p['occurrence'] for p in self.sent[sent:]], ['generation-1-BLOCKED'])
 
     def test_a_failed_upgrade_changes_nothing(self):
         self.v1_state()
