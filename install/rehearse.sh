@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Rehearse install.sh and rollback.sh end to end in sandbox HOMEs, never on live paths.
 #   rehearse.sh <empty sandbox dir inside the lane> <asks.sqlite3 copy> <requeue copy dir>
-# Each case gets its own HOME with the base files (from the candidate's base tag), a copy of asks.sqlite3 and of the
+# Each case gets its own HOME with the base files (from the candidate's base tag; the asks module is the live base
+# cb8a6cc0, tests/preimage/live-20261023-needs-victor, with its 406e3fd9 .bak-needs-victor backup beside it as on F-D),
+# a copy of asks.sqlite3 and of the
 # requeue entries. A systemctl shim records calls and answers as live systemd 259 does for the monotonic watchdog
 # timer: empty NextElapseUSecRealtime, a NextElapseUSecMonotonic timespan, list-timers JSON with the next epoch
 # (DS-M4). A thread-reader fixture answers the replay recheck (SOL-7); nothing reads the network. sleep is a no-op.
@@ -19,7 +21,8 @@ SCRIPTS="${REHEARSE_SCRIPTS:-$CAND/install}"
 case "$(realpath -m "$SB")/" in "$LANE"/*) ;; *) echo "sandbox must be inside $LANE" >&2; exit 2 ;; esac
 [ ! -e "$SB" ] || [ -z "$(ls -A "$SB")" ] || { echo "sandbox must be empty" >&2; exit 2; }
 mkdir -p "$SB/shim"
-BASE_ASKS=406e3fd97579e823f67d27f4e02f4b81cab11a720f39df8ff5bb7e2af16a0a22
+BASE_ASKS=cb8a6cc0f676ab0062b31ecbde7a59c2137e3bb9cb197b9fd066dd603925ad94
+FIRST_ASKS=406e3fd97579e823f67d27f4e02f4b81cab11a720f39df8ff5bb7e2af16a0a22  # the needs-victor fix's own backup
 BASE_WATCHDOG=6ea2e6fb3fe1134b0a5f3b99962c2837842b20fda06ce9632e74e206dfa1a06d
 BASE_NOTIFY=ad1f0106f6f8d0fad97067d7fa2807bd41c9991af5c9fc12adae91b45fc1ae62
 BASE_MCP=d1bb0937f00685989da4debf547fa2bcc5675226d695f78a471ba08c4eb7e4e7
@@ -29,6 +32,7 @@ cat > "$SB/shim/systemctl" <<'SHIM'
 #!/usr/bin/env bash
 echo "systemctl $*" >> "$SHIM_LOG"
 case "$*" in
+  *"show -p LoadState --value sats-stall-watchdog."*) echo loaded ;;
   *"show -p ActiveState --value sats-stall-watchdog.service") echo inactive ;;
   *"show -p ActiveState --value sats-stall-watchdog.timer") echo active ;;
   *"show -p NextElapseUSecRealtime --value sats-stall-watchdog.timer")  # empty: systemd 259, monotonic timer
@@ -76,13 +80,18 @@ home() {  # a fresh sandbox HOME for case $1: base files, the asks.sqlite3 copy,
   CASE="$1" C="$SB/$1" H="$SB/$1/home"
   mkdir -p "$C" "$H/.local/lib/sats-stall-watchdog" "$H/.local/bin" "$H/work/t3-mcp-connect-2026-10-07/scripts" \
            "$H/.config/systemd/user" "$H/.local/state/sats-stall-watchdog" "$H/.local/state/sats-completion/requeue"
-  for m in sats_stall_asks.py sats_stall_collector.py sats_stall_mcp.py sats_stall_watchdog.py; do
+  for m in sats_stall_collector.py sats_stall_mcp.py sats_stall_watchdog.py; do
     git -C "$CAND" show "base:tools/sats-stall-watchdog/src/$m" > "$H/.local/lib/sats-stall-watchdog/$m"
   done
+  git -C "$CAND" show HEAD:tools/sats-stall-watchdog/tests/preimage/live-20261023-needs-victor/sats_stall_asks.py \
+    > "$H/.local/lib/sats-stall-watchdog/sats_stall_asks.py"
+  git -C "$CAND" show base:tools/sats-stall-watchdog/src/sats_stall_asks.py \
+    > "$H/.local/lib/sats-stall-watchdog/sats_stall_asks.py.bak-needs-victor-20261023T225552"
   git -C "$CAND" show base:notify/sats-completion-notify > "$H/.local/bin/sats-completion-notify"
   git -C "$CAND" show base:mcp/mcp_call.py > "$H/work/t3-mcp-connect-2026-10-07/scripts/mcp_call.py"
   chmod 755 "$H/.local/bin/sats-completion-notify"
-  chmod 644 "$H/.local/lib/sats-stall-watchdog/"*.py "$H/work/t3-mcp-connect-2026-10-07/scripts/mcp_call.py"
+  chmod 644 "$H/.local/lib/sats-stall-watchdog/"*.py "$H/.local/lib/sats-stall-watchdog/"*.bak-needs-victor-* \
+    "$H/work/t3-mcp-connect-2026-10-07/scripts/mcp_call.py"
   cp "$DBCOPY" "$H/.local/state/sats-stall-watchdog/asks.sqlite3"
   cp -p "$RQCOPY"/*.json "$H/.local/state/sats-completion/requeue/"
   export SHIM_LOG="$C/systemctl.log" HOME="$H" NOTICE_PACKAGE_RECORD_ROOT="$C"
@@ -92,9 +101,10 @@ home() {  # a fresh sandbox HOME for case $1: base files, the asks.sqlite3 copy,
   : > "$SHIM_LOG"
 }
 events() { sqlite3 -readonly "$DB" "SELECT sql FROM sqlite_master WHERE name='events'"; sqlite3 -readonly "$DB" "SELECT count(*) FROM events"; }
-bases() {
+bases() {  # every base back, asks at the live base cb8a6cc0 (never 406e3fd9), and its needs-victor backup untouched
   [ "$(sha "$ASKS")" = $BASE_ASKS ] && [ "$(sha "$WATCHDOG")" = $BASE_WATCHDOG ] && [ "$(sha "$NOTIFY")" = $BASE_NOTIFY ] \
-    && [ "$(sha "$MCP")" = $BASE_MCP ] && [ "$(stat -c %a "$NOTIFY")" = 755 ]
+    && [ "$(sha "$MCP")" = $BASE_MCP ] && [ "$(stat -c %a "$NOTIFY")" = 755 ] \
+    && [ "$(sha "$ASKS.bak-needs-victor-20261023T225552")" = $FIRST_ASKS ]
 }
 candidates() {
   [ "$(sha "$ASKS")" = "$(sha "$CAND/tools/sats-stall-watchdog/src/sats_stall_asks.py")" ] \
@@ -147,5 +157,11 @@ check "the original asks backup is kept and recorded (SOL-8)" '[ "$(sha "$EARLY"
 run "$C/rollback.txt" bash "$SCRIPTS/rollback.sh" "$R"
 check "rollback of the resumed install restores every base, asks included (SOL-8)" 'ok "$C/rollback.txt" && bases'
 check "rollback of the resumed install restores the events schema" '[ "$before" = "$(events)" ]'
+
+# ---- first-pin: the live asks file went back to 406e3fd9 (the needs-victor fix rolled back) ---------------------
+home first-pin
+cp -p "$ASKS.bak-needs-victor-20261023T225552" "$ASKS"
+run "$C/install.txt" bash "$SCRIPTS/install.sh" --head HEAD
+check "a live 406e3fd9 stops the install before any change (LIVE-1)" '! ok "$C/install.txt" && grep -q "asks live hash $FIRST_ASKS is neither the base nor the candidate" "$C/install.txt" && [ -z "$(record)" ] && [ -z "$(ls "$ASKS".bak-notice-package-* 2>/dev/null)" ] && [ "$(sha "$ASKS")" = $FIRST_ASKS ]'
 
 exit "$FAILED"

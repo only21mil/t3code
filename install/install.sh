@@ -22,7 +22,10 @@ UNITDIR="$HOME/.config/systemd/user"
 DB="$HOME/.local/state/sats-stall-watchdog/asks.sqlite3"
 STATE="$HOME/.local/state/sats-completion"
 RQ="$STATE/requeue"
-BASE_ASKS=406e3fd97579e823f67d27f4e02f4b81cab11a720f39df8ff5bb7e2af16a0a22
+# The live asks base is cb8a6cc0, the needs-victor fix installed 2026-10-23 22:55:52 CDT (canon source 4a02910). Its
+# own backup beside it, .bak-needs-victor-20261023T225552, is 406e3fd9, this package's first pin and the candidate's
+# base tag. The install backs up and rollback restores cb8a6cc0; a live 406e3fd9 or any other hash stops here.
+BASE_ASKS=cb8a6cc0f676ab0062b31ecbde7a59c2137e3bb9cb197b9fd066dd603925ad94
 BASE_WATCHDOG=6ea2e6fb3fe1134b0a5f3b99962c2837842b20fda06ce9632e74e206dfa1a06d
 BASE_NOTIFY=ad1f0106f6f8d0fad97067d7fa2807bd41c9991af5c9fc12adae91b45fc1ae62
 BASE_MCP=d1bb0937f00685989da4debf547fa2bcc5675226d695f78a471ba08c4eb7e4e7
