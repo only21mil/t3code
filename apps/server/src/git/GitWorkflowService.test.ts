@@ -1,9 +1,12 @@
 import { assert, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as FileSystem from "effect/FileSystem";
+import type { GitRunStackedActionResult } from "@t3tools/contracts";
 
 import * as ServerConfig from "../config.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
@@ -54,5 +57,65 @@ it.layer(NodeServices.layer)("GitWorkflowService", (it) => {
         ),
       ),
     ),
+  );
+
+  it.effect("holds an ordinary commit until a branch switch in the same checkout finishes", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-stacked-lease-" });
+      const switchEntered = Deferred.makeUnsafe<void>();
+      const releaseSwitch = Deferred.makeUnsafe<void>();
+      const steps: string[] = [];
+      yield* Effect.gen(function* () {
+        const workflow = yield* GitWorkflowService.GitWorkflowService;
+        const switching = yield* workflow
+          .switchRef({ cwd, refName: "feature/b" })
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.await(switchEntered);
+        const commit = yield* workflow
+          .runStackedAction({ actionId: "action-1", cwd, action: "commit" })
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.succeed(releaseSwitch, undefined);
+        yield* Fiber.join(switching);
+        yield* Fiber.join(commit);
+        assert.deepEqual(steps, ["switch", "commit"]);
+      }).pipe(
+        Effect.provide(
+          GitWorkflowService.layer.pipe(
+            Layer.provide(
+              Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({
+                resolve: () =>
+                  Effect.succeed({
+                    kind: "git",
+                    repository: { rootPath: cwd },
+                  } as VcsDriverRegistry.VcsDriverHandle),
+              }),
+            ),
+            Layer.provide(
+              Layer.mock(GitManager.GitManager)({
+                runStackedAction: () =>
+                  Effect.sync(() => {
+                    steps.push("commit");
+                    return {} as GitRunStackedActionResult;
+                  }),
+              }),
+            ),
+            Layer.provide(
+              Layer.mock(GitVcsDriver.GitVcsDriver)({
+                switchRef: () =>
+                  Deferred.succeed(switchEntered, undefined).pipe(
+                    Effect.andThen(Deferred.await(releaseSwitch)),
+                    Effect.map(() => {
+                      steps.push("switch");
+                      return { refName: "feature/b" };
+                    }),
+                  ),
+              }),
+            ),
+            Layer.provide(NodeServices.layer),
+          ),
+        ),
+      );
+    }).pipe(Effect.scoped),
   );
 });
