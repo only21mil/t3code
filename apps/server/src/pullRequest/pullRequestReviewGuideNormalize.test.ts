@@ -29,6 +29,17 @@ const patch = [
   "",
 ].join("\n");
 const change = parseReviewGuideChange("src/a.ts\0src/gone.ts\0docs/readme.md\0", patch);
+const long = parseReviewGuideChange(
+  "src/long.ts\0",
+  [
+    "diff --git a/src/long.ts b/src/long.ts",
+    "--- a/src/long.ts",
+    "+++ b/src/long.ts",
+    "@@ -0,0 +1,60 @@",
+    "+added",
+    "",
+  ].join("\n"),
+);
 
 const stop = (overrides: Partial<PullRequestReviewGuideStop>): PullRequestReviewGuideStop => ({
   title: "Stop",
@@ -142,17 +153,6 @@ describe("normalizeReviewGuide", () => {
   });
 
   it("keeps the lines and notes of bridged excerpts beyond the length cap", () => {
-    const long = parseReviewGuideChange(
-      "src/long.ts\0",
-      [
-        "diff --git a/src/long.ts b/src/long.ts",
-        "--- a/src/long.ts",
-        "+++ b/src/long.ts",
-        "@@ -0,0 +1,60 @@",
-        "+added",
-        "",
-      ].join("\n"),
-    );
     const result = normalizeReviewGuide(
       guide({
         stops: [
@@ -173,6 +173,22 @@ describe("normalizeReviewGuide", () => {
       excerpt("src/long.ts", 26, 45),
     ]);
     expect(result.stops[0]?.notes.map((note) => note.title)).toEqual(["Tail"]);
+  });
+
+  it("caps a long excerpt before merging so a touching excerpt keeps its own lines", () => {
+    const result = normalizeReviewGuide(
+      guide({
+        stops: [
+          stop({ excerpts: [excerpt("src/long.ts", 1, 40)] }),
+          stop({ excerpts: [excerpt("src/long.ts", 1, 40), excerpt("src/long.ts", 35, 50)] }),
+        ],
+      }),
+      long,
+    );
+    expect(result.stops.map((stop) => stop.excerpts)).toEqual([
+      [excerpt("src/long.ts", 1, 25)],
+      [excerpt("src/long.ts", 1, 25), excerpt("src/long.ts", 35, 50)],
+    ]);
   });
 
   it("drops notes outside the stop's remaining excerpts", () => {
