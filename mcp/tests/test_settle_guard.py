@@ -168,6 +168,27 @@ class SettleGuardTests(unittest.TestCase):
                 self.assertIn('ended without an ACCEPT', guard(self.model(self.done(), children=children), 'fd', 'p') or '')
 
     @unittest.skipIf(guard is None, 'no guard in this mcp_call.py')
+    def test_R35_a_producer_role_anywhere_is_no_seat_and_this_lanes_titles_read_as_named(self):
+        # Review round 3 (DeepSeek R3-5, Sol's title hold): a producer word after the review words made a repair child
+        # a required reviewer, and a "<model> - re-review of <task>" seat was missed. The lane's exact T3 titles
+        # (notice-package-20261023, read back from t3_thread_list): both reviewer seats in every round count, and the
+        # repair seat in every round does not.
+        accepted = [('completed', 'ACCEPT', 'opus'), ('completed', 'ACCEPT', 'deepseek')]
+        producers = ['Notice package review round 2 repair by Sol', 'Round-2 review findings, repair by Opus'] + [
+            'Opus 5.5 XHigh repair · repair_notice_package_20261023_r%d' % n for n in (1, 2, 3)]
+        for title in producers:
+            with self.subTest(producer=title):
+                children = [('completed', 'DONE. Findings repaired.', 'sol', title)] + accepted
+                self.assertIsNone(guard(self.model(self.done(), children=children), 'fd', 'p'))
+        seats = ['DeepSeek V4.1 Flash high - re-review of notice package', 'DeepSeek V4.1 Flash high - re-review of the repair',
+                 'Sol 6.1 High - review of repair round 2', 'Sol 6.1 High review · review_hub_fix_r2'] + [
+            '%s High review · review_notice_package_20261023_r%d' % (seat, n) for seat in ('Sol 6.1', 'DeepSeek') for n in (1, 2, 3)]
+        for title in seats:
+            with self.subTest(reviewer=title):
+                children = accepted + [('completed', 'BLOCKED: the provider rejected the review', 'sol', title)]
+                self.assertIn('ended without an ACCEPT', guard(self.model(self.done(), children=children), 'fd', 'p') or '')
+
+    @unittest.skipIf(guard is None, 'no guard in this mcp_call.py')
     def test_SOL5_missing_watchdog_detection_refuses(self):
         rpc = self.model(self.done(), children=[('completed', 'ACCEPT', 'opus')])
         with patch.object(mcp_call, 'WATCHDOG_LIB', str(self.directory / 'absent')), \

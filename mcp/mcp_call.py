@@ -95,20 +95,36 @@ VERDICT = re.compile(r"(ACCEPT|REQUEST_CHANGES)\b")
 RESULT_PATH = re.compile(r"(/(?:home|Users)/[A-Za-z0-9._/-]+/RESULT\.md)")
 STILL_OPEN = re.compile(r"NEEDS-VICTOR|^[ \t>*_-]*(?:BLOCKED|FAILED|CANCEL+ED)\b", re.M)
 # A reviewer child: one that voted, or whose title or thread id names a review seat in the fleet's forms: a
-# review_<task> name ("Sol 6.1 Max · review_openrouter_hub_audit"), a leading review ("review-r1-opus"),
+# review_<task> name ("Sol 6.1 High review · review_notice_package_20261023_r3"), a leading review ("review-r1-opus"),
 # "<seat> review · <task>", a numbered review or re-review ("Kimi K3.1 review round 1 DeepSeek", "re-review 2 Opus"),
-# or a re-review named for its seat ("focused re-review DeepSeek"). A title that only mentions a review ("Round-1
-# repair of review findings"), or names a producer before it ("Repair review round 2 findings"), is no seat (NEW-2).
+# a re-review named for its seat ("focused re-review DeepSeek"), or a review right after the model's separator
+# ("DeepSeek V4.1 Flash high - re-review of notice package"). A title that names a producer anywhere in a producer
+# role is no seat (NEW-2, R3-5): a producer word that opens the title, prefixes a task name ("repair_<task>") or is
+# followed by of, for, by, round, a number or a separator ("Round-1 repair of review findings", "Notice package review
+# round 2 repair by Sol", "Opus 5.5 XHigh repair · repair_<task>_r3"). A producer word inside a task name
+# ("review_hub_fix_r2") or after of or the ("re-review of the repair") names the work under review, not the seat's.
 REVIEWER = re.compile(r"(?:^|[\s·:|/-])(?:re-?)?review_|^\s*(?:re-?)?review\b|\b(?:re-?)?review\s+·"
                       r"|\b(?:re-?)?review\s+(?:round\s*|r)?\d"
-                      r"|\bre-?review\s+(?:opus|deepseek|sol|gpt|claude|kimi|grok|gemini|qwen|glm|sonnet|haiku|fable|codex)\b", re.I)
-PRODUCER = re.compile(r"(?:^|[\s·:|/_-])(?:repair|produce|producer|fix|implement|build|write|draft)(?:_|\b)", re.I)
+                      r"|\bre-?review\s+(?:opus|deepseek|sol|gpt|claude|kimi|grok|gemini|qwen|glm|sonnet|haiku|fable|codex)\b"
+                      r"|\s[-–—|·:]\s+(?:focused\s+)?(?:re-?)?review\b", re.I)
+PRODUCER = re.compile(r"(?:^|(?<=[\s·:|/(\[]))(?:repair|producer|produce|fix|implement|build|write|draft)(?=_|\b)", re.I)
+PRODUCER_ROLE = re.compile(r"_|\s*(?:of|for|by|round|r?\d|[·:|]|[-–—]\s|$)", re.I)
+
+
+def producer_role(name: str) -> bool:
+    """True when a producer word in the title is the seat's own work (PRODUCER, PRODUCER_ROLE), not the work under review."""
+    for found in PRODUCER.finditer(name):
+        before = name[:found.start()].split()
+        if before and before[-1].lower() in ("of", "the", "for", "on", "to", "a", "an"):
+            continue
+        if not before or PRODUCER_ROLE.match(name, found.end()):
+            return True
+    return False
 
 
 def reviewer_seat(name: str) -> bool:
-    """True when a child's title or thread id names a review seat (REVIEWER) with no producer named before it."""
-    found = REVIEWER.search(name)
-    return found is not None and not PRODUCER.search(name[:found.start()])
+    """True when a child's title or thread id names a review seat (REVIEWER) and no producer role (producer_role)."""
+    return REVIEWER.search(name) is not None and not producer_role(name)
 # The F-D stall watchdog's install: its classify() is the ask detection a settle must agree with.
 WATCHDOG_LIB = "/home/victor/.local/lib/sats-stall-watchdog"
 TEXT_LIMIT = 20000
