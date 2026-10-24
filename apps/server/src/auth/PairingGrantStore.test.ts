@@ -65,7 +65,11 @@ it.layer(NodeServices.layer)("PairingGrantStore.layer", (it) => {
   it.effect("accepts a one-time token typed in lowercase", () =>
     Effect.gen(function* () {
       const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
-      const issued = yield* bootstrapCredentials.issueOneTimeToken();
+      let issued = yield* bootstrapCredentials.issueOneTimeToken();
+      // An all-digit code has no lowercase form and would pass without the fold.
+      while (!/[A-Z]/.test(issued.credential)) {
+        issued = yield* bootstrapCredentials.issueOneTimeToken();
+      }
       const first = yield* bootstrapCredentials.consume(issued.credential.toLowerCase());
       const second = yield* Effect.flip(bootstrapCredentials.consume(issued.credential));
 
