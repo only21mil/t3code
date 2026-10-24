@@ -17,7 +17,7 @@ import {
   type ScrollViewProps,
 } from "react-native";
 import { ScrollViewMarker } from "react-native-screens";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useScrollSafeAreaInsets } from "../../native/useScrollSafeAreaInsets";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { EmptyState } from "../../components/ui/EmptyState";
@@ -46,7 +46,7 @@ import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 import { useAndroidWorkspaceSelection } from "../workspace/useAndroidWorkspaceSelection";
 
 function PullRequestScrollView(props: ScrollViewProps) {
-  const insets = useSafeAreaInsets();
+  const insets = useScrollSafeAreaInsets();
   const restingOffset = useRestingTopOffset(insets.top, props);
   return (
     <ScrollViewMarker style={{ flex: 1 }}>
@@ -94,7 +94,7 @@ export function PullRequestsScreen(
   const workspace = useWorkspaceTabs()!;
   const { environments } = useWorkspaceState();
   const configs = useAtomValue(environmentServerConfigsAtom);
-  const insets = useSafeAreaInsets();
+  const insets = useScrollSafeAreaInsets();
   const [initialOffset] = useState(() => workspace.getScrollOffset("pullRequests"));
   const listRef = useRef<LegendListRef>(null);
   const tab = workspace.state.tabs.pullRequests;

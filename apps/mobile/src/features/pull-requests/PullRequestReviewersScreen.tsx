@@ -15,7 +15,7 @@ import {
   View,
   type ScrollViewProps,
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useScrollSafeAreaInsets } from "../../native/useScrollSafeAreaInsets";
 import { ScrollViewMarker } from "react-native-screens";
 import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/AppText";
 import { EmptyState } from "../../components/ui/EmptyState";
@@ -35,7 +35,7 @@ import { PullRequestAvatar } from "./PullRequestPresentation";
 import { pullRequestTarget, type PullRequestParams } from "./usePullRequestDiff";
 
 function ReviewerScrollView(props: ScrollViewProps) {
-  const insets = useSafeAreaInsets();
+  const insets = useScrollSafeAreaInsets();
   const restingOffset = useRestingTopOffset(insets.top, props);
   return (
     <ScrollViewMarker style={{ flex: 1 }}>
@@ -52,7 +52,7 @@ function ReviewerScrollView(props: ScrollViewProps) {
 
 export function PullRequestReviewersScreen({ route }: StaticScreenProps<PullRequestParams>) {
   const navigation = useNavigation();
-  const insets = useSafeAreaInsets();
+  const insets = useScrollSafeAreaInsets();
   const listRef = useRef<FlatList<PullRequestReviewerCandidate>>(null);
   const nativeMetrics = useNativeLayoutMetrics();
   const integratedSearch =

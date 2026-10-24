@@ -31,7 +31,7 @@ import {
 import { ScrollViewMarker } from "react-native-screens";
 import { GestureDetector, useNativeGesture } from "react-native-gesture-handler";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useScrollSafeAreaInsets } from "../../native/useScrollSafeAreaInsets";
 
 import { cn } from "../../lib/cn";
 import {
@@ -218,7 +218,7 @@ function HomeTopContentSpacer() {
 }
 
 function HomeScrollView(props: ComponentProps<typeof ScrollView>) {
-  const insets = useSafeAreaInsets();
+  const insets = useScrollSafeAreaInsets();
   const primaryColumn = use(NativePrimaryColumnContext);
   const restingOffset = useRestingTopOffset(insets.top, props);
   if (Platform.OS !== "ios") return <ScrollView {...props} />;
@@ -271,7 +271,7 @@ export function HomeScreen(props: HomeScreenProps) {
   const queuedThreadKeys = useQueuedThreadKeys();
   const openSwipeableRef = useRef<SwipeableMethods | null>(null);
   const homeScrollGesture = useNativeGesture();
-  const insets = useSafeAreaInsets();
+  const insets = useScrollSafeAreaInsets();
   const { fabClearance } = useAndroidControlSizing();
   const screenMetrics = useNativeLayoutMetrics();
   const contentSideInsets = usesNativeWorkspaceColumns

@@ -57,7 +57,7 @@ import {
 } from "react-native";
 import { NativeScrollViewMarker as ScrollViewMarker } from "../../native/NativeScrollViewMarker";
 import { useRestingTopOffset } from "../../native/useRestingTopOffset";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useScrollSafeAreaInsets } from "../../native/useScrollSafeAreaInsets";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { AndroidScreenHeader } from "../../components/ui/AndroidScreenHeader";
@@ -117,7 +117,7 @@ import { usePullRequestEnvironmentFallback } from "./usePullRequestEnvironmentFa
 const EMPTY_IDS: readonly string[] = [];
 
 function PullRequestTabScrollView(props: ScrollViewProps) {
-  const insets = useSafeAreaInsets();
+  const insets = useScrollSafeAreaInsets();
   const restingOffset = useRestingTopOffset(insets.top, props);
   return (
     <ScrollViewMarker style={{ flex: 1 }}>
@@ -282,7 +282,7 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
   const returnToList = useAndroidWorkspaceBack("pullRequests");
   const { layout } = useAdaptiveWorkspaceLayout();
   const navigation = useNavigation();
-  const insets = useSafeAreaInsets();
+  const insets = useScrollSafeAreaInsets();
   const [toolbarHeight, setToolbarHeight] = usePullRequestToolbarHeight(insets.bottom);
   const params = route.params;
   usePullRequestEnvironmentFallback(params);
@@ -768,7 +768,7 @@ export function PullRequestFileRouteScreen({
 >) {
   const { layout } = useAdaptiveWorkspaceLayout();
   const navigation = useNavigation();
-  const insets = useSafeAreaInsets();
+  const insets = useScrollSafeAreaInsets();
   const [toolbarHeight, setToolbarHeight] = usePullRequestToolbarHeight(insets.bottom);
   const commit = route.params.commit;
   const result = usePullRequestDiff(route.params);
