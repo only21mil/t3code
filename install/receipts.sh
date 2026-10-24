@@ -16,9 +16,10 @@ block() {  # title, directory, command...: run, then print the command, exit cod
   (cd "$dir" && nice -n 10 "$@") > "$out" 2>&1
   code=$?
   printf '### %s\n\n`cd %s && %s` → exit %d\n\n```\n' "$title" "${dir#"$LANE"/}" "$*" "$code"
-  grep -E '^(FAIL|ERROR):' "$out" | sort | uniq -c | sed 's/^ *//'
-  grep -E '^(PASS|FAIL) [a-z]+: ' "$out"
-  tail -n 4 "$out"
+  if [ "$(wc -l < "$out")" -le 30 ]; then cat "$out"; else  # short outputs whole, long ones as failures and tail
+    grep -E '^(FAIL|ERROR):' "$out" | sort | uniq -c | sed 's/^ *//'
+    tail -n 4 "$out"
+  fi
   printf '```\n\n'
 }
 
