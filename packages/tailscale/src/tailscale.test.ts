@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as PlatformError from "effect/PlatformError";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/process";
@@ -218,6 +219,56 @@ describe("tailscale", () => {
       assert.equal(error.message, "tailscale status exited with code 7.");
       assert.equal(error.stderrDiagnostic, "not-logged-in");
       assertCarriesNoSecret(error, "tskey-auth-secret-token-value");
+    });
+  });
+
+  // regression: #15919 - the macOS app keeps its CLI inside the bundle, so a
+  // Dock-launched T3 Code found no `tailscale` on PATH.
+  it.effect("falls back to the macOS app's bundled CLI when tailscale is not on PATH", () => {
+    const spawned: Array<{ command: string; args: ReadonlyArray<string>; beCli?: string }> = [];
+    const layer = Layer.merge(
+      Layer.succeed(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make((command) => {
+          if (command._tag !== "StandardCommand") return Effect.die("unexpected piped command");
+          spawned.push({
+            command: command.command,
+            args: command.args,
+            ...(command.options.env?.TAILSCALE_BE_CLI !== undefined
+              ? { beCli: command.options.env.TAILSCALE_BE_CLI }
+              : {}),
+          });
+          if (command.command === "tailscale") {
+            return Effect.fail(
+              PlatformError.systemError({
+                _tag: "NotFound",
+                module: "ChildProcess",
+                method: "spawn",
+              }),
+            );
+          }
+          return Effect.succeed(mockHandle({ stdout: tailscaleStatusJson }));
+        }),
+      ),
+      Layer.succeed(HostProcess.Platform, "darwin"),
+    );
+
+    return Effect.gen(function* () {
+      const status = yield* readTailscaleStatus.pipe(Effect.provide(layer));
+      assert.equal(status.magicDnsName, "desktop.tail.ts.net");
+      yield* ensureTailscaleServe({ localPort: 13773 }).pipe(Effect.provide(layer));
+
+      const app = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
+      assert.deepEqual(spawned, [
+        { command: "tailscale", args: ["status", "--json"] },
+        { command: app, args: ["status", "--json"], beCli: "1" },
+        { command: "tailscale", args: ["serve", "--bg", "--https=443", "http://127.0.0.1:13773"] },
+        {
+          command: app,
+          args: ["serve", "--bg", "--https=443", "http://127.0.0.1:13773"],
+          beCli: "1",
+        },
+      ]);
     });
   });
 
