@@ -1,0 +1,11 @@
+[Unit]
+Description=Drain the sats-completion requeue every five minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+AccuracySec=1s
+Unit=sats-completion-requeue.service
+
+[Install]
+WantedBy=timers.target

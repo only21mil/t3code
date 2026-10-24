@@ -1,0 +1,16 @@
+[Unit]
+Description=Drain sats-completion requeue/: retry terminal notices the webhook has not accepted (script only, no model)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/sats-completion-notify requeue
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+UMask=0077
+KillSignal=SIGTERM
+TimeoutStartSec=1200
+TimeoutStopSec=10
+Nice=19
+IOSchedulingClass=idle
+NoNewPrivileges=yes

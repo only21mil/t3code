@@ -178,13 +178,14 @@ HTTP_ERROR_BODY_LIMIT = 8192
 QUOTA_ERROR_RE = re.compile(
     r"Automation run rate limit exceeded: global limit ([0-9]{1,10}) per minute, current_count=([0-9]{1,10})",
     re.ASCII)
-HTTP_ERROR_CODES = {
-    "automation_global_rate_limit": "automation_global_rate_limit",
-    "invalid_payload": "invalid_payload",
-    "bad_request": "bad_request",
-    "unauthorized": "unauthorized",
-    "forbidden": "forbidden",
-}
+# notice-package-20261023 item 7b: a non-2xx body's error code is kept and logged as sent, whatever it is, one
+# printable line of at most ERROR_CODE_LIMIT characters with key-shaped tokens masked. An allowlist of five codes
+# kept nothing for f13pro a9acdeb1's BLOCKED, which got HTTP 400 three times with an 87-byte JSON body.
+ERROR_CODE_LIMIT = 120
+ERROR_CODE_KEYS = ("code", "error_code", "type")  # "type" as in {"error": {"type": "invalid_request_error"}}
+ERROR_WRAPPERS = ("error", "errors", "detail", "message")
+TOKENISH_RE = re.compile(r"[A-Za-z0-9_+=/.-]{16,}")
+SECRET_PREFIX_RE = re.compile(r"^(?:sk-|ghp_|gho_|ghs_|github_pat_|glpat-|xox[abpr]-|AKIA|ASIA|crsr_|AIza|Bearer)")
 # t3-decision-delivery-fix 2026-10-18 (Victor 17:02 CT GO): a 2xx alone does not prove Sats
 # received a notice. The automation webhook answers an accepted POST with the run it started
 # for the recipient (runUuid); only that id, read from at most DELIVERY_BODY_LIMIT bytes of
@@ -946,36 +947,62 @@ def quota_count(value):
     return type(value) is int and 0 <= value <= 2147483647
 
 
-def error_fields(value, depth=0):
-    """Recognize exact messages/codes only along approved error wrappers.
+def scrubbed(value, limit=ERROR_CODE_LIMIT):
+    """One printable ASCII line of at most limit characters; a key-shaped token (a secret prefix, or 24+ characters
+    mixing letters and digits) becomes [masked]. None when nothing printable is left."""
+    text = " ".join("".join(c if " " <= c <= "~" else " " for c in str(value)).split())
 
-    No recursive search through request/headers/URLs or arbitrary nested keys.
-    Unknown strings, including messages with appended secrets, retain no text.
-    """
+    def one(match):
+        word = match.group(0)
+        if SECRET_PREFIX_RE.match(word) or (len(word) >= 24 and re.search(r"[A-Za-z]", word) and re.search(r"[0-9]", word)):
+            return "[masked]"
+        return word
+    text = TOKENISH_RE.sub(one, text)[:limit]
+    return text or None
+
+
+def error_fields(value, depth=0, wrapper=None):
+    """The error code a response body names, kept scrubbed and bounded whatever it is (item 7b): code, error_code
+    or a nested type of an error object, the first of an errors list, an error or detail given as a bare string,
+    or a short one-line text body. A message stays prose and only feeds the exact per-minute quota match.
+    No request, header or URL text is searched or kept."""
     if isinstance(value, str):
         match = QUOTA_ERROR_RE.fullmatch(value)
         if match:
             limit, count = map(int, match.groups())
             if quota_count(limit) and quota_count(count):
-                return {"classification": "automation_global_rate_limit",
+                return {"classification": "automation_global_rate_limit", "error_code": "automation_global_rate_limit",
                         "limit": limit, "current_count": count, "period_seconds": 60}
-    elif isinstance(value, dict) and depth < 4:
-        code = value.get("code")
-        classification = HTTP_ERROR_CODES.get(code) if isinstance(code, str) else None
-        if classification:
-            fields = {"classification": classification}
-            if classification == "automation_global_rate_limit":
-                for name in ("limit", "current_count"):
-                    count = value.get(name)
-                    if quota_count(count):
-                        fields[name] = count
-                # Only explicit per-minute messages establish a time window.
-            return fields
-        for name in ("error", "message", "detail"):
-            fields = error_fields(value.get(name), depth + 1)
+        if wrapper in ("error", "detail") or (depth == 0 and "\n" not in value.strip() and len(value) <= ERROR_CODE_LIMIT):
+            code = scrubbed(value)
+            return {"classification": code, "error_code": code} if code else {}
+        return {}
+    if isinstance(value, list) and depth < 4:
+        return error_fields(value[0], depth + 1, wrapper) if value else {}
+    if isinstance(value, dict) and depth < 4:
+        for name in ERROR_CODE_KEYS:
+            code = value.get(name)
+            if (type(code) is int or isinstance(code, str)) and not (name == "type" and code == "error") and scrubbed(code):
+                fields = {"classification": scrubbed(code), "error_code": scrubbed(code)}
+                if code == "automation_global_rate_limit":
+                    for count_name in ("limit", "current_count"):
+                        count = value.get(count_name)
+                        if quota_count(count):
+                            fields[count_name] = count
+                    # Only explicit per-minute messages establish a time window.
+                return fields
+        for name in ERROR_WRAPPERS:
+            fields = error_fields(value.get(name), depth + 1, name)
             if fields:
                 return fields
     return {}
+
+
+def failure_code(receipt):
+    """{"error_code": code} for a log line when a non-2xx body named one, else {}."""
+    body = receipt.get("http_error_body") if isinstance(receipt, dict) else None
+    code = (body.get("diagnostics") or {}).get("error_code") if isinstance(body, dict) else None
+    return {"error_code": code} if isinstance(code, str) else {}
 
 
 def project_http_error_body(error):
@@ -1484,6 +1511,7 @@ def send(run, poster):
                     receipt = {"state": "WEBHOOK_ACCEPTED" if accepted_status(status) else "FAILED",
                                "disposition": "webhook_accepted" if accepted_status(status) else "http_failed",
                                "http_status": status, "network_attempted": True,
+                               **{k: v for k, v in diagnostics.items() if k == "http_error_body"},
                                **recipient_delivery(status, diagnostics.get("recipient_run_id"))}
             else:
                 receipt = post_result(url, secret, body, payload.get("event_id", key))
@@ -1494,7 +1522,8 @@ def send(run, poster):
         status = receipt["http_status"]
         append(attempts_path, json.dumps({"phase": "result", "attempt": number,
                "run": key, "event_id": payload.get("event_id"), "poster": poster, **receipt}))
-        log(action="post", run=key, poster=poster, http=status, state=receipt["state"], lane=payload["lane"])
+        log(action="post", run=key, poster=poster, http=status, state=receipt["state"], lane=payload["lane"],
+            **failure_code(receipt))
         if receipt["state"] == "WEBHOOK_ACCEPTED" and accepted_status(status):
             outbox.rename(STATE / "sent" / (key + ".json"))
             return "sent:%d" % status
@@ -1588,13 +1617,24 @@ def enqueue(key, entry):
 
 
 def kick_drainer():
+    """Start the drainer now. A start that fails is an error line with its exit status and systemctl's scrubbed
+    first words, never silence (item 7c: the unit was missing, so every kick since 10-18 failed unseen). Never
+    raises: the entry stays queued for sats-completion-requeue.timer."""
     if os.environ.get("SATS_REQUEUE_NO_KICK") == "1":
         return
     try:
-        subprocess.run(["systemctl", "--user", "start", "--no-block", "sats-completion-requeue.service"],
-                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+        done = subprocess.run(["systemctl", "--user", "start", "--no-block", "sats-completion-requeue.service"],
+                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=10)
     except Exception:
         log_error("requeue-kick")
+        return
+    if done.returncode != 0:
+        try:
+            detail = scrubbed(done.stderr.decode("utf-8", "replace"), 200) or ""
+            append(ERRORS, "%s requeue-kick pid=%d exit=%d %s" % (now_ct(), os.getpid(), done.returncode, detail))
+            log(action="requeue-kick-failed", exit=done.returncode, stderr=detail)
+        except Exception:
+            pass
 
 
 def retry_native(entry):
@@ -1620,7 +1660,7 @@ def retry_native(entry):
             receipt = {"state": "FAILED", "http_status": None}
         status = receipt.get("http_status")
         log(action="post", run=key, poster="requeue", http=status, state=receipt["state"], lane=entry["run"].get("lane"),
-            sats_receipt=receipt.get("sats_receipt"), recipient_run_id=receipt.get("recipient_run_id"))
+            sats_receipt=receipt.get("sats_receipt"), recipient_run_id=receipt.get("recipient_run_id"), **failure_code(receipt))
         if receipt["state"] == "WEBHOOK_ACCEPTED" and accepted_status(status):
             outbox.rename(STATE / "sent" / (key + ".json"))
             os.ftruncate(fd, 0)
@@ -1659,10 +1699,10 @@ def retry_milestone(entry):
         delivery = recipient_delivery(status, run_id)
         append(directory / (key + ".attempts.jsonl"), json.dumps({"phase": "requeue", "http_status": status,
                "state": "WEBHOOK_ACCEPTED" if accepted else "FAILED", "event_id": event_id,
-               "recipient_run_id": run_id}))
+               "recipient_run_id": run_id, **{k: v for k, v in diagnostics.items() if k == "http_error_body"}}))
         log(action="milestone-post", event_id=event_id, lane=entry.get("lane"), kind=entry.get("kind"),
             http=status, state="WEBHOOK_ACCEPTED" if accepted else "FAILED", poster="requeue",
-            sats_receipt=delivery["sats_receipt"], recipient_run_id=run_id)
+            sats_receipt=delivery["sats_receipt"], recipient_run_id=run_id, **failure_code(diagnostics))
         if accepted:
             write_private(proof_path, {"http_status": status, "body_sha256": digest, "recipient_run_id": run_id})
             # The saved receipt of the failed explicit call now reports the requeue's delivery result.
@@ -2349,7 +2389,8 @@ def _emit_milestone(args):
                    "recipient_run_id": run_id, **diagnostics}))
             log(action="milestone-post", event_id=payload["event_id"], lane=args.lane,
                 kind=args.kind, http=status, state="WEBHOOK_ACCEPTED" if accepted else "FAILED",
-                sats_receipt=recipient_delivery(status, run_id)["sats_receipt"], recipient_run_id=run_id)
+                sats_receipt=recipient_delivery(status, run_id)["sats_receipt"], recipient_run_id=run_id,
+                **failure_code(diagnostics))
             if accepted:
                 return result("WEBHOOK_ACCEPTED", status, number, run_id=run_id)
             if diagnostics.get("disposition") == "delivery-budget":

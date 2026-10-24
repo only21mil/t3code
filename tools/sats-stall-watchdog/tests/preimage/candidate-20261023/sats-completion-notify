@@ -1,0 +1,2560 @@
+#!/usr/bin/env python3
+"""Tell the bound owner that an AUTO worker lane on this host finished or died.
+
+    Claude Code hook (Stop, StopFailure, SessionEnd):  sats-completion-notify claude   (hook JSON on stdin)
+    Codex notify:                                      sats-completion-notify codex <event JSON>
+    systemd ExecStopPost of a lane unit:               sats-completion-notify exit <agent>
+
+It runs only for lane workers: a non-interactive agent (`claude -p`,
+`codex exec`) that belongs to a launch recorded in a *.pid file in its pack
+(<lane>.pid from the launch recipe or a run-lane script, <lane>.worker.pid
+from the old sats-spawn-lane wrapper). Walking up from the agent, the first
+recorded pid reached before any other agent process is its launch. Reviewers
+and helpers a lane starts reach the lane's agent first, or nothing recorded
+when detached, and stay silent, as do interactive sessions. The pack is
+SATS_PACK, else the agent's cwd; the lane is SATS_LANE, else the pid file's name.
+
+Neither Stop nor a Codex turn-complete marks the end of a run: Claude resumes
+after Stop when background work reports, and `codex exec` can run several
+turns, and a launch script may run several agents. So the first event of a
+launch claims sent/<run-key>, later events of that launch are dropped, and a
+detached child waits on a pidfd until the launched process exits. Then it
+reads the verdict and POSTs. The hook itself
+returns at once.
+
+A lane launched as a systemd user service (the launch recipe: systemd-run with
+SATS_RUN=$(date +%s-%N), the launch time, and ExecStopPost=sats-completion-notify exit)
+also reports from ExecStopPost, which runs after every exit of the unit's main
+process, SIGKILL included. Both paths use one key per lane run (lane + SATS_RUN)
+and post under an flock on outbox/<key>.lock. Only recorded HTTP acceptance
+suppresses a later poster. Local DROP/HOLD and failed transmission retain the
+body in outbox; all posters share at most three durable attempt reservations.
+systemd starts ExecStopPost only after the unit's other processes have exited,
+and the native sender blocks SIGTERM, so when a native hook fired its sender
+posts first and ExecStopPost rechecks its transport state. ExecStopPost posts alone when no
+native hook ran: SIGKILL, SIGTERM during a tool call, any Codex crash.
+
+The payload is one JSON object:
+  {lane, pack, host, agent, verdict, reason, ts_ct, test, event, run, result_file,
+   outcome, step, step_name, result_verdict, result_fresh, review_verdict, rerun,
+   event_id, event_kind, review_round, notice_occurrence, delivery_contract,
+   required_notice, recipient, priority}
+The prepared contract routes a launch-bound notice to its exact recipient;
+unbound and TEST lanes keep the legacy filter path. HTTP acceptance
+does not establish native recipient delivery. Start/decision/blocker/review notices
+need separate owner-integrated emitters and an attested native receiver.
+A launch script may run several steps (producer, then a review or a retry), and
+the report comes when the whole launch ends. The step that ran last is the
+newer of sent/<run-key>.step (SATS_STEP of each native event of the launch,
+exported per step by run-lane.sh) and the last step line of the pack's lane.log
+("<step> start", "<step> exit N", a repair loop's "repair rN <step> exit N")
+written since the start, or review when a REVIEW-SOL*.md written since the start
+is newer than both; with neither, the lane name's -review/-retry suffix; else
+SATS_STEP of the poster.
+result_verdict is the first PASS/FAIL/BLOCKED/PARTIAL line, else the line under
+a "Verdict" heading or after "Verdict:", of the newest RESULT* in the pack,
+preferring one written since the start (result_fresh). Any mtime counts.
+review_verdict is ACCEPT or REQUEST_CHANGES when the first non-blank line of the
+review's output, trimmed of spaces and tabs, starts with that word followed by an
+ASCII word boundary (ACCEPTED and ACCEPT_X are neither; ACCEPT: and ACCEPT² are
+ACCEPT; the repair loops' LC_ALL=C verdict() uses the same rule): the newest
+REVIEW-SOL*.md written since the start (else REVIEW*), the higher round at equal
+mtimes; else null.
+outcome and verdict:
+  DONE            a review step whose review_verdict is ACCEPT: "ACCEPTED: step
+                  review (REVIEW-SOL.r2), exit 0, review ACCEPT. RESULT-x.md: ...".
+                  Also a producer step and a RESULT written since the start:
+                  verdict is result_verdict, or a note that the RESULT has no verdict line.
+  REVIEW / RETRY  the last step was a review or retry: "REVIEW STOP: step review
+                  (REVIEW-SOL), exit 0. RESULT-x.md: PASS ...". REQUEST_CHANGES adds
+                  "changes requested, repair then review again". A producer step
+                  whose only RESULT predates the start is a RETRY stop too.
+  CANCELED        an exact-run cancel receipt, or an owner's control/stop*,
+                  control/superseded* or control/cancel* marker naming this run
+                  (intentional_stop; `sats-completion-notify cancel --lanedir ABS` writes one):
+                  rerun none, notice kind canceled, whatever artifacts exist.
+  DIED            no RESULT* in the pack at all, whatever step ran last (a review
+                  run-lane.sh starts after a dead producer reviews nothing).
+  UNKNOWN         the classifier failed (logged in errors.log); the report still goes.
+rerun names what to run again: "producer" only for DIED, "step:<step>" for a
+review or retry step with no review_verdict that exited non-zero (lane.log, else
+the unit's exit for ExecStopPost), was cut off, or left its REVIEW* output empty
+(or, for a review, missing), else "none". A review with a verdict never re-runs,
+and a lane with a RESULT never gets "producer". Bound notices send event_id as
+the Idempotency-Key header; other lanes send the run key.
+
+Delivery goes to the Grok routine webhook stored in 1Password item
+"Grok completion webhook (Sats)" (fields url, key), read with sats-op
+and cached 0600 under ~/.local/state/sats-completion/. Redirects are refused
+so the key never leaves for another origin. Tests may point at a loopback
+listener with SATS_COMPLETION_WEBHOOK_URL / SATS_COMPLETION_WEBHOOK_KEY.
+Every POST to one URL starts at least WEBHOOK_SPACING (5 s) after the previous
+one ended, from any process (spaced_post, per-URL state under spacing/). A
+--delivery-budget counts that wait; a slot that cannot start in time is the
+usual delivery-budget failure, with no network attempt, and the explicit CLI
+then hands the same occurrence to a detached cached-only sender that posts at
+its slot (Sats GO 2026-10-14 12:59 CT).
+
+Native hooks are fail-open: their exit status is always 0. An explicit
+milestone exits 1 for failed transport, 2 for invalid/local configuration,
+and 0 for accepted transport or record-only. Local and transport receipts
+remain separate, so repeated start recording preserves delivery evidence.
+Stalled events append only private state, never a lane heartbeat.
+Errors go to errors.log as exception
+type and code locations only, never messages, so the URL and key cannot leak.
+"""
+
+import fcntl
+import argparse
+import hashlib
+import json
+import math
+import os
+import re
+import select
+import signal
+import socket
+from stat import S_ISREG
+import subprocess
+import sys
+import time
+import traceback
+import types
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+HOME = Path.home()
+STATE = HOME / ".local/state/sats-completion"
+LOG = STATE / "hook.log"
+ERRORS = STATE / "errors.log"
+CACHE = STATE / "webhook.json"
+CACHE_TTL = 6 * 3600
+OP_ITEM = "Grok completion webhook (Sats)"
+OP_VAULT = "qcipbxjm7hjpiaza3ntmbj6bq4"  # Sats Vault; a service account must name the vault
+SATS_OP = HOME / ".local/bin/sats-op"
+OWNER_BINDINGS_REGISTRY = Path("/home/victor/work/p5b-med4-reader-20261013/owner-bindings.json")
+OWNER_BINDINGS_HELPER = Path(__file__).resolve().with_name("p5b-owner-bindings-refresh")
+LOCAL_NOTICE_OWNER = "Lightning"
+DEFAULT_NOTICE_RECIPIENT = "Sats"  # local owner policy, never an ingress field
+CT = ZoneInfo("America/Chicago")
+VERDICT_RE = re.compile(r"\b(PASS|FAIL|BLOCKED[A-Z0-9_-]*|PARTIAL)\b")
+VERDICT_KEY_RE = re.compile(r"verdict\s*:\s*(\S.*)", re.IGNORECASE)
+# Amendment 1258 (G): lanes also write "canon-f13-install-d14 DONE r5 ACCEPT", "STATE: DONE"
+# and "Review verdict: ACCEPT". An uppercase token like these near the top is a verdict line.
+HEAD_TOKEN_RE = re.compile(r"\b(DONE|ACCEPT|REQUEST_CHANGES|PASS|FAIL|BLOCKED[A-Z0-9_-]*|PARTIAL)\b", re.ASCII)
+# The token leads the line, after a lane word and an optional round ("lane DONE r5 ACCEPT",
+# "grokbot-token-rca r3 DONE") or a short key ("STATE: DONE").
+HEAD_LEAD_RE = re.compile(r"\s*(?:[A-Za-z][A-Za-z ]{0,30}:\s*|\S+\s+(?:r[0-9]+\s+)?)?"
+                          r"(?:DONE|ACCEPT|REQUEST_CHANGES|PASS|FAIL|BLOCKED|PARTIAL)\b", re.ASCII)
+CHANGES_LEAD_RE = re.compile(r"\s*(?:[A-Za-z][A-Za-z ]{0,30}:\s*|\S+\s+(?:r[0-9]+\s+)?)?REQUEST_CHANGES\b", re.ASCII)
+# triage M4: "NOT DONE yet" and "Partially DONE" are not completions.
+NEGATED_RE = re.compile(r"\b(?:not|no|never|partially)[ \t]+(?:yet[ \t]+)?(?:DONE|ACCEPT|PASS)\b",
+                        re.ASCII | re.IGNORECASE)
+HEAD_LINES = 12
+# Amendment 1227 (F): a lane that writes one of these instead of RESULT* (fleet-audit-1014-counts
+# wrote COUNTS.md) did not die. Only files written since the run started count.
+DELIVERABLES = ("COUNTS*.md", "DONE*.md", "REPORT*.md", "FINDINGS*.md", "SUMMARY*.md")
+RUN_RE = re.compile(r"([0-9]{9,11})-([0-9]{9})")  # SATS_RUN=$(date +%s-%N), the launch time
+STEPS = ("producer", "review", "retry")
+# lane.log step lines: "review start ...", "review exit 0 ...", and a repair loop's "repair r2 review exit 0 ..."
+# or "r2 review exit 0 ...". Notes such as "review-noscan superseded ..." or "ACCEPT r2" are not step lines.
+STEP_LINE_RE = re.compile(r"\s*(?:(?:repair\s+)?r[0-9]+\s+)?(producer|review|retry)\s+(?:start|exit\s+(-?[0-9]{1,4}))\b",
+                          re.IGNORECASE)
+# re.ASCII: \b sees only [A-Za-z0-9_] as word characters, as LC_ALL=C grep does in the loops' verdict().
+REVIEW_VERDICT_RE = re.compile(r"^(ACCEPT|REQUEST_CHANGES)\b", re.ASCII)
+ROUND_RE = re.compile(r"[.-]r([0-9]+)\.md$", re.IGNORECASE)  # REVIEW-SOL.r2.md, REVIEW-SOL-R2.md
+LANE_STEP_RE = re.compile(r"-(review|retry)$", re.IGNORECASE)
+RETRY_DELAYS = (0, 5, 20)
+# Victor/Sats GO 2026-10-14 12:17 CT: POSTs to one webhook URL start >= 5 s apart, so a
+# start/stall/done burst no longer reaches the routine within one second.
+WEBHOOK_SPACING = 5.0
+BOOT_ID = Path("/proc/sys/kernel/random/boot_id")
+# HTTP rejection evidence is a projection, never raw response/request text.
+HTTP_ERROR_BODY_LIMIT = 8192
+QUOTA_ERROR_RE = re.compile(
+    r"Automation run rate limit exceeded: global limit ([0-9]{1,10}) per minute, current_count=([0-9]{1,10})",
+    re.ASCII)
+# notice-package-20261023 item 7b: a non-2xx body's error code is kept and logged as sent, whatever it is, one
+# printable line of at most ERROR_CODE_LIMIT characters with key-shaped tokens masked. An allowlist of five codes
+# kept nothing for f13pro a9acdeb1's BLOCKED, which got HTTP 400 three times with an 87-byte JSON body.
+ERROR_CODE_LIMIT = 120
+ERROR_CODE_KEYS = ("code", "error_code", "type")  # "type" as in {"error": {"type": "invalid_request_error"}}
+ERROR_WRAPPERS = ("error", "errors", "detail", "message")
+TOKENISH_RE = re.compile(r"[A-Za-z0-9_+=/.-]{16,}")
+SECRET_PREFIX_RE = re.compile(r"^(?:sk-|ghp_|gho_|ghs_|github_pat_|glpat-|xox[abpr]-|AKIA|ASIA|crsr_|AIza|Bearer)")
+# t3-decision-delivery-fix 2026-10-18 (Victor 17:02 CT GO): a 2xx alone does not prove Sats
+# received a notice. The automation webhook answers an accepted POST with the run it started
+# for the recipient (runUuid); only that id, read from at most DELIVERY_BODY_LIMIT bytes of
+# the response, makes a receipt DELIVERED. No other response byte is kept.
+DELIVERY_BODY_LIMIT = 8192
+RECIPIENT_RUN_KEYS = ("runUuid", "run_uuid", "runId", "run_id")
+RECIPIENT_RUN_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.ASCII)
+
+
+def now_ct():
+    return datetime.now(CT).strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
+def ensure_state():
+    STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
+    STATE.chmod(0o700)
+    for sub in ("sent", "outbox", "milestones"):
+        (STATE / sub).mkdir(mode=0o700, exist_ok=True)
+        (STATE / sub).chmod(0o700)
+
+
+def write_private(path, data):
+    tmp = path.with_name("%s.tmp.%d" % (path.name, os.getpid()))
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w") as stream:
+        os.fchmod(stream.fileno(), 0o600)
+        json.dump(data, stream, sort_keys=True, separators=(",", ":"))
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(tmp, path)
+    directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def append(path, line):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "a", encoding="utf-8") as stream:
+        os.fchmod(stream.fileno(), 0o600)
+        stream.write(line.rstrip("\n") + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def log(**fields):
+    fields = {"ts": time.time(), "ts_ct": now_ct(), "pid": os.getpid(), **fields}
+    append(LOG, json.dumps(fields, separators=(",", ":")))
+
+
+def log_error(where):
+    """Exception type and frames only: messages may carry the URL or key. Never raises,
+    so a recovery path that logs (classify, record_step) still goes on to report."""
+    try:
+        kind, _, tb = sys.exc_info()
+        frames = " <- ".join("%s:%d" % (frame.name, frame.lineno)
+                             for frame in reversed(traceback.extract_tb(tb)))
+        append(ERRORS, "%s %s pid=%d %s at %s" % (now_ct(), where, os.getpid(),
+                                                  getattr(kind, "__name__", kind), frames))
+    except Exception:
+        pass
+
+
+# --- process facts -----------------------------------------------------------
+
+def cmdline(pid):
+    try:
+        raw = Path("/proc/%d/cmdline" % pid).read_bytes()
+    except OSError:
+        return []
+    return [part.decode("utf-8", "replace") for part in raw.split(b"\0") if part]
+
+
+def parent(pid):
+    try:
+        stat = Path("/proc/%d/stat" % pid).read_text()
+    except OSError:
+        return 0
+    return int(stat.rpartition(")")[2].split()[1])
+
+
+def start_ticks(pid):
+    """Kernel start time of a process in clock ticks since boot, or None when it is gone.
+    Exact, so it tells a process from a later one that reused its pid."""
+    try:
+        stat = Path("/proc/%d/stat" % pid).read_text()
+    except OSError:
+        return None
+    return int(stat.rpartition(")")[2].split()[19])
+
+
+def alive(pid, ticks):
+    """The process that started at ticks still runs (not exited, zombie or replaced)."""
+    try:
+        fields = Path("/proc/%d/stat" % pid).read_text().rpartition(")")[2].split()
+    except OSError:
+        return False
+    return fields[0] not in ("Z", "X") and int(fields[19]) == ticks
+
+
+def epoch(ticks):
+    btime = next(int(line.split()[1]) for line in Path("/proc/stat").read_text().splitlines()
+                 if line.startswith("btime "))
+    return btime + ticks / os.sysconf("SC_CLK_TCK")
+
+
+def in_lane_unit(pid):
+    """The process runs in a lane unit started by the launch recipe (sats-lane-<lane>.service)."""
+    try:
+        path = Path("/proc/%d/cgroup" % pid).read_text().strip().splitlines()[-1].split("::", 1)[-1]
+    except (OSError, IndexError):
+        return False
+    return any(re.fullmatch(r"sats-lane-.+\.service", part) for part in path.split("/"))
+
+
+def cwd_of(pid):
+    try:
+        return os.path.realpath(os.readlink("/proc/%d/cwd" % pid))
+    except OSError:
+        return ""
+
+
+def agent_kind(argv):
+    """claude, codex or None for one process argv."""
+    if not argv:
+        return None
+    if any(Path(arg).name in ("claude", "claude.exe") for arg in argv[:2]):
+        return "claude"
+    if Path(argv[0]).name == "codex":
+        return "codex"
+    return None
+
+
+def non_interactive(kind, argv):
+    if kind == "claude":
+        return "-p" in argv or "--print" in argv
+    return kind == "codex" and "exec" in argv
+
+
+def find_agent(agent):
+    """Nearest ancestor that is the agent process, with its argv."""
+    pid = os.getppid()
+    for _ in range(12):
+        if pid <= 1:
+            break
+        argv = cmdline(pid)
+        if agent_kind(argv) == agent:
+            return pid, argv
+        pid = parent(pid)
+    return 0, []
+
+
+def launch_of(pack, pid):
+    """(lane, launched pid) when this agent belongs to a launch recorded in the pack.
+
+    Every launch records the process it started in <pack>/<lane>.pid (the launch
+    recipe, Hash's run-lane scripts) or <lane>.worker.pid (the old sats-spawn-lane
+    wrapper). Walking up from the agent, the first recorded pid reached before any
+    other agent process is its launch. Reviewers and helpers a lane starts reach the
+    lane's agent first, or no recorded pid when started detached, and stay silent."""
+    recorded = {}
+    try:
+        files = sorted(Path(pack).glob("*.pid"))
+    except OSError:
+        return None
+    for path in files:
+        try:
+            value = path.read_bytes().decode("ascii").strip()
+            written = path.stat().st_mtime
+        except (OSError, UnicodeDecodeError):
+            continue
+        if not re.fullmatch(r"[0-9]{1,10}", value):
+            continue
+        ticks = start_ticks(int(value))
+        # A pid file is written just after its process starts; a process that started
+        # later only reused the number, and the file is stale.
+        if ticks is None or epoch(ticks) > written + 2:  # btime is whole seconds
+            continue
+        name = path.name[:-len(".pid")]
+        recorded.setdefault(int(value), name[:-len(".worker")] if name.endswith(".worker") else name)
+    current = pid
+    for _ in range(16):
+        if current in recorded:
+            return recorded[current], current
+        current = parent(current)
+        if current <= 1 or agent_kind(cmdline(current)):
+            return None
+    return None
+
+
+def wait_exit(pid, ticks):
+    """Block until the agent process exits. Event-driven through a pidfd; if no
+    pidfd can be had (fd exhaustion and the like), check the process every 2 s."""
+    while True:
+        try:
+            fd = os.pidfd_open(pid)
+            break
+        except ProcessLookupError:
+            return
+        except OSError:
+            if not alive(pid, ticks):
+                return
+            time.sleep(2)
+    try:
+        if start_ticks(pid) != ticks:
+            return  # the pid now belongs to another process
+        poller = select.poll()
+        poller.register(fd, select.POLLIN)
+        poller.poll()
+    finally:
+        os.close(fd)
+
+
+# --- event -------------------------------------------------------------------
+
+def read_event(agent, args):
+    if agent == "claude":
+        raw = sys.stdin.read()
+    else:
+        raw = args[-1] if args else "{}"
+    try:
+        event = json.loads(raw or "{}")
+    except ValueError:
+        event = {}
+    return event if isinstance(event, dict) else {}
+
+
+def describe(agent, event):
+    """(event name, run id, reason) for one hook or notify call."""
+    if agent == "claude":
+        name = event.get("hook_event_name") or "unknown"
+        reason = name
+        if name == "SessionEnd":
+            reason = "SessionEnd:%s" % (event.get("reason") or "unknown")
+        elif name == "StopFailure":
+            error = event.get("error") or event.get("error_type") or event.get("reason") or ""
+            reason = ("StopFailure:%s" % error)[:200]
+        return name, str(event.get("session_id") or ""), reason
+    name = event.get("type") or "unknown"
+    run = "%s/%s" % (event.get("thread-id") or "", event.get("turn-id") or "")
+    return name, run, name
+
+
+def bare(line):
+    return line.replace("**", "").strip().strip("#*> ").strip()[:200]
+
+
+def verdict_line(path):
+    """The verdict line of one RESULT. The first PASS/FAIL/BLOCKED/PARTIAL line anywhere when its
+    first such token fails, else the first REQUEST_CHANGES line; else, among the first
+    HEAD_LINES lines, the first that leads with a verdict token (DONE, ACCEPT, PASS, ...,
+    uppercase words), then the first holding one; else the first PASS line, else the first
+    line under a "Verdict" heading or after "Verdict:", else None."""
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    # An explicit failure governs a generic completion header (round 2 finding N4): the
+    # first PASS/FAIL/BLOCKED/PARTIAL line still decides when it fails, and so does any
+    # REQUEST_CHANGES line.
+    legacy = next((line for line in lines if VERDICT_RE.search(line)), None)
+    if legacy is not None and VERDICT_RE.search(legacy).group(1) != "PASS":
+        return bare(legacy)
+    changes = next((line for line in lines if CHANGES_LEAD_RE.match(bare(line))), None)
+    if changes is not None:
+        return bare(changes)  # "Review verdict: REQUEST_CHANGES", not prose such as "(r4 REQUEST_CHANGES, r5 ACCEPT)"
+    for pattern in (HEAD_LEAD_RE.match, HEAD_TOKEN_RE.search):
+        for line in lines[:HEAD_LINES]:
+            if pattern(bare(line)):
+                return bare(line)
+    if legacy is not None:
+        return bare(legacy)
+    for index, line in enumerate(lines):
+        text = bare(line)
+        if VERDICT_KEY_RE.match(text):
+            return text
+        if line.lstrip().startswith("#") and text.lower() == "verdict":
+            return next((bare(after) for after in lines[index + 1:] if bare(after)), None)
+    return None
+
+
+def files(pack, pattern):
+    """(mtime, size, path) of the regular files matching pattern, newest first."""
+    found = []
+    try:
+        for path in Path(pack).glob(pattern):
+            try:
+                if path.is_file():
+                    stat = path.stat()
+                    found.append((stat.st_mtime, stat.st_size, path))
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return sorted(found, key=lambda item: item[0], reverse=True)
+
+
+def result_of(pack, since):
+    """(file name, verdict line or None, written since the start) for the RESULT* that
+    answers the run: the newest with a verdict line, one written since the start first;
+    else the newest RESULT* with none. Any RESULT* file counts (RESULT, RESULT.tsv)
+    except Python helpers. With no RESULT* at all, a DELIVERABLES file written since the
+    start stands in. (None, None, False) when there is neither."""
+    directory = Path(pack)
+
+    def reports(root):
+        # This pack and its named output directories, never child lanes or sibling packs.
+        locations = [root] + [root / name for name in ("output", "outputs", "artifacts", "results")]
+        return [item for location in locations for item in files(location, "RESULT*") if item[2].suffix != ".py"]
+    candidates = reports(directory)
+    # A gate is an independent lane; its parent cannot attest its completion. A registered
+    # metadata-only lane/ (its own LANE.json, no report of its own) uses its task root.
+    if not candidates and directory.name == "lane" and (directory / "LANE.json").is_file():
+        candidates = reports(directory.parent)
+    # Sats 15:13 CT: a registered lane may report one level up (seed-review). Never from a
+    # parent that is itself a registered lane (gates) or from the shared work root.
+    if not candidates and (directory / "LANE.json").is_file() and directory.parent != directory \
+            and not (directory.parent / "LANE.json").is_file() and directory.parent != HOME / "work":
+        candidates = reports(directory.parent)
+    reported = bool(candidates)
+    if not candidates:
+        candidates = [item for pattern in DELIVERABLES for item in files(directory, pattern) if item[0] >= since]
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    # A deliverable proves the run finished, not that it passed: it carries no verdict.
+    found = [(mtime >= since, path, verdict_line(path) if reported else None) for mtime, _, path in candidates]
+    for fresh in (True, False):
+        for is_fresh, path, line in found:
+            if is_fresh == fresh and line:
+                return os.path.relpath(path, directory), line, fresh
+    if found:
+        return os.path.relpath(found[0][1], directory), None, found[0][0]
+    return None, None, False
+
+
+def env_step():
+    step = (os.environ.get("SATS_STEP") or "").strip().lower()
+    return step if step in STEPS else None
+
+
+def step_marker(key):
+    return STATE / "sent" / (key + ".step")
+
+
+def record_step(key):
+    """Note the step this native event ran in, so the report at the end of the launch
+    knows the step that ran last (a review after the producer that claimed the run)."""
+    step = env_step()
+    if step:
+        tmp = step_marker(key).with_name("%s.tmp.%d" % (step_marker(key).name, os.getpid()))
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as stream:
+            stream.write(step + "\n")
+        os.replace(tmp, step_marker(key))
+
+
+def native_failure_marker(key):
+    return STATE / "sent" / (key + ".stop-failure")
+
+
+def native_since_marker(key):
+    return STATE / "sent" / (key + ".since")
+
+
+def lane_log_step(pack, since):
+    """(mtime, step, exit code or None) from the last step line of <pack>/lane.log
+    ("producer exit 0", "review start ...", "review exit 137"), when the log was written
+    since the start; else None."""
+    path = Path(pack) / "lane.log"
+    try:
+        stat = path.stat()
+        if stat.st_mtime < since:
+            return None
+        with open(path, "rb") as stream:
+            stream.seek(max(0, stat.st_size - 4096))
+            lines = stream.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return None
+    for line in reversed(lines):
+        match = STEP_LINE_RE.match(line)
+        if match:
+            code = match.group(2)
+            return stat.st_mtime, match.group(1).lower(), int(code) if code is not None else None
+    return None
+
+
+def review_outputs(pack, since):
+    """(mtime, size, path) of the review outputs written since the start, newest first: REVIEW-SOL*.md
+    (REVIEW-SOL.md, REVIEW-SOL.rN.md), else any REVIEW*. At equal mtimes the higher round wins."""
+    for pattern in ("REVIEW-SOL*.md", "REVIEW*"):
+        found = [item for item in files(pack, pattern) if item[0] >= since]
+        if found:
+            def order(item):
+                round_ = ROUND_RE.search(item[2].name)
+                return item[0], int(round_.group(1)) if round_ else 0
+            return sorted(found, key=order, reverse=True)
+    return []
+
+
+def review_verdict(path):
+    r"""ACCEPT or REQUEST_CHANGES when the first non-blank line of a review output, trimmed of spaces and
+    tabs, starts with that word, else None. The same rule as the repair loops' verdict():
+    LC_ALL=C awk 'NF{gsub(/^[ \t]+|[ \t]+$/,""); print; exit}' | LC_ALL=C grep -aoE '^(ACCEPT|REQUEST_CHANGES)\b'."""
+    try:
+        with open(path, "rb") as stream:
+            for raw in stream:
+                line = raw.decode("utf-8", "replace").rstrip("\n").strip(" \t")
+                if line:
+                    match = REVIEW_VERDICT_RE.match(line)
+                    return match.group(1) if match else None
+    except OSError:
+        pass
+    return None
+
+
+def last_step(run):
+    """(step or None, exit code or None, step-line seen, unreported) for the step that ran last.
+    unreported: only a review output newer than every logged or marked step shows the review ran."""
+    entry = lane_log_step(run["pack"], run["since"])
+    candidates = [(entry[0], entry[1], False)] if entry else []
+    try:
+        marker = step_marker(run["key"])
+        value = marker.read_text(encoding="utf-8", errors="replace").strip()
+        if value in STEPS:
+            candidates.append((marker.stat().st_mtime, value, False))
+    except (OSError, ValueError):
+        pass
+    # A review writes REVIEW-SOL*.md as it starts (codex exec > REVIEW-SOL.rN.md), so one newer than the last
+    # logged or marked step is a review that a repair loop never logged, killed before it sent a native event.
+    # Appended last, so a log line or marker at the same mtime wins.
+    reviews = [item for item in files(run["pack"], "REVIEW-SOL*.md") if item[0] >= run["since"]]
+    if reviews and candidates:
+        candidates.append((reviews[0][0], "review", True))
+    fixed = LANE_STEP_RE.search(run["lane"])
+    unreported = False
+    if candidates:
+        _, step, unreported = max(candidates, key=lambda item: item[0])
+    elif fixed:
+        step = fixed.group(1).lower()
+    else:
+        step = run.get("step")
+    if entry and entry[1] == step and not unreported:
+        return step, entry[2], True, False
+    return step, None, False, unreported
+
+
+def blank(path):
+    """True when a review output holds nothing but whitespace (or cannot be read)."""
+    try:
+        with open(path, "rb") as stream:
+            return not stream.read(65536).strip()
+    except OSError:
+        return True
+
+
+def classify(run):
+    """(outcome, verdict text, fields) for a run, read once the launch has exited."""
+    result, line, fresh = result_of(run["pack"], run["since"])
+    step, code, logged, unreported = last_step(run)
+    fields = {"step": step, "step_name": None, "result_file": result, "result_verdict": line,
+              "result_fresh": fresh, "review_verdict": None, "rerun": "none"}
+    if not result:  # the producer left nothing, whatever step ran after it
+        fields["rerun"] = "producer"
+        return "DIED", "DIED", fields
+    stands = "%s: %s" % (result, line or "no verdict line")
+    if step in ("review", "retry"):
+        outputs = review_outputs(run["pack"], run["since"])
+        name = outputs[0][2].stem if outputs else None
+        said = review_verdict(outputs[0][2]) if outputs and step == "review" else None
+        # A review must leave REVIEW* output; a retry may leave none, but not an empty or all-whitespace one.
+        empty = (not outputs and step == "review") or bool(outputs and blank(outputs[0][2]))
+        # A "review start" line with no exit after it, or a review that neither logged an exit nor sent
+        # its native event (killed in a loop that writes no start line). A review that wrote its verdict was
+        # not cut off, logged exit or not.
+        cut = not said and (logged or unreported) and code is None
+        unit_failed = code is None and not cut and run.get("unit_failed")  # ExecStopPost only
+        # A review that wrote its verdict finished, whatever its exit; only one without a verdict re-runs.
+        failed = not said and ((code is not None and code != 0) or cut or unit_failed or empty)
+        fields["step_name"] = name
+        fields["review_verdict"] = said
+        if failed:
+            fields["rerun"] = "step:" + step
+        if code is not None:
+            notes = ["exit %d" % code]
+        elif cut:
+            notes = ["cut off"]
+        elif unit_failed:
+            notes = ["unit ended %s" % run.get("unit_exit")]
+        else:
+            notes = ["exit not logged"]
+        if empty:
+            notes.append("%s empty" % outputs[0][2].name if outputs else "no REVIEW* output")
+        if failed:
+            notes.append("re-run this step only")
+        label = "step %s%s" % (step, " (%s)" % name if name else "")
+        if said == "ACCEPT":
+            return "DONE", ("ACCEPTED: %s, %s, review ACCEPT. %s" % (label, ", ".join(notes), stands))[:300], fields
+        if said == "REQUEST_CHANGES":
+            notes.append("changes requested, repair then review again")
+        return step.upper(),("%s STOP: %s, %s. %s" % (step.upper(), label, ", ".join(notes), stands))[:300], fields
+    if not fresh:
+        return "RETRY", ("RETRY STOP: step %s ended with no new RESULT. %s (predates this start): %s"
+                         % (step or "unknown", result, line or "no verdict line"))[:300], fields
+    return "DONE", line or ("DONE: %s has no verdict line" % result), fields
+
+
+# --- delivery ----------------------------------------------------------------
+
+def usable(url, key):
+    try:
+        parts = urllib.parse.urlsplit(url or "")
+        parts.hostname
+    except ValueError:
+        return False
+    return (parts.scheme in ("http", "https") and bool(parts.hostname)
+            and not re.search(r"\s", url) and key is not None and not re.search(r"\s", key))
+
+
+def loopback(url):
+    try:
+        host = urllib.parse.urlsplit(url).hostname or ""
+    except ValueError:
+        return False
+    return host in ("127.0.0.1", "localhost", "::1")
+
+
+def webhook(refresh=False, *, cached_only=False):
+    """(url, key, source) or (None, None, why)."""
+    url = os.environ.get("SATS_COMPLETION_WEBHOOK_URL")
+    if url:
+        key = os.environ.get("SATS_COMPLETION_WEBHOOK_KEY", "")
+        if not usable(url, key) or not loopback(url):
+            return None, None, "override-not-loopback"
+        return url, key, "override-loopback"
+    if not refresh:
+        try:
+            if time.time() - CACHE.stat().st_mtime < CACHE_TTL:
+                cached = json.loads(CACHE.read_text())
+                if usable(cached.get("url"), cached.get("key")) and cached.get("key"):
+                    return cached["url"], cached["key"], "cache"
+        except (OSError, ValueError, AttributeError):
+            pass
+    if cached_only:
+        return None, None, "cache-unavailable"
+    try:
+        out = subprocess.run(
+            [str(SATS_OP), "item", "get", OP_ITEM, "--vault", OP_VAULT, "--fields", "label=url,label=key",
+             "--reveal", "--format", "json"],
+            capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return None, None, "sats-op-unavailable"
+    if out.returncode != 0:
+        return None, None, "1password-item-missing"
+    try:
+        fields = json.loads(out.stdout)
+    except ValueError:
+        return None, None, "1password-item-unreadable"
+    if isinstance(fields, dict):
+        fields = [fields]
+    values = {f.get("label"): f.get("value") for f in fields if isinstance(f, dict)}
+    if not values.get("key") or not usable(values.get("url"), values.get("key")):
+        return None, None, "1password-item-incomplete"
+    write_private(CACHE, {"url": values["url"], "key": values["key"]})
+    return values["url"], values["key"], "1password"
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect would resend the Authorization header to another URL."""
+
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+OPENER = urllib.request.build_opener(NoRedirect)
+
+
+def spaced_post(url, deadline, send, *, clock=time.monotonic, sleep=time.sleep):
+    """Run send() as this URL's next POST: (True, its result), or (False, None) when the
+    monotonic deadline refuses it before any network attempt.
+
+    spacing/<sha256 of the URL>.* keeps two records, so neither the URL nor its key
+    reaches a filename or log. The queue record holds the latest reserved start and
+    its lock is held only to read and fsync it, so a budgeted caller learns at once
+    whether its turn can start before its deadline. The post record holds the
+    earliest next start: WEBHOOK_SPACING after the previous POST ended. It is marked
+    in flight across send(); a poster that finds that mark died mid-POST at an unknown
+    moment, so it waits a full WEBHOOK_SPACING from that discovery. Its
+    lock is held from that final check through send(), so starts are serialized and
+    a poster delayed after its reservation cannot crowd the next. Other URLs use other
+    files and never wait. Records use the system-wide monotonic clock with the boot ID;
+    another boot's record is stale. Bookkeeping errors fail open: send() still runs
+    exactly once, so a notice is never lost to them.
+    """
+    started, result = False, None
+    try:
+        directory = STATE / "spacing"
+        directory.mkdir(mode=0o700, exist_ok=True)
+        base = directory / hashlib.sha256(url.encode()).hexdigest()
+        boot = BOOT_ID.read_text().strip()
+
+        def locked(kind):
+            fd = os.open("%s.%s.lock" % (base, kind), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | (fcntl.LOCK_NB if deadline is not None else 0))
+                    return fd
+                except BlockingIOError:
+                    if clock() >= deadline:
+                        os.close(fd)
+                        return None
+                    sleep(0.01)
+
+        def read(kind, field="at"):
+            try:
+                record = json.loads(Path("%s.%s.json" % (base, kind)).read_text())
+                value = record[field] if record["boot_id"] == boot else None
+            except (OSError, ValueError, KeyError, TypeError):
+                return None
+            if field == "inflight":
+                return value is True
+            return value if type(value) in (int, float) and math.isfinite(value) else None
+
+        def write(kind, value, **extra):
+            write_private(Path("%s.%s.json" % (base, kind)),
+                          {"boot_id": boot, "at": value, "at_epoch": time.time() + value - clock(), **extra})
+
+        def refuse(wait):
+            try:  # evidence only; a log failure never changes the decision
+                log(action="webhook-spacing", outcome="delivery-budget", wait_ms=round(wait * 1000))
+            except Exception:
+                log_error("webhook-spacing-log")
+            return False, None
+
+        fd = locked("queue")
+        if fd is None:
+            return refuse(0)
+        try:
+            now = clock()
+            tail, free = read("queue"), read("post")
+            slot = max([now] + ([tail + WEBHOOK_SPACING] if tail is not None else []) + ([free] if free is not None else []))
+            if deadline is not None and slot >= deadline:
+                return refuse(slot - now)  # reserves nothing
+            write("queue", slot)
+        finally:
+            os.close(fd)
+        if slot > now:
+            try:
+                log(action="webhook-spacing", outcome="wait", wait_ms=round((slot - now) * 1000))
+            except Exception:
+                log_error("webhook-spacing-log")
+            sleep(slot - now)
+        fd = locked("post")
+        if fd is None:
+            return refuse(0)
+        try:
+            if read("post", "inflight"):
+                # The last poster died mid-POST (its lock is free). Its request may have
+                # left at any moment up to now, so the next start waits a full spacing.
+                write("post", max(read("post") or 0, clock() + WEBHOOK_SPACING), inflight=False)
+            while True:
+                now, free = clock(), read("post")
+                if free is None or now >= free:
+                    break
+                if deadline is not None and free >= deadline:
+                    return refuse(free - now)
+                sleep(free - now)
+            write("post", now + WEBHOOK_SPACING, inflight=True)
+            started = True
+            result = send()
+            write("post", clock() + WEBHOOK_SPACING, inflight=False)
+        finally:
+            os.close(fd)
+        return True, result
+    except Exception:
+        log_error("webhook-spacing")
+        if started:
+            return True, result  # send() ran; a failed bookkeeping write never repeats it
+        return True, send()
+
+
+WAKE_FILTER = HOME / ".local/bin/grok-wake-filter"  # token fix 2026-10-11: drop no-action wakes before the POST
+
+
+def wake_filter(verb, body, *extra):
+    """grok-wake-filter check|mark|ack; returns (exit code, stdout). Any failure -> (0, "") (fail open: the POST goes)."""
+    try:
+        r = subprocess.run([str(WAKE_FILTER), verb, *extra, "--sender", "sats-completion-notify"], input=body,
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
+        return r.returncode, r.stdout.decode("utf-8", "replace")
+    except Exception:
+        return 0, ""
+
+
+def post_result(url, key, body, idempotency):
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        payload = {}
+    required = isinstance(payload, dict) and payload.get("delivery_contract") == "lane-required-v2"
+    # v3 2026-10-11 (Victor GO 11:23 CT): check --emit-body. 10 = dropped; 11 = held (a DONE without a verdict line or a
+    # PARTIAL; the watcher releases it as-is after 30 min); "MERGE <id>" + a body = a held step of this lane rides in
+    # this post: POST that body, then mark it and ack the hold. Odd output posts the original body (fail open).
+    # An exact owner-bound occurrence cannot be dropped, held or merged into a
+    # different body. Keep native and explicit required notices on this contract.
+    code, out = (0, "") if required else wake_filter("check", body, "--emit-body", "--idem", idempotency)
+    if code in (10, 11, 299):
+        return {"state": "FAILED", "disposition": "dropped" if code == 10 else "deferred",
+                "http_status": None, "network_attempted": False, "filter_exit": code,
+                "native_recipient_delivery": "unavailable"}
+    send, merge_id = body, None
+    lines = out.split("\n")
+    m = re.match(r"MERGE ([0-9a-f]{8,64}) ", lines[0]) if lines else None
+    if m and len(lines) > 1 and lines[1].strip():
+        try:
+            merged = json.loads(lines[1])
+            if isinstance(merged, dict):
+                send, merge_id = json.dumps(merged, separators=(",", ":")).encode(), m.group(1)
+        except ValueError:
+            pass
+    diagnostics = {}
+    _, status = spaced_post(url, None, lambda: _post(url, key, send, idempotency, diagnostics=diagnostics))
+    delivery = recipient_delivery(status, diagnostics.pop("recipient_run_id", None))
+    if accepted_status(status):
+        if required:
+            write_private(STATE / "outbox" / (payload["event_id"] + ".acceptance.json"),
+                          {"http_status": status, "body_sha256": hashlib.sha256(send).hexdigest(),
+                           "recipient_run_id": delivery.get("recipient_run_id")})
+        else:
+            wake_filter("mark", send)
+            if merge_id:
+                wake_filter("ack", b"", merge_id)
+    return {"state": "WEBHOOK_ACCEPTED" if accepted_status(status) else "FAILED",
+            "disposition": "webhook_accepted" if accepted_status(status) else "http_failed",
+            "http_status": status, "network_attempted": True, "filter_exit": code,
+            **diagnostics, **delivery}
+
+
+def post(url, key, body, idempotency):
+    """Legacy integer API. Local drop/defer returns 0, never an invented 2xx.
+
+    Callers needing local policy states must migrate to post_result().
+    This preserves the frozen wake-seat caller's integer comparison.
+    """
+    result = post_result(url, key, body, idempotency)
+    return result["http_status"] if result["http_status"] is not None else 0
+
+
+def unavailable_http_error_body(reason):
+    return {"representation": "allowlisted_projection", "raw_body_retained": False,
+            "body_available": False, "unavailable_reason": reason,
+            "body_sha256": None, "hash_scope": "unavailable", "body_size_bytes": None,
+            "captured_bytes": 0, "capture_limit_bytes": HTTP_ERROR_BODY_LIMIT,
+            "truncated": None, "format": "unavailable", "diagnostics": {}}
+
+
+def quota_count(value):
+    # Counts alone are diagnostic. Booleans, strings, floats and large numbers
+    # can carry arbitrary echoed data and are never copied to the projection.
+    return type(value) is int and 0 <= value <= 2147483647
+
+
+def scrubbed(value, limit=ERROR_CODE_LIMIT):
+    """One printable ASCII line of at most limit characters; a key-shaped token (a secret prefix, or 24+ characters
+    mixing letters and digits) becomes [masked]. None when nothing printable is left."""
+    text = " ".join("".join(c if " " <= c <= "~" else " " for c in str(value)).split())
+
+    def one(match):
+        word = match.group(0)
+        if SECRET_PREFIX_RE.match(word) or (len(word) >= 24 and re.search(r"[A-Za-z]", word) and re.search(r"[0-9]", word)):
+            return "[masked]"
+        return word
+    text = TOKENISH_RE.sub(one, text)[:limit]
+    return text or None
+
+
+def error_fields(value, depth=0, wrapper=None):
+    """The error code a response body names, kept scrubbed and bounded whatever it is (item 7b): code, error_code
+    or a nested type of an error object, the first of an errors list, an error or detail given as a bare string,
+    or a short one-line text body. A message stays prose and only feeds the exact per-minute quota match.
+    No request, header or URL text is searched or kept."""
+    if isinstance(value, str):
+        match = QUOTA_ERROR_RE.fullmatch(value)
+        if match:
+            limit, count = map(int, match.groups())
+            if quota_count(limit) and quota_count(count):
+                return {"classification": "automation_global_rate_limit", "error_code": "automation_global_rate_limit",
+                        "limit": limit, "current_count": count, "period_seconds": 60}
+        if wrapper in ("error", "detail") or (depth == 0 and "\n" not in value.strip() and len(value) <= ERROR_CODE_LIMIT):
+            code = scrubbed(value)
+            return {"classification": code, "error_code": code} if code else {}
+        return {}
+    if isinstance(value, list) and depth < 4:
+        return error_fields(value[0], depth + 1, wrapper) if value else {}
+    if isinstance(value, dict) and depth < 4:
+        for name in ERROR_CODE_KEYS:
+            code = value.get(name)
+            if (type(code) is int or isinstance(code, str)) and not (name == "type" and code == "error") and scrubbed(code):
+                fields = {"classification": scrubbed(code), "error_code": scrubbed(code)}
+                if code == "automation_global_rate_limit":
+                    for count_name in ("limit", "current_count"):
+                        count = value.get(count_name)
+                        if quota_count(count):
+                            fields[count_name] = count
+                    # Only explicit per-minute messages establish a time window.
+                return fields
+        for name in ERROR_WRAPPERS:
+            fields = error_fields(value.get(name), depth + 1, name)
+            if fields:
+                return fields
+    return {}
+
+
+def failure_code(receipt):
+    """{"error_code": code} for a log line when a non-2xx body named one, else {}."""
+    body = receipt.get("http_error_body") if isinstance(receipt, dict) else None
+    code = (body.get("diagnostics") or {}).get("error_code") if isinstance(body, dict) else None
+    return {"error_code": code} if isinstance(code, str) else {}
+
+
+def project_http_error_body(error):
+    """Read at most limit+1 bytes; hash the capture and retain an allowlist.
+
+    No HTTP headers or reason strings are inspected. Full bytes are unavailable
+    after projection. Truncated hashes identify a prefix, never the whole body.
+    """
+    chunks, size = [], 0
+    while size <= HTTP_ERROR_BODY_LIMIT:
+        chunk = error.read(HTTP_ERROR_BODY_LIMIT + 1 - size)
+        if not isinstance(chunk, bytes):
+            return unavailable_http_error_body("read_failed")
+        if not chunk:
+            break
+        chunks.append(chunk)
+        size += len(chunk)
+    raw = b"".join(chunks)
+    truncated = len(raw) > HTTP_ERROR_BODY_LIMIT
+    captured = raw[:HTTP_ERROR_BODY_LIMIT]
+    projection = {"representation": "allowlisted_projection", "raw_body_retained": False,
+                  "body_available": True, "body_sha256": hashlib.sha256(captured).hexdigest(),
+                  "hash_scope": "captured_prefix" if truncated else "full_body",
+                  "body_size_bytes": None if truncated else len(raw),
+                  "captured_bytes": len(captured), "capture_limit_bytes": HTTP_ERROR_BODY_LIMIT,
+                  "truncated": truncated, "format": "unclassified", "diagnostics": {}}
+    if truncated:
+        return projection  # a prefix cannot establish a complete message/JSON value
+    if not captured:
+        projection["format"] = "empty"
+        return projection
+    try:
+        text = captured.decode("utf-8")
+    except UnicodeError:
+        projection["format"] = "invalid_utf8"
+        return projection
+    try:
+        value = json.loads(text)
+        projection["format"] = "json"
+    except (ValueError, RecursionError):
+        projection["format"] = "text"
+        value = text
+    projection["diagnostics"] = error_fields(value)
+    return projection
+
+
+def _post(url, key, body, idempotency, *, timeout=30, diagnostics=None):
+    try:
+        request = urllib.request.Request(url, data=body, method="POST", headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer %s" % key,
+            "Idempotency-Key": idempotency,
+        })
+        with OPENER.open(request, timeout=timeout) as response:
+            if diagnostics is not None:
+                try:
+                    run_id = recipient_run_id(response.read(DELIVERY_BODY_LIMIT + 1))
+                except Exception:
+                    run_id = None  # an unreadable body cannot change the status or retry policy
+                if run_id:
+                    diagnostics["recipient_run_id"] = run_id
+            return response.status
+    except urllib.error.HTTPError as error:
+        code = error.code
+        try:
+            if diagnostics is not None:
+                try:
+                    projection = project_http_error_body(error)
+                except Exception:
+                    projection = unavailable_http_error_body("projection_failed")
+                diagnostics["http_error_body"] = projection
+        except Exception:
+            pass  # retention cannot change status, retry policy or hook behavior
+        finally:
+            try:
+                error.close()
+            except Exception:
+                pass  # never retain an exception message, URL or headers
+        return code
+    except (urllib.error.URLError, OSError, ValueError):
+        return 0
+
+
+NOTICE_KINDS = {"start", "step", "blocker", "decision", "done", "stalled", "review_result", "canceled", "urgent"}
+
+
+def notice_message(payload):
+    """Free text forwarded unchanged by the model-backed Lightning consumer.
+
+    The Grok receiver sees this text, sender name/id and native priority only.
+    JSON scalar quoting keeps newlines in source facts off the identity lines.
+    """
+    fields = {
+        "lane": payload["lane"], "run": payload["run"], "kind": payload["event_kind"],
+        "round": payload["review_round"], "step": payload.get("step"),
+        "occurrence": payload["notice_occurrence"], "recipient": payload["recipient"],
+        "priority": payload["priority"], "outcome": payload.get("outcome"),
+        "producer_verdict": payload.get("result_verdict"),
+        "review_verdict": payload.get("review_verdict"),
+        "review_status": "source_review_recorded" if payload.get("review_verdict") else "unreviewed",
+        "verdict": payload.get("verdict"), "reason": payload.get("reason"),
+        "rerun": payload.get("rerun"), "cancel_receipt_id": payload.get("cancel_receipt_id"),
+    }
+    if "milestone_message" in payload:
+        fields.update(message=payload["milestone_message"], path=payload["path"])
+    if payload.get("notice_binding", {}).get("owner_thread_id"):
+        fields["owner_thread_id"] = payload["notice_binding"]["owner_thread_id"]
+    if payload.get("tell_victor") is True:
+        fields["tell_victor"] = True
+    return "LANE_NOTICE " + payload["event_id"] + "\n" + "\n".join(
+        name + ": " + json.dumps(value, ensure_ascii=True, separators=(",", ":"))
+        for name, value in fields.items())
+
+
+def accepted_status(status):
+    """299 is the historical local suppression sentinel, never acceptance."""
+    return type(status) is int and 200 <= status < 300 and status != 299
+
+
+def recipient_run_id(raw):
+    """The recipient run id an accepted webhook response names, else None.
+
+    Looks only at RECIPIENT_RUN_KEYS at the top level, under "data" or "run",
+    and at run.id; an oversize, non-JSON or non-UUID body names none."""
+    if not isinstance(raw, bytes) or len(raw) > DELIVERY_BODY_LIMIT:
+        return None
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeError, RecursionError):
+        return None
+    places = [value]
+    if isinstance(value, dict):
+        places += [value.get("data"), value.get("run")]
+        if isinstance(value.get("data"), dict):
+            places.append(value["data"].get("run"))
+    for place in places:
+        if not isinstance(place, dict):
+            continue
+        keys = RECIPIENT_RUN_KEYS + (("id",) if place is not value else ())
+        for name in keys:
+            candidate = place.get(name)
+            if isinstance(candidate, str) and RECIPIENT_RUN_RE.fullmatch(candidate.lower()):
+                return candidate.lower()
+    return None
+
+
+def recipient_delivery(status, run_id):
+    """Receipt fields for the recipient's own delivery result. A 2xx without it is a failure."""
+    if accepted_status(status) and isinstance(run_id, str) and RECIPIENT_RUN_RE.fullmatch(run_id):
+        return {"native_recipient_delivery": "delivered", "sats_receipt": "DELIVERED",
+                "recipient_run_id": run_id, "native_delivery": "verified", "owner_receipt_id": run_id}
+    return {"native_recipient_delivery": "unavailable", "sats_receipt": "FAILED",
+            "native_delivery": "unavailable",
+            "delivery_failure": "native_recipient_delivery_unavailable" if accepted_status(status)
+            else "webhook_not_accepted"}
+
+
+def parse_local_binding(raw, lane, run):
+    def distinct_keys(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("duplicate binding field")
+            value[key] = item
+        return value
+    binding = json.loads(raw, object_pairs_hook=distinct_keys)
+    if not valid_binding(binding, lane, run):
+        raise ValueError("invalid local binding")
+    return binding
+
+
+def enroll_owner_binding(binding, *, preserve_existing=False, authority="local launch binding"):
+    """Enroll local authority before transport, using the refresher's stable lock.
+
+    Default proposals yield to an exact owner-held mapping. Explicit local
+    mappings must agree with history for transport. Registry health, capacity,
+    conflict and helper failures leave a local-only gap. Caller validation and
+    durable local proof writes remain outside this helper error boundary.
+    The consumer continues to validate its independent registry on ingress.
+    """
+    if not isinstance(binding, dict) or not valid_binding(binding, binding.get("lane"), binding.get("run")):
+        raise ValueError("invalid enrollment binding")
+    proposed_binding = dict(binding)
+    try:
+        helper = types.ModuleType("local_owner_enrollment")
+        helper.__file__ = str(OWNER_BINDINGS_HELPER)
+        exec(compile(OWNER_BINDINGS_HELPER.read_bytes(), str(OWNER_BINDINGS_HELPER), "exec"), helper.__dict__)
+        entry = {"binding": dict(binding), "owner": LOCAL_NOTICE_OWNER,
+                 "authority": authority, "notice_binding_used": authority == "local launch binding",
+                 "emission_verified": False}
+        added, _ = helper.merge(OWNER_BINDINGS_REGISTRY, [entry], retain_existing=preserve_existing)
+        enrolled_binding = entry["binding"]
+        if not valid_binding(enrolled_binding, proposed_binding["lane"], proposed_binding["run"]):
+            raise ValueError("invalid helper binding")
+        binding = enrolled_binding
+        receipt = {"state": "ENROLLED", "disposition": "added" if added else "already_enrolled"}
+    except Exception:
+        binding = proposed_binding
+        receipt = {"state": "UNAVAILABLE", "disposition": "owner_enrollment_unavailable"}
+    # Retain a durable gap independently of any HTTP attempt ledger.
+    ensure_state()
+    log(action="owner-enrollment", lane=binding["lane"], run=binding["run"], **receipt)
+    return binding, receipt
+
+
+def notice_binding(lane, run, test):
+    """Enroll the exact native identity from local launch authority or policy."""
+    if test or lane.upper().startswith("TEST"):
+        return None
+    raw = os.environ.get("SATS_NOTICE_BINDING")
+    try:
+        binding = parse_local_binding(raw, lane, run) if raw is not None else {
+            "lane": lane, "run": run, "recipient": DEFAULT_NOTICE_RECIPIENT, "priority": True}
+        binding, _ = enroll_owner_binding(binding, preserve_existing=raw is None,
+            authority="local launch binding" if raw is not None else "local native owner policy")
+        return binding
+    except ValueError:
+        ensure_state()
+        log(action="binding-rejected")  # never include supplied values or exception text
+        raise ValueError("local binding rejected") from None
+
+
+def valid_binding(binding, lane, run, test=False):
+    return single_line(lane, 500) and single_line(run, 500) \
+        and not test and not lane.upper().startswith("TEST") and isinstance(binding, dict) \
+        and {"lane", "run", "recipient", "priority"} <= set(binding) \
+        and set(binding) <= {"lane", "run", "recipient", "priority", "owner_thread_id"} \
+        and binding.get("lane") == lane and binding.get("run") == run \
+        and single_line(binding.get("recipient"), 500) and not binding["recipient"].upper().startswith("TEST") \
+        and binding.get("priority") is True \
+        and ("owner_thread_id" not in binding or
+             single_line(binding["owner_thread_id"], 500))
+
+
+def lane_registration(pack):
+    """LANE.json as a dict, else None. Every LANE.json read goes through here.
+
+    Reads only a regular file (O_NONBLOCK open, then fstat), so a FIFO, device or
+    symlink can never block or redirect a notice. Never raises.
+    """
+    try:
+        fd = os.open(Path(pack) / "LANE.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as stream:
+            if not S_ISREG(os.fstat(stream.fileno()).st_mode):
+                return None
+            row = json.loads(stream.read())
+        return row if isinstance(row, dict) else None
+    except Exception:
+        return None
+
+
+def tell_victor(pack, lane, run):
+    """The launcher's flag for this run. Anything but exactly true, or any read error, is false."""
+    row = lane_registration(pack) or {}
+    return row.get("tell_victor") is True and row.get("run") == registration_run(lane, run)
+
+
+def required_notice(payload, event_kind, review_round=0, occurrence="1", *, binding):
+    """Prepare only a notice whose lane/run matches an explicit recipient binding."""
+    if not valid_binding(binding, payload.get("lane", ""), payload.get("run"), payload.get("test", False)):
+        raise ValueError("exact launch recipient binding required")
+    if event_kind not in NOTICE_KINDS or not payload.get("lane") or not payload.get("run"):
+        raise ValueError("notice identity required")
+    if type(review_round) is not int or review_round < 0:
+        raise ValueError("invalid review round")
+    if event_kind == "review_result" and review_round < 1:
+        raise ValueError("review_result requires a positive round")
+    if not isinstance(occurrence, str) or not occurrence.strip():
+        raise ValueError("immutable notice occurrence required")
+    identity = {"lane": payload["lane"], "run": payload["run"], "event_kind": event_kind,
+                "step": payload.get("step"), "review_round": review_round, "notice_occurrence": occurrence,
+                "recipient": binding["recipient"], "priority": binding["priority"]}
+    event_id = hashlib.sha256(json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    envelope = dict(payload, **identity, event_id=event_id, delivery_contract="lane-required-v2",
+                    required_notice=True, notice_binding=dict(binding))
+    if event_kind in ("done", "blocker") and tell_victor(payload.get("pack"), payload["lane"], payload["run"]):
+        envelope["tell_victor"] = True  # outside the identity hash, so event_id and dedupe hold
+    envelope["message"] = notice_message(envelope)
+    return envelope
+
+
+def canceled(run):
+    """Only a supplied, exact-run terminal cancel receipt changes the classification.
+
+    No receipt is loaded from live state by this scratch candidate.
+    Launch/cancel owners still must supply and authenticate the receipt.
+    """
+    receipt = run.get("cancel_receipt")
+    return isinstance(receipt, dict) and receipt.get("run") == run["key"] \
+        and receipt.get("terminal_confirmed") is True \
+        and bool(receipt.get("receipt_id")) and bool(receipt.get("invocation_id"))
+
+
+STOP_PREFIXES = ("stop", "superseded", "cancel")  # <pack>/control/ markers, amendments 1227 and STOPMARKER-1336
+
+
+def intentional_stop(run):
+    """File name of a <pack>/control/ marker recording an intentional stop of this exact run, else None.
+
+    A marker is a regular file whose name starts with "stop", "superseded" or "cancel", in
+    any case: stop, superseded-by, SUPERSEDED-1300.md, CANCELLED-RESUMED-1320.md. Only a
+    marker that names this run counts (amendment STOPMARKER-1336): a run field ("run=<id>",
+    "run: <id>" or JSON {"run": ...}) equal to this run's SATS_RUN or run key, or, with no
+    run field, this run's ID in its text. A nameless marker is ignored, whatever its age.
+    `sats-completion-notify cancel` writes the run field. Marker contents are never sent.
+    """
+    names = {run["key"], run.get("raw_run")} - {None, ""}
+    try:
+        entries = sorted(Path(run["pack"], "control").iterdir())
+    except OSError:
+        return None
+    for path in entries:
+        if not path.name.lower().startswith(STOP_PREFIXES):
+            continue
+        try:
+            if not path.is_file():
+                continue
+            with open(path, "rb") as stream:
+                text = stream.read(4096).decode("utf-8", "replace")
+        except OSError:
+            continue
+        try:
+            value = json.loads(text)
+            named = value.get("run") if isinstance(value, dict) else None
+        except ValueError:
+            match = re.search(r"^\s*run\s*[:=]\s*(\S+)", text, re.MULTILINE)
+            named = match.group(1) if match else None
+        if named in names if named is not None else names & set(re.findall(r"[A-Za-z0-9._-]+", text)):
+            return path.name
+    return None
+
+
+def terminal_kind(run, payload):
+    """New notice semantics, separate from the tested legacy classifier fields."""
+    if payload.get("outcome") == "CANCELED":
+        return "canceled"
+    if run.get("unit_failed") or payload.get("outcome") in ("DIED", "LAUNCH_FAILED", "UNKNOWN", "RETRY", "REVIEW"):
+        return "blocker"
+    if run.get("event") == "StopFailure" or (run.get("key") and native_failure_marker(run["key"]).exists()):
+        return "blocker"  # any failed native turn in this run, including a later deduped event
+    line = payload.get("result_verdict") or ""
+    verdict = VERDICT_RE.search(line)
+    # Without PASS/FAIL/BLOCKED/PARTIAL, a G-format line ("DONE r5 ACCEPT", "STATE: DONE")
+    # passes on ACCEPT or DONE; REQUEST_CHANGES anywhere in it blocks.
+    other = re.findall(r"\b(ACCEPT|REQUEST_CHANGES|DONE)\b", line, re.ASCII)
+    token = verdict.group(1) if verdict else "REQUEST_CHANGES" if "REQUEST_CHANGES" in other \
+        else other[0] if other else None
+    if NEGATED_RE.search(line):
+        token = "NEGATED"  # "NOT DONE yet", "Partially DONE"
+    if token and token not in ("PASS", "ACCEPT", "DONE"):
+        return "blocker"
+    _, code, logged, _ = last_step(run)
+    if code is not None and code != 0:
+        return "blocker"  # a successful wrapper cannot mask the failed step
+    if "unit_failed" not in run and logged and code is None:
+        return "blocker"  # explicit native error or a step cut off after start
+    if payload.get("review_verdict") == "ACCEPT":
+        return "step"
+    # Amendment PASS-DONE-1344: a fresh successful producer verdict is its
+    # reported completion check. Native hooks have no supervisor/logged exit;
+    # that absence must not turn PASS (or ACCEPT/DONE) into a blocker. Explicit
+    # unit/step failures and review-only acceptance retain the guards above.
+    return "done" if payload.get("outcome") == "DONE" and payload.get("result_fresh") is True \
+        and token in ("PASS", "ACCEPT", "DONE") else "blocker"
+
+
+def terminal_summary(payload, kind):
+    """Only fixed safe facts, never report text, argv, stderr or hook reason."""
+    if payload.get("outcome") == "LAUNCH_FAILED":
+        return "TLDR: lane command launch failed."
+    if kind == "canceled" and payload.get("cancel_marker"):
+        return "TLDR: lane was stopped on purpose (control marker); no rerun."
+    return {
+        "canceled": "TLDR: lane cancellation was confirmed for this run.",
+        "step": "TLDR: source review accepted; lane acceptance remains pending.",
+        "done": "TLDR: lane passed its reported completion check.",
+        "blocker": "TLDR: lane stopped with a failed or unverified completion check.",
+    }[kind]
+
+
+def finish(run):
+    """Payload for a run, read once the agent has exited."""
+    try:
+        if registered_launch_failed(run):
+            outcome, text = "LAUNCH_FAILED", "LAUNCH_FAILED: command start not confirmed"
+            fields = {"step": run.get("step"), "step_name": None, "result_file": None,
+                      "result_verdict": None, "result_fresh": None, "review_verdict": None, "rerun": "producer"}
+        elif canceled(run):
+            outcome, text = "CANCELED", "CANCELED: exact run terminal receipt"
+            fields = {"step": run.get("step"), "step_name": None, "result_file": None,
+                      "result_verdict": None, "result_fresh": None, "review_verdict": None, "rerun": "none"}
+        elif (marker := intentional_stop(run)):
+            marker = "control/" + re.sub(r"[^A-Za-z0-9._-]", "_", marker)[:80]
+            outcome, text = "CANCELED", "CANCELED: intentional stop, %s" % marker
+            fields = {"step": run.get("step"), "step_name": None, "result_file": None,
+                      "result_verdict": None, "result_fresh": None, "review_verdict": None, "rerun": "none",
+                      "cancel_marker": marker}
+        else:
+            outcome, text, fields = classify(run)
+    except Exception:  # a report with less detail beats no report from either poster
+        log_error("classify")
+        outcome, text = "UNKNOWN", "UNKNOWN: the hook could not classify this run; read the pack"
+        fields = {"step": None, "step_name": None, "result_file": None, "result_verdict": None,
+                  "result_fresh": None, "review_verdict": None, "rerun": "none"}
+    reason = run["reason"]
+    if outcome == "DIED":
+        reason += "; no RESULT* in the pack"
+        if fields["step"] in ("review", "retry"):
+            reason += "; last step %s" % fields["step"]
+    payload = {
+        "lane": run["lane"],
+        "pack": run["pack"],
+        "host": socket.gethostname(),
+        "agent": run["agent"],
+        "verdict": text,
+        "reason": reason,
+        "ts_ct": now_ct(),
+        "test": run["test"],
+        "event": run["event"],
+        "run": run["key"],
+        "outcome": outcome,
+        **fields,
+    }
+    if outcome == "CANCELED" and "cancel_marker" not in fields:
+        payload["cancel_receipt_id"] = run["cancel_receipt"]["receipt_id"]
+    match = ROUND_RE.search((fields.get("step_name") or "") + ".md")
+    binding = run.get("notice_binding")
+    if not valid_binding(binding, run["lane"], run["key"], run["test"]):
+        return payload  # unbound and TEST lanes keep the legacy filter/consumer path
+    kind = terminal_kind(run, payload)
+    payload.update(milestone_message=terminal_summary(payload, kind), path=str(
+        Path(run["pack"]) / (payload.get("result_file") or payload.get("cancel_marker") or "LANE.json")))
+    return required_notice(payload, kind,
+                           int(match.group(1)) if match else 0, occurrence="launch-terminal", binding=binding)
+
+
+def send(run, poster):
+    """Reserve at most three attempts durably, shared by every poster/restart.
+
+    The caller holds the run lock. An interrupted reservation consumes an attempt;
+    uncertain transport outcomes never become acceptance or a fresh retry budget.
+    """
+    budget = run.get("delivery_budget")
+    if budget is not None and (not math.isfinite(budget) or not 0 < budget <= 30):
+        raise ValueError("invalid native delivery budget")
+    deadline = time.monotonic() + budget if budget is not None else None
+    key = run["key"]
+    outbox = STATE / "outbox" / (key + ".json")
+    if not outbox.exists():
+        write_private(outbox, finish(run))
+    payload = json.loads(outbox.read_text())
+    body = outbox.read_bytes()
+    if run.get("test"):
+        log(action="test-local-only", run=key, poster=poster)
+        return "local-only"  # TEST never calls the filter, credential store or webhook
+    if os.environ.get("SATS_MILESTONES") == "1":
+        try:
+            terminal_log(run, payload)
+        except Exception:
+            log_error("terminal-milestone")  # native hooks remain fail-open
+    if valid_binding(run.get("notice_binding"), run["lane"], key):
+        _, enrollment = enroll_owner_binding(run["notice_binding"])
+        if enrollment["state"] != "ENROLLED":
+            write_private(STATE / "outbox" / (key + ".enrollment-receipt.json"), {
+                "state": "FAILED", "disposition": "owner_enrollment_unavailable",
+                "native_recipient_delivery": "unavailable", "local_recorded": True})
+            return "failed:owner_enrollment_unavailable"
+    acceptance = STATE / "outbox" / (payload.get("event_id", key) + ".acceptance.json")
+    if acceptance.exists():
+        proof = json.loads(acceptance.read_text())
+        if accepted_status(proof.get("http_status")) and proof.get("body_sha256") == hashlib.sha256(body).hexdigest():
+            outbox.rename(STATE / "sent" / (key + ".json"))
+            return "sent:%d" % proof["http_status"]
+    attempts_path = STATE / "outbox" / (key + ".attempts.jsonl")
+    records = [json.loads(line) for line in attempts_path.read_text().splitlines()] if attempts_path.exists() else []
+    used = sum(record.get("phase") == "reserved" or "phase" not in record for record in records)
+    refreshed = False
+    status = 0
+    for number in range(used + 1, len(RETRY_DELAYS) + 1):
+        delay = RETRY_DELAYS[number - 1]
+        if deadline is not None and time.monotonic() + delay >= deadline:
+            return "failed:delivery-budget"
+        time.sleep(delay)
+        append(attempts_path, json.dumps({"phase": "reserved", "attempt": number,
+               "run": key, "event_id": payload.get("event_id"), "poster": poster}))
+        source = None
+        try:
+            url, secret, source = webhook(cached_only=True) if deadline is not None else webhook()
+            if url is None:
+                receipt = {"state": "FAILED", "disposition": "deferred", "http_status": None,
+                           "network_attempted": False, "native_recipient_delivery": "unavailable"}
+            elif deadline is not None:
+                # Launcher failures use only bound immutable transport, with the same
+                # outbox and budget as the native poster. The spacing wait counts against it.
+                diagnostics = {}
+
+                def bounded():
+                    remaining = deadline - time.monotonic()
+                    return _post(url, secret, body, payload.get("event_id", key), timeout=remaining,
+                                 diagnostics=diagnostics) if remaining > 0 else None
+                _, status = spaced_post(url, deadline, bounded)
+                if status is None:
+                    receipt = {"state": "FAILED", "disposition": "delivery-budget", "http_status": None,
+                               "network_attempted": False, "native_recipient_delivery": "unavailable"}
+                else:
+                    receipt = {"state": "WEBHOOK_ACCEPTED" if accepted_status(status) else "FAILED",
+                               "disposition": "webhook_accepted" if accepted_status(status) else "http_failed",
+                               "http_status": status, "network_attempted": True,
+                               **{k: v for k, v in diagnostics.items() if k == "http_error_body"},
+                               **recipient_delivery(status, diagnostics.get("recipient_run_id"))}
+            else:
+                receipt = post_result(url, secret, body, payload.get("event_id", key))
+        except Exception:
+            log_error("native-transport")
+            receipt = {"state": "FAILED", "disposition": "transport_unavailable", "http_status": None,
+                       "native_recipient_delivery": "unavailable"}
+        status = receipt["http_status"]
+        append(attempts_path, json.dumps({"phase": "result", "attempt": number,
+               "run": key, "event_id": payload.get("event_id"), "poster": poster, **receipt}))
+        log(action="post", run=key, poster=poster, http=status, state=receipt["state"], lane=payload["lane"],
+            **failure_code(receipt))
+        if receipt["state"] == "WEBHOOK_ACCEPTED" and accepted_status(status):
+            outbox.rename(STATE / "sent" / (key + ".json"))
+            return "sent:%d" % status
+        if receipt["disposition"] in ("dropped", "deferred", "transport_unavailable", "delivery-budget"):
+            return "failed:%s" % receipt["disposition"]
+        if deadline is None and status in (401, 403, 404) and source == "cache" and not refreshed:
+            try:
+                webhook(refresh=True)
+            except Exception:
+                log_error("native-credential-refresh")
+                return "failed:credential_refresh_unavailable"
+            refreshed = True
+    return "failed:%s:attempt-cap-3" % status
+
+
+def deliver_once(run, poster):
+    """Serialize posters, honoring only a real accepted status, never legacy 299."""
+    key = run["key"]
+    fd = os.open(STATE / "outbox" / (key + ".lock"), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        prior = os.pread(fd, 200, 0).decode("ascii", "replace").strip()
+        match = re.match(r"sent:([0-9]{3})(?: |$)", prior)
+        if match and accepted_status(int(match.group(1))):
+            log(action="dup suppressed", run=key, poster=poster)
+            return prior
+        if (STATE / "sent" / (key + ".json")).exists():
+            # Legacy sent files without a real acceptance receipt require owner reconciliation.
+            return "failed:legacy-unverified-acceptance"
+        if not run.get("test") and not run.get("graced") and not (STATE / "outbox" / (key + ".json")).exists():
+            if requeue_path(key).exists():
+                return "deferred:grace"
+            try:
+                died = finish(run).get("outcome") == "DIED"
+            except Exception:
+                log_error("grace-classify")
+                died = False
+            if died:
+                # Sats 15:13 CT: no RESULT* yet. A detached drainer outside this unit waits up to
+                # RESULT_GRACE seconds for one before classifying; never a DIED from a slow writer.
+                enqueue(key, {"type": "grace", "run": run, "poster": poster,
+                              "grace_until": time.time() + RESULT_GRACE})
+                outcome = "deferred:grace"
+                os.ftruncate(fd, 0)
+                os.pwrite(fd, ("%s by %s\n" % (outcome, poster)).encode(), 0)
+                os.fsync(fd)
+                kick_drainer()
+                return outcome
+        outcome = send(run, poster)
+        os.ftruncate(fd, 0)
+        os.pwrite(fd, ("%s by %s\n" % (outcome, poster)).encode(), 0)
+        os.fsync(fd)
+        if not outcome.startswith("sent:") and outcome != "failed:legacy-unverified-acceptance" \
+                and not run.get("test") and (STATE / "outbox" / (key + ".json")).exists():
+            enqueue(key, {"type": "native", "run": run, "tries": 0, "next_at": time.time() + REQUEUE_BASE})
+            kick_drainer()
+        else:
+            requeue_path(key).unlink(missing_ok=True)
+        return outcome
+    finally:
+        os.close(fd)
+
+
+# --- durable terminal requeue (Sats 2026-10-14 15:13 CT) ---------------------
+# A terminal that exhausts its three attempts is never dropped: it waits on disk under
+# requeue/ with its immutable body and event id and is retried with exponential backoff
+# (REQUEUE_BASE doubling, capped at REQUEUE_CAP) until the webhook accepts it. The
+# drainer runs from sats-completion-requeue.timer and is kicked at once on enqueue.
+RESULT_GRACE = float(os.environ.get("SATS_RESULT_GRACE", "60"))
+REQUEUE_BASE = float(os.environ.get("SATS_REQUEUE_BASE", "30"))
+REQUEUE_CAP = 600.0
+
+
+def requeue_path(key):
+    return STATE / "requeue" / (key + ".json")
+
+
+def enqueue(key, entry):
+    (STATE / "requeue").mkdir(mode=0o700, exist_ok=True)
+    path = requeue_path(key)
+    if path.exists() and entry.get("type") != "grace":
+        try:
+            old = json.loads(path.read_text())
+            if old.get("type") == entry.get("type"):
+                return  # already queued: keep its backoff state
+        except ValueError:
+            pass
+    entry.update(key=key, queued_at=time.time())
+    write_private(path, entry)
+    log(action="requeue-add", run=key, type=entry.get("type"))
+
+
+def kick_drainer():
+    """Start the drainer now. A start that fails is an error line with its exit status and systemctl's scrubbed
+    first words, never silence (item 7c: the unit was missing, so every kick since 10-18 failed unseen). Never
+    raises: the entry stays queued for sats-completion-requeue.timer."""
+    if os.environ.get("SATS_REQUEUE_NO_KICK") == "1":
+        return
+    try:
+        done = subprocess.run(["systemctl", "--user", "start", "--no-block", "sats-completion-requeue.service"],
+                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=10)
+    except Exception:
+        log_error("requeue-kick")
+        return
+    if done.returncode != 0:
+        try:
+            detail = scrubbed(done.stderr.decode("utf-8", "replace"), 200) or ""
+            append(ERRORS, "%s requeue-kick pid=%d exit=%d %s" % (now_ct(), os.getpid(), done.returncode, detail))
+            log(action="requeue-kick-failed", exit=done.returncode, stderr=detail)
+        except Exception:
+            pass
+
+
+def retry_native(entry):
+    """One POST of the stored native terminal body; True once accepted (or already sent)."""
+    key = entry["key"]
+    fd = os.open(STATE / "outbox" / (key + ".lock"), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        prior = os.pread(fd, 200, 0).decode("ascii", "replace").strip()
+        match = re.match(r"sent:([0-9]{3})(?: |$)", prior)
+        if match and accepted_status(int(match.group(1))):
+            return True
+        outbox = STATE / "outbox" / (key + ".json")
+        if not outbox.exists():
+            return (STATE / "sent" / (key + ".json")).exists()
+        body = outbox.read_bytes()
+        event_id = json.loads(body).get("event_id", key)
+        try:
+            url, secret, _ = webhook()
+            receipt = post_result(url, secret, body, event_id) if url else {"state": "FAILED", "http_status": None}
+        except Exception:
+            log_error("requeue-transport")
+            receipt = {"state": "FAILED", "http_status": None}
+        status = receipt.get("http_status")
+        log(action="post", run=key, poster="requeue", http=status, state=receipt["state"], lane=entry["run"].get("lane"),
+            sats_receipt=receipt.get("sats_receipt"), recipient_run_id=receipt.get("recipient_run_id"), **failure_code(receipt))
+        if receipt["state"] == "WEBHOOK_ACCEPTED" and accepted_status(status):
+            outbox.rename(STATE / "sent" / (key + ".json"))
+            os.ftruncate(fd, 0)
+            os.pwrite(fd, ("sent:%d by requeue\n" % status).encode(), 0)
+            os.fsync(fd)
+            return True
+        return False
+    finally:
+        os.close(fd)
+
+
+def retry_milestone(entry):
+    key = entry["key"]
+    directory = STATE / "milestones"
+    fd = os.open(directory / (key + ".lock"), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        body = (directory / (key + ".json")).read_bytes()
+        digest = hashlib.sha256(body).hexdigest()
+        proof_path = directory / (key + ".acceptance.json")
+        if proof_path.exists():
+            proof = json.loads(proof_path.read_text())
+            if accepted_status(proof.get("http_status")) and proof.get("body_sha256") == digest:
+                return True
+        event_id = json.loads(body)["event_id"]
+        diagnostics = {}
+        try:
+            url, secret, _ = webhook()
+            status = spaced_post(url, None, lambda: _post(url, secret, body, event_id, diagnostics=diagnostics))[1] \
+                if url else None
+        except Exception:
+            log_error("requeue-milestone-transport")
+            status = None
+        accepted = accepted_status(status)
+        run_id = diagnostics.get("recipient_run_id") if accepted else None
+        delivery = recipient_delivery(status, run_id)
+        append(directory / (key + ".attempts.jsonl"), json.dumps({"phase": "requeue", "http_status": status,
+               "state": "WEBHOOK_ACCEPTED" if accepted else "FAILED", "event_id": event_id,
+               "recipient_run_id": run_id, **{k: v for k, v in diagnostics.items() if k == "http_error_body"}}))
+        log(action="milestone-post", event_id=event_id, lane=entry.get("lane"), kind=entry.get("kind"),
+            http=status, state="WEBHOOK_ACCEPTED" if accepted else "FAILED", poster="requeue",
+            sats_receipt=delivery["sats_receipt"], recipient_run_id=run_id, **failure_code(diagnostics))
+        if accepted:
+            write_private(proof_path, {"http_status": status, "body_sha256": digest, "recipient_run_id": run_id})
+            # The saved receipt of the failed explicit call now reports the requeue's delivery result.
+            receipt_path = directory / (key + ".receipt.json")
+            try:
+                receipt = json.loads(receipt_path.read_text())
+            except (OSError, ValueError):
+                receipt = None
+            if isinstance(receipt, dict):
+                for name in ("recipient_run_id", "delivery_failure", "owner_receipt_id"):
+                    receipt.pop(name, None)
+                receipt.update(state="WEBHOOK_ACCEPTED", http_status=status, disposition="webhook_accepted",
+                               delivery_exit=0, requeued_delivery=True, **delivery)
+                write_private(receipt_path, receipt)
+        return accepted
+    finally:
+        os.close(fd)
+
+
+def requeue_main(argv, *, sleep=time.sleep, idle_exit=90.0, max_runtime=840.0):
+    """Drain requeue/: grace entries first, then due retries. One drainer at a time."""
+    ensure_state()
+    directory = STATE / "requeue"
+    directory.mkdir(mode=0o700, exist_ok=True)
+    lock = os.open(directory / ".drain.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return 0
+    started = time.time()
+    while True:
+        entries = sorted(directory.glob("*.json"))
+        if not entries:
+            return 0
+        soonest = None
+        for path in entries:
+            try:
+                entry = json.loads(path.read_text())
+            except (OSError, ValueError):
+                continue
+            now = time.time()
+            if entry.get("type") == "grace":
+                run = entry["run"]
+                try:
+                    ready = finish(run).get("outcome") != "DIED"
+                except Exception:
+                    ready = False
+                if ready or now >= entry["grace_until"]:
+                    path.unlink(missing_ok=True)
+                    run["graced"] = True
+                    log(action="grace-release", run=entry["key"], result_found=ready,
+                        waited_ms=int((now - entry["queued_at"]) * 1000))
+                    deliver_once(run, entry.get("poster", "grace"))
+                    continue
+                due = now + 1
+            elif now >= entry.get("next_at", 0):
+                done = retry_native(entry) if entry.get("type") == "native" else retry_milestone(entry)
+                if done:
+                    path.unlink(missing_ok=True)
+                    log(action="requeue-delivered", run=entry["key"], tries=entry.get("tries", 0) + 1)
+                    continue
+                entry["tries"] = entry.get("tries", 0) + 1
+                entry["next_at"] = time.time() + min(REQUEUE_CAP, REQUEUE_BASE * 2 ** entry["tries"])
+                write_private(path, entry)
+                due = entry["next_at"]
+            else:
+                due = entry["next_at"]
+            soonest = due if soonest is None else min(soonest, due)
+        if soonest is None:
+            continue
+        wait = soonest - time.time()
+        if wait > idle_exit or time.time() - started > max_runtime:
+            return 0  # the timer comes back; nothing due soon
+        sleep(max(0.2, min(wait, 1.0)))
+
+
+def deliver(run):
+    """Runs in the detached child: wait for the agent to exit, then POST once."""
+    started = time.time()
+    wait_exit(run["pid"], run["ticks"])
+    log(action="exit", run=run["key"], waited_ms=int((time.time() - started) * 1000))
+    deliver_once(run, "native")
+
+
+def spawn(run):
+    """Fork a session-detached sender so the hook returns before delivery.
+    Returns False when no sender could start."""
+    try:
+        child = os.fork()
+    except OSError:
+        return False
+    if child > 0:
+        _, status = os.waitpid(child, 0)  # the middle process exits at once
+        return os.waitstatus_to_exitcode(status) == 0
+    code = 1
+    try:
+        os.setsid()
+        # In a lane unit systemd TERMs the leftover processes when the main one exits and
+        # starts ExecStopPost once they are gone, so the sender finishes its POST first.
+        signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT, signal.SIGHUP})
+        if os.fork() > 0:
+            os._exit(0)
+        code = 0
+        devnull = os.open(os.devnull, os.O_RDWR)
+        for fd in (0, 1, 2):
+            os.dup2(devnull, fd)
+        os.closerange(3, 1024)  # no inherited hook pipes keep the agent waiting
+        deliver(run)
+    except BaseException:
+        try:
+            log_error("deliver")
+        except BaseException:
+            pass
+    os._exit(code)
+
+
+# --- main --------------------------------------------------------------------
+
+def lane_label(lane):
+    """(lane as reported, test flag). Test lanes carry a TEST- prefix."""
+    test = os.environ.get("SATS_TEST") == "1" or lane.upper().startswith("TEST")
+    if test and not lane.upper().startswith("TEST"):
+        lane = "TEST-" + lane
+    return lane, test
+
+
+def unit_run():
+    """(key tail, launch time or None) for the systemd launch recipe, which sets SATS_RUN.
+    The launch time, to the nanosecond, is the RESULT cutoff for both reporters. A missing
+    or malformed SATS_RUN falls back to the unit's INVOCATION_ID, which the agent's hooks
+    and ExecStopPost share, so both reporters still use one key."""
+    match = RUN_RE.fullmatch(os.environ.get("SATS_RUN") or "")
+    if match:
+        return "run-" + match.group(0), int(match.group(1)) + int(match.group(2)) / 1e9
+    invocation = os.environ.get("INVOCATION_ID", "")
+    if not re.fullmatch(r"[a-fA-F0-9]{32}", invocation):
+        raise ValueError("valid local invocation required")
+    return "run-bad-" + invocation, None
+
+
+def run_key(lane, tail):
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", lane)[:60]
+    digest = hashlib.sha256(lane.encode()).hexdigest()[:10]
+    return "%s-%s-%s" % (safe, digest, tail)
+
+
+def claim(key):
+    """True for the first native event of a run, False for every later one."""
+    # Claims made before 18:14 CDT on 2026-10-07 put the agent type in front of the key.
+    if any((STATE / "sent" / ("%s-%s.claim" % (kind, key))).exists() for kind in ("claude", "codex")):
+        return False
+    try:
+        os.close(os.open(STATE / "sent" / (key + ".claim"), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+    except FileExistsError:
+        return False
+    return True
+
+
+def native_run(launched, ticks):
+    """(key tail, RESULT cutoff) for a native event of the launch (launched pid, start ticks).
+    A systemd lane (SATS_RUN set, or the launch runs in a sats-lane unit) uses the same
+    identity as its ExecStopPost; a plain-nohup lane uses the launched process."""
+    if "SATS_RUN" in os.environ or in_lane_unit(os.getpid()) or in_lane_unit(launched):
+        tail, launch_time = unit_run()
+        return tail, epoch(ticks) if launch_time is None else launch_time
+    return "%d-%d" % (launched, ticks), epoch(ticks)
+
+
+def exit_report(argv):
+    """ExecStopPost of a lane unit: report the exit unless a native hook already did."""
+    raw = os.environ.get("SATS_LANE")
+    if not raw:
+        return
+    ensure_state()
+    lane, test = lane_label(raw)
+    tail, launched = unit_run()
+    reason = "systemd result=%s code=%s status=%s" % tuple(
+        re.sub(r"[^A-Za-z0-9._-]", "_", os.environ.get(name, "unknown"))[:40]
+        for name in ("SERVICE_RESULT", "EXIT_CODE", "EXIT_STATUS"))
+    if launched is None:
+        reason += "; SATS_RUN missing or malformed"
+    status = tuple(os.environ.get(name, "unknown") for name in ("SERVICE_RESULT", "EXIT_CODE", "EXIT_STATUS"))
+    unit_failed = status != ("success", "exited", "0")
+    unit_exit = re.sub(r"[^A-Za-z0-9._/-]", "_", "%s/%s" % status[1:])[:40]
+    since = time.time() if launched is None else launched
+    agent = re.sub(r"[^A-Za-z0-9._-]", "_", argv[0])[:20] if argv else "unknown"
+    key = run_key(lane, tail)
+    log(action="unit-exit", run=key, lane=lane, reason=reason)
+    if launched is None:
+        try:
+            recorded = float(native_since_marker(key).read_text())
+            if math.isfinite(recorded) and 0 <= recorded <= since:
+                since = recorded
+        except (OSError, ValueError):
+            pass  # no native launch evidence: retain the conservative cutoff
+    run_info = {"key": key, "agent": agent, "lane": lane, "test": test,
+                  "pack": os.environ.get("SATS_PACK") or os.getcwd(), "since": since,
+                  "raw_run": os.environ.get("SATS_RUN") or os.environ.get("INVOCATION_ID") or key,
+                  "event": "ExecStopPost", "reason": reason, "step": env_step(),
+                  "unit_failed": unit_failed, "unit_exit": unit_exit,
+                  "notice_binding": notice_binding(lane, key, test)}
+    if os.environ.get("SATS_MILESTONES") == "1":
+        try:
+            payload = terminal_payload(run_info)
+            mark_terminal(run_info, payload)
+        except Exception:
+            log_error("terminal-registry")
+    deliver_once(run_info, "systemd")
+
+
+def run(argv):
+    if argv and argv[0] == "exit":
+        exit_report(argv[1:])
+        return
+    if not argv or argv[0] not in ("claude", "codex"):
+        return
+    agent = argv[0]
+    event = read_event(agent, argv[1:])
+    pid, agent_argv = find_agent(agent)
+    if not pid or not non_interactive(agent, agent_argv):
+        return  # interactive session, or not called by an agent
+    pack = os.environ.get("SATS_PACK") or cwd_of(pid) or os.path.realpath(event.get("cwd") or os.getcwd())
+    launch = launch_of(pack, pid)
+    if launch is None:
+        if os.environ.get("SATS_LANE"):
+            ensure_state()
+            log(action="helper", lane=os.environ["SATS_LANE"], agent_pid=pid)
+        return  # not a lane worker: helper, reviewer, or an agent no launch recorded
+    owner, launched = launch
+    ticks = start_ticks(launched)
+    if ticks is None:
+        return
+    lane, test = lane_label(os.environ.get("SATS_LANE") or owner)
+    ensure_state()
+    name, run_id, reason = describe(agent, event)
+
+    # One signal per launch: later events of it, from this agent or another it ran, are dropped.
+    tail, since = native_run(launched, ticks)
+    key = run_key(lane, tail)
+    # Store evidence before deferral/dedup: a later failed turn must not be
+    # hidden by the first Stop, and invocation-id fallback needs the launch
+    # cutoff after its process has disappeared. These files contain no reason.
+    if name == "StopFailure":
+        write_private(native_failure_marker(key), "StopFailure")
+    if tail.startswith("run-bad-"):
+        write_private(native_since_marker(key), since)
+    try:
+        record_step(key)
+    except (OSError, ValueError):
+        log_error("record_step")  # the step is detail; the claim and report still go ahead
+    # In a systemd lane only ExecStopPost knows the final wrapper exit. Do not
+    # claim, queue or post a native payload that could hide that later failure.
+    # Preserve the step marker above for the authoritative terminal reporter.
+    if tail.startswith("run-"):
+        log(action="defer-to-systemd", run=key, event=name)
+        return
+    if not claim(key):
+        log(action="dedup", run=key, event=name)
+        return
+    log(action="claim", run=key, event=name, lane=lane, agent_pid=pid, launched_pid=launched, run_id=run_id)
+    run_info = {"key": key, "agent": agent, "lane": lane, "pack": str(pack), "pid": launched,
+                "since": since, "ticks": ticks, "test": test, "event": name, "reason": reason,
+                "raw_run": os.environ.get("SATS_RUN") or os.environ.get("INVOCATION_ID") or key,
+                "step": env_step(), "notice_binding": notice_binding(lane, key, test)}
+    if not spawn(run_info):
+        # Preserve the failed claim as evidence while allowing the next event to retry.
+        marker = STATE / "sent" / (key + ".claim")
+        marker.rename(marker.with_name(marker.name + ".abandoned.%d" % time.time_ns()))
+        log(action="spawn-failed", run=key, event=name)
+
+
+# --- explicit milestones and launch registration -----------------------------
+
+MILESTONE_KINDS = ("start", "step", "blocker", "decision", "done", "stalled", "urgent")  # watchdog URGENT, 2026-10-20
+TERMINAL_MILESTONE_KINDS = ("done", "blocker", "decision")
+LANE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}")
+
+
+def configure_state(path):
+    """Invocation-local override for isolated tests. Native hooks use the default."""
+    global STATE, LOG, ERRORS, CACHE
+    STATE = Path(path)
+    if not STATE.is_absolute():
+        raise ValueError("absolute state directory required")
+    LOG, ERRORS, CACHE = STATE / "hook.log", STATE / "errors.log", STATE / "webhook.json"
+
+
+def single_line(value, limit=4096):
+    return isinstance(value, str) and bool(value.strip()) and len(value) <= limit and not any(
+        ord(c) < 32 or ord(c) == 127 or c in "\u0085\u2028\u2029" for c in value)
+
+
+def binding_key(lane, raw_run):
+    """Both launch and explicit emitter use the native systemd run identity."""
+    return run_key(lane, "run-" + raw_run) if RUN_RE.fullmatch(raw_run) else raw_run
+
+
+def registration_run(lane, run):
+    """Reverse the standard binding alias only for this exact lane.
+
+    Transport keeps its derived run key; local metadata uses LANE.json's run.
+    Never read the current registration to label a delayed old terminal event.
+    """
+    prefix = run_key(lane, "run-")
+    if run.startswith(prefix) and RUN_RE.fullmatch(run[len(prefix):]):
+        return run[len(prefix):]
+    return run
+
+
+def milestone_line(payload, kind, run, message, path):
+    """Stable collector-readable local proof without changing the wire payload."""
+    local, zone = payload["ts_ct"].rsplit(" ", 1)
+    stamp = datetime.strptime(local, "%Y-%m-%d %H:%M:%S").replace(tzinfo=CT)
+    if stamp.tzname() != zone:
+        stamp = stamp.replace(fold=1)
+    if stamp.tzname() != zone or not single_line(run) or any(c.isspace() for c in run):
+        raise ValueError("invalid local milestone identity")
+    return "%s kind=%s run=%s lane=%s %s %s" % (
+        stamp.isoformat(), kind, run, payload["lane"], message, path)
+
+
+def append_milestone(path, event_id, line):
+    """Fsync one line under a log lock. Recover append-before-receipt crashes.
+
+    The event marker in the log is the append commit record; a separate receipt
+    cannot safely decide whether an interrupted append already happened.
+    """
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        marker = ("event_id=" + event_id).encode()
+        data = (line + " event_id=" + event_id + "\n").encode("utf-8")
+        tail = b""
+        with os.fdopen(os.dup(fd), "rb") as stream:
+            for prior in stream:
+                if prior.endswith(b"\n") and prior.rstrip(b"\n").rsplit(b" ", 1)[-1] == marker:
+                    os.fsync(fd)
+                    return False
+                tail = prior if not prior.endswith(b"\n") else b""
+        if tail:
+            if not data.startswith(tail):
+                raise ValueError("another occurrence has an incomplete log append")
+            data = data[len(tail):]
+        # os.write can be short even for a regular file.
+        while data:
+            written = os.write(fd, data)
+            if written == 0:
+                raise OSError("short log write")
+            data = data[written:]
+        os.fsync(fd)
+        parent_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(parent_fd)
+        finally:
+            os.close(parent_fd)
+        return True
+    finally:
+        os.close(fd)
+
+
+def registry_lock(lanedir):
+    fd = os.open(Path(lanedir) / ".LANE.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    return fd
+
+
+def terminal_payload(run_info):
+    for sub in ("sent", "outbox"):
+        path = STATE / sub / (run_info["key"] + ".json")
+        if path.exists():
+            return json.loads(path.read_text())
+    return finish(run_info)
+
+
+def terminal_log(run_info, payload):
+    """Use the existing terminal payload. Never send a second terminal notice."""
+    if not valid_binding(run_info.get("notice_binding"), run_info["lane"], run_info["key"], run_info["test"]):
+        return
+    if payload.get("outcome") != "LAUNCH_FAILED":
+        record_registered_start(run_info["lane"], run_info.get("raw_run") or run_info["key"], run_info["pack"])
+    event_id = payload.get("event_id") or hashlib.sha256((run_info["key"] + "/terminal").encode()).hexdigest()
+    kind = payload.get("event_kind", terminal_kind(run_info, payload))
+    text = payload.get("milestone_message") or terminal_summary(payload, kind)
+    path = Path(payload.get("path") or str(Path(run_info["pack"]) / "LANE.json"))
+    raw_run = registration_run(run_info["lane"], run_info.get("raw_run") or run_info["key"])
+    append_milestone(Path(run_info["pack"]) / "MILESTONES.log", event_id,
+                     milestone_line(payload, kind, raw_run, text, path))
+
+
+def mark_terminal(run_info, payload):
+    """Only ExecStopPost marks a registered run terminal, never an agent Stop."""
+    fd = registry_lock(run_info["pack"])
+    try:
+        path = Path(run_info["pack"]) / "LANE.json"
+        registration = lane_registration(run_info["pack"])
+        if registration is None:
+            raise ValueError("unreadable registration")  # logged by the caller; delivery continues
+        raw_run = os.environ.get("SATS_RUN")
+        binding = run_info.get("notice_binding")
+        if (registration.get("run") != raw_run or registration.get("lane") != run_info["lane"] or
+                registration.get("recipient") != (binding or {}).get("recipient")):
+            return
+        registration.update(status="terminal", ended_at=time.time(), outcome=payload.get("outcome", "UNKNOWN"),
+                            service_result=os.environ.get("SERVICE_RESULT", "unknown"),
+                            exit_code=os.environ.get("EXIT_CODE", "unknown"),
+                            exit_status=os.environ.get("EXIT_STATUS", "unknown"))
+        write_private(path, registration)
+    finally:
+        os.close(fd)
+
+
+def milestone_receipt(payload, state, status, attempts, log_path, appended, disposition=None, run_id=None):
+    return {"event_id": payload["event_id"], "state": state, "http_status": status,
+            "attempts": attempts, "log_path": str(log_path), "local_appended": appended,
+            "disposition": disposition or ("webhook_accepted" if state == "WEBHOOK_ACCEPTED" else "http_failed"),
+            **recipient_delivery(status if state == "WEBHOOK_ACCEPTED" else None, run_id)}
+
+
+def validate_milestone_fields(args):
+    if not LANE_ID_RE.fullmatch(args.lane) or not all(single_line(value) for value in (
+            args.run, args.message, args.occurrence, args.lanedir, args.path)) or any(
+            c.isspace() for c in args.run):
+        raise ValueError("invalid milestone fields")
+    if args.recipient is not None and not single_line(args.recipient):
+        raise ValueError("invalid milestone recipient")
+    if not Path(args.lanedir).is_absolute() or not Path(args.path).is_absolute():
+        raise ValueError("absolute paths required")
+    if args.kind != "stalled" and not Path(args.lanedir).is_dir():
+        raise ValueError("lane directory must exist")
+    if args.owner_thread_id is not None and not single_line(args.owner_thread_id):
+        raise ValueError("invalid owner thread")
+
+
+def registered_launch_failed(run):
+    """An ExecStopPost before successful exec is failure, regardless of artifacts."""
+    if not run.get("unit_failed"):
+        return False
+    registration = lane_registration(run["pack"]) or {}
+    return registration.get("start_occurrence") == "launch-start" and \
+        registration.get("run") == registration_run(run["lane"], run.get("raw_run") or run["key"]) and \
+        not registration.get("start_event_id")
+
+
+def record_registered_start(lane, raw_run, pack):
+    """Successful exec, a running driver or a native exit supplies start evidence.
+
+    This local operation also orders the start before very short drivers' steps
+    and native terminal records. Its occurrence is shared with ExecStartPost and
+    the launcher, so delayed delivery never creates a second start.
+    """
+    path = Path(pack) / "LANE.json"
+    registration = lane_registration(pack)
+    if registration is None:
+        return None  # an unreadable registration never stops the notice that called this
+    if registration.get("start_occurrence") != "launch-start":
+        return None  # legacy registrations keep their existing terminal contract
+    if registration.get("lane") != lane or registration.get("run") != registration_run(lane, raw_run):
+        return None  # a delayed native exit must not record a newer run's start
+    if registration.get("outcome") == "LAUNCH_FAILED":
+        return None  # failed launch never synthesizes start evidence
+    return emit_milestone(argparse.Namespace(
+        lane=lane, run=registration["run"], lanedir=pack, recipient=registration["recipient"],
+        kind="start", occurrence="launch-start", message="TLDR: lane started.", path=str(path),
+        owner_thread_id=registration.get("owner_thread_id"), record_only=True))
+
+
+def emit_test_milestone(args):
+    """A separate local contract for historical TEST units, never a required notice."""
+    validate_milestone_fields(args)
+    if not (args.lane.upper().startswith("TEST") or os.environ.get("SATS_TEST") == "1") or \
+            args.recipient != "TEST-local" or args.owner_thread_id or "SATS_NOTICE_BINDING" in os.environ:
+        raise ValueError("isolated TEST identity required")
+    if args.kind == "stalled":
+        raise ValueError("TEST has no owner wake")
+    lane = args.lane if args.lane.upper().startswith("TEST") else "TEST-" + args.lane
+    key = hashlib.sha256(json.dumps([lane, args.run, args.kind, args.occurrence], separators=(",", ":")).encode()).hexdigest()
+    ensure_state()
+    directory = STATE / "test-milestones"
+    directory.mkdir(mode=0o700, exist_ok=True)
+    fd = os.open(directory / (key + ".lock"), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        payload_path = directory / (key + ".json")
+        if not payload_path.exists():
+            write_private(payload_path, {"lane": lane, "run": args.run, "test": True, "pack": args.lanedir,
+                "ts_ct": now_ct(), "event_id": key, "event_kind": args.kind, "milestone_message": args.message,
+                "path": args.path, "required_notice": False, "delivery_contract": "test-local-v1"})
+        payload = json.loads(payload_path.read_text())
+        if payload["pack"] != args.lanedir:
+            raise ValueError("immutable TEST directory mismatch")
+        log_path = Path(args.lanedir) / "MILESTONES.log"
+        appended = append_milestone(log_path, key, milestone_line(
+            payload, args.kind, args.run, payload["milestone_message"], payload["path"]))
+        return milestone_receipt(payload, "RECORDED_LOCAL", None, 0, log_path, appended, "test-local-only"), 0
+    finally:
+        os.close(fd)
+
+
+def emit_milestone(args):
+    """Append and deliver one immutable owner milestone: (receipt, exit code).
+
+    A budgeted call refused by the spacing (delivery-budget, spacing "refused") returns at once and hands
+    the same occurrence to a detached sender (Sats GO 2026-10-14 12:59 CT, option 1): the
+    same event_id and attempt ledger, cached-only transport, no budget, posting at its
+    spacing slot. The sender starts after this call has released the occurrence lock.
+    """
+    receipt, code = _emit_milestone(args)
+    # Sats 2026-10-14 15:05 CT: terminal kinds (done/blocker/decision; CANCELLED rides done/blocker)
+    # are never dropped for budget. Any budget failure, including the retry-delay check after an
+    # HTTP 4xx/5xx, hands them to the detached unbudgeted sender. Only start/step stay throttled.
+    budget_failed = receipt.get("spacing") == "refused" or (
+        args.kind in TERMINAL_MILESTONE_KINDS and receipt.get("disposition") == "delivery-budget")
+    if getattr(args, "delivery_budget", None) is not None and budget_failed \
+            and receipt.get("attempts", 3) < 3:
+        retry = argparse.Namespace(**vars(args))
+        retry.delivery_budget, retry.cached_only = None, True
+        receipt["detached_sender"] = spawn_milestone(retry)
+    return receipt, code
+
+
+def spawn_milestone(args):
+    """Fork a session-detached sender for one milestone occurrence. False when none started."""
+    try:
+        child = os.fork()
+    except OSError:
+        return False
+    if child > 0:
+        _, status = os.waitpid(child, 0)  # the middle process exits at once
+        return os.waitstatus_to_exitcode(status) == 0
+    code = 1
+    try:
+        os.setsid()
+        signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGINT, signal.SIGHUP})
+        if os.fork() > 0:
+            os._exit(0)
+        code = 0
+        devnull = os.open(os.devnull, os.O_RDWR)
+        for fd in (0, 1, 2):
+            os.dup2(devnull, fd)
+        os.closerange(3, 1024)  # no inherited launcher locks or pipes
+        receipt, _ = _emit_milestone(args)
+        log(action="milestone-detached", event_id=receipt.get("event_id"), state=receipt.get("state"))
+    except BaseException:
+        try:
+            log_error("milestone-detached")
+        except BaseException:
+            pass
+    os._exit(code)
+
+
+def _emit_milestone(args):
+    validate_milestone_fields(args)
+    if args.lane.upper().startswith("TEST") or os.environ.get("SATS_TEST") == "1":
+        raise ValueError("TEST requires the separate local emitter")
+    budget = getattr(args, "delivery_budget", None)
+    if budget is not None and (not math.isfinite(budget) or not 0 < budget <= 30):
+        raise ValueError("delivery budget must be greater than zero and at most 30 seconds")
+    deadline = time.monotonic() + budget if budget is not None else None
+    cached_only = deadline is not None or getattr(args, "cached_only", False)  # never a credential subprocess
+    ensure_state()
+    key_run = binding_key(args.lane, args.run)
+    binding = {"lane": args.lane, "run": key_run,
+               "recipient": args.recipient if args.recipient is not None else DEFAULT_NOTICE_RECIPIENT,
+               "priority": True}
+    inherited = os.environ.get("SATS_NOTICE_BINDING")
+    if inherited is not None:
+        trusted = parse_local_binding(inherited, args.lane, key_run)
+        if args.recipient is not None and trusted["recipient"] != args.recipient:
+            raise ValueError("launch binding mismatch")
+        if args.owner_thread_id and trusted.get("owner_thread_id") != args.owner_thread_id:
+            raise ValueError("owner thread mismatch")
+        binding = trusted
+    elif args.owner_thread_id:
+        binding["owner_thread_id"] = args.owner_thread_id
+    binding, enrollment = enroll_owner_binding(binding,
+        preserve_existing=inherited is None and args.recipient is None and not args.owner_thread_id,
+        authority="local launch binding" if inherited is not None else "local explicit CLI")
+    if args.kind not in ("start", "stalled"):
+        try:
+            record_registered_start(args.lane, args.run, args.lanedir)
+        except Exception:
+            log_error("registered-start")  # as terminal_log: a bad registration never blocks this notice
+    # Recipient/step/message/path cannot create a new occurrence or retry budget.
+    identity = [args.lane, key_run, args.kind, args.occurrence]
+    key = hashlib.sha256(json.dumps(identity, separators=(",", ":")).encode()).hexdigest()
+    directory = STATE / "milestones"
+    fd = os.open(directory / (key + ".lock"), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        payload_path = directory / (key + ".json")
+        if not payload_path.exists():
+            # Do not turn a claimed terminal/stall notice into a producer success.
+            payload = {"lane": args.lane, "run": key_run, "raw_run": args.run, "pack": args.lanedir,
+                       "host": socket.gethostname(), "agent": os.environ.get("SATS_AGENT", "script"),
+                       "ts_ct": now_ct(), "test": False, "event": "milestone",
+                       "outcome": args.kind.upper(), "verdict": args.message, "reason": args.kind,
+                       "step": os.environ.get("SATS_STEP"), "milestone_message": args.message, "path": args.path}
+            payload = required_notice(payload, args.kind, occurrence=args.occurrence, binding=binding)
+            write_private(payload_path, payload)
+        payload = json.loads(payload_path.read_text())
+        if payload["notice_binding"] != binding or payload["pack"] != args.lanedir:
+            raise ValueError("immutable occurrence binding mismatch")
+        log_path = STATE / "stalled.log" if args.kind == "stalled" else Path(args.lanedir) / "MILESTONES.log"
+        appended = append_milestone(log_path, payload["event_id"], milestone_line(
+            payload, payload["event_kind"], registration_run(payload["lane"], payload["raw_run"]),
+            payload["milestone_message"], payload["path"]))
+        body = payload_path.read_bytes()
+        digest = hashlib.sha256(body).hexdigest()
+        proof_path = directory / (key + ".acceptance.json")
+        attempts_path = directory / (key + ".attempts.jsonl")
+        records = [json.loads(line) for line in attempts_path.read_text().splitlines()] if attempts_path.exists() else []
+        used = sum(record.get("phase") == "reserved" for record in records)
+
+        def result(state, status, attempts, disposition=None, code=0, *, record_only=False, extra=None, run_id=None):
+            receipt = milestone_receipt(payload, state, status, attempts, log_path, appended, disposition, run_id)
+            receipt.update(local_recorded=True, delivery_exit=code, owner_enrollment=enrollment, **(extra or {}))
+            receipt_path = directory / (key + (".record.receipt.json" if record_only else ".receipt.json"))
+            receipt["receipt_path"] = str(receipt_path)
+            write_private(receipt_path, receipt)
+            return receipt, code
+
+        if getattr(args, "record_only", False):
+            if args.kind == "start" and args.occurrence == "launch-start":
+                registration_path = Path(args.lanedir) / "LANE.json"
+                if registration_path.exists():
+                    registration_fd = registry_lock(args.lanedir)
+                    try:
+                        registration = lane_registration(args.lanedir) or {}
+                        if registration.get("run") == registration_run(args.lane, args.run) and \
+                                registration.get("notice_binding") == binding:
+                            registration["start_event_id"] = payload["event_id"]
+                            write_private(registration_path, registration)
+                    finally:
+                        os.close(registration_fd)
+            return result("RECORDED_LOCAL", None, used, "local-record", record_only=True)
+        if proof_path.exists():
+            proof = json.loads(proof_path.read_text())
+            if accepted_status(proof.get("http_status")) and proof.get("body_sha256") == digest:
+                return result("WEBHOOK_ACCEPTED", proof["http_status"], used, run_id=proof.get("recipient_run_id"))
+        if enrollment["state"] != "ENROLLED":
+            return result("FAILED", None, used, "owner_enrollment_unavailable", code=1)
+        last = next((record for record in reversed(records) if record.get("phase") == "result"), {})
+        status = last.get("http_status")
+        refreshed = False
+        for number in range(used + 1, 4):
+            delay = RETRY_DELAYS[number - 1]
+            if deadline is not None and time.monotonic() + delay >= deadline:
+                return result("FAILED", status, number - 1, "delivery-budget", code=1)
+            time.sleep(delay)
+            append(attempts_path, json.dumps({"phase": "reserved", "attempt": number,
+                   "event_id": payload["event_id"], "body_sha256": digest}))
+            # Explicit launch-authorized milestones bypass the legacy wake filter:
+            # its DROP/HOLD and body merges cannot satisfy this immutable contract.
+            diagnostics = {}
+            url, source = None, None
+            try:
+                url, secret, source = webhook(cached_only=True) if cached_only else webhook()
+
+                def attempt():
+                    remaining = deadline - time.monotonic() if deadline is not None else None
+                    if remaining is not None and remaining <= 0:
+                        return None
+                    return _post(url, secret, body, payload["event_id"], timeout=remaining,
+                                 diagnostics=diagnostics) if deadline is not None \
+                        else _post(url, secret, body, payload["event_id"], diagnostics=diagnostics)
+                if url:
+                    sent, status = spaced_post(url, deadline, attempt)
+                    if not sent:
+                        # The spacing wait counts against the budget; no network attempt.
+                        diagnostics = {"disposition": "delivery-budget"}
+                else:
+                    status = None
+            except Exception:
+                log_error("milestone-transport")
+                status = None
+                diagnostics = {"disposition": "transport_unavailable"}
+            accepted = accepted_status(status)
+            run_id = diagnostics.pop("recipient_run_id", None) if accepted else None
+            if accepted:
+                write_private(proof_path, {"http_status": status, "body_sha256": digest,
+                                           "recipient_run_id": run_id})
+            append(attempts_path, json.dumps({"phase": "result", "attempt": number,
+                   "http_status": status, "state": "WEBHOOK_ACCEPTED" if accepted else "FAILED",
+                   "recipient_run_id": run_id, **diagnostics}))
+            log(action="milestone-post", event_id=payload["event_id"], lane=args.lane,
+                kind=args.kind, http=status, state="WEBHOOK_ACCEPTED" if accepted else "FAILED",
+                sats_receipt=recipient_delivery(status, run_id)["sats_receipt"], recipient_run_id=run_id,
+                **failure_code(diagnostics))
+            if accepted:
+                return result("WEBHOOK_ACCEPTED", status, number, run_id=run_id)
+            if diagnostics.get("disposition") == "delivery-budget":
+                return result("FAILED", None, number, "delivery-budget", code=1, extra={"spacing": "refused"})
+            if url is None:
+                return result("FAILED", None, number, diagnostics.get("disposition", "deferred"), code=1)
+            if not cached_only and status in (401, 403, 404) and source == "cache" and not refreshed:
+                try:
+                    webhook(refresh=True)
+                except Exception:
+                    log_error("milestone-credential-refresh")
+                    return result("FAILED", status, number, "credential_refresh_unavailable", code=1)
+                refreshed = True
+        if args.kind in TERMINAL_MILESTONE_KINDS:
+            enqueue(key, {"type": "milestone", "lane": args.lane, "kind": args.kind, "tries": 0,
+                          "next_at": time.time() + REQUEUE_BASE})
+            kick_drainer()
+            return result("FAILED", status, used if used >= 3 else 3, "attempt-cap-3", code=1,
+                          extra={"requeued": True})
+        return result("FAILED", status, used if used >= 3 else 3, "attempt-cap-3", code=1)
+    finally:
+        os.close(fd)
+
+
+def milestone_main(argv):
+    parser = argparse.ArgumentParser(description="Append and deliver one immutable owner milestone.")
+    for name in ("lane", "lanedir", "run", "message", "path", "occurrence"):
+        parser.add_argument("--" + name, required=True)
+    parser.add_argument("--recipient", help="defaults to the exact enrolled binding, otherwise Sats owner policy")
+    parser.add_argument("--kind", required=True, choices=MILESTONE_KINDS)
+    parser.add_argument("--state-dir", help="absolute private directory for isolated tests only")
+    parser.add_argument("--owner-thread-id")
+    parser.add_argument("--record-only", action="store_true", help="durable local record, no transport or credentials")
+    parser.add_argument("--test-local", action="store_true", help="separate local-only historical TEST contract")
+    parser.add_argument("--delivery-budget", type=float, help="bounded cached/loopback delivery, no credential subprocess")
+    args = parser.parse_args(argv)
+    try:
+        if args.state_dir:
+            configure_state(args.state_dir)
+        receipt, code = emit_test_milestone(args) if args.test_local else emit_milestone(args)
+    except Exception:
+        log_error("milestone")
+        receipt, code = {"event_id": None, "state": "FAILED", "http_status": None,
+                         "native_delivery": "unavailable", "disposition": "local_error"}, 2
+    print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
+    return code
+
+
+def cancel_main(argv, *, poll=1.0, wait=330):
+    """Record an intentional stop of a lane's current run, then stop its unit.
+
+    sats-completion-notify cancel --lanedir ABS [--reason TEXT] [--successor TEXT] [--no-stop]
+
+    Under the pack's .LANE.lock, which the launcher holds while registering a run and
+    ExecStopPost holds while settling one, it checks that LANE.json still names an active
+    run and that its sats-lane-* unit runs that SATS_RUN. It then writes
+    <lanedir>/control/stop naming the run (fsync'd, replacing any older marker) and
+    queues a non-blocking stop of that unit before releasing the lock, so a relaunched
+    run can never be the one stopped. Then it waits for that invocation to end. The
+    unit's ExecStopPost report is CANCELED, kind canceled, rerun none (amendment 1227
+    item 14). Exit 0 when recorded (and stopped), 1 when the run is not active or the
+    stop failed, 2 for invalid input.
+    """
+    parser = argparse.ArgumentParser(description="Record an intentional lane stop, then stop the unit.")
+    parser.add_argument("--lanedir", required=True)
+    parser.add_argument("--reason", default="intentional stop")
+    parser.add_argument("--successor", help="replacement lane, run or pack, one line")
+    parser.add_argument("--no-stop", action="store_true", help="record the marker only")
+    args = parser.parse_args(argv)
+    stop_exit, code = None, 0
+
+    def systemctl(*words):
+        return subprocess.run(["systemctl", "--user", *words], stdin=subprocess.DEVNULL,
+                              capture_output=True, text=True, timeout=60)
+
+    try:
+        lanedir = Path(args.lanedir)
+        if not lanedir.is_absolute():
+            raise ValueError("absolute lane directory required")
+        if not all(value is None or single_line(value, 500) for value in (args.reason, args.successor)):
+            raise ValueError("single-line reason and successor required")
+        fd = registry_lock(lanedir)
+        try:
+            registration = lane_registration(lanedir) or {}
+            lane, run, unit = registration.get("lane"), registration.get("run"), registration.get("unit")
+            if not (isinstance(lane, str) and LANE_ID_RE.fullmatch(lane) and single_line(run, 500)
+                    and not any(c.isspace() for c in run)):
+                raise ValueError("invalid lane registration")
+            invocation = None
+            if not args.no_stop:
+                if not (isinstance(unit, str) and re.fullmatch(r"sats-lane-[A-Za-z0-9_.-]{1,80}\.service", unit)):
+                    raise ValueError("no sats-lane unit to stop")
+                shown = systemctl("show", "-p", "ActiveState", "-p", "InvocationID", "-p", "Environment", unit)
+                fields = dict(line.split("=", 1) for line in shown.stdout.splitlines() if "=" in line)
+                running = re.search(r"(?:^|\s)SATS_RUN=([0-9]{9,11}-[0-9]{9})(?:\s|$)", fields.get("Environment", ""))
+                if registration.get("status") != "active" or fields.get("ActiveState") not in ("active", "activating") \
+                        or not running or running.group(1) != run:
+                    receipt = {"state": "NOT_ACTIVE", "lane": lane, "run": run, "unit": unit, "stop_exit": None}
+                    print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
+                    return 1  # nothing recorded: the run ended or the unit runs another run
+                invocation = fields.get("InvocationID")
+            lines = ["run=" + run, "lane=" + lane, "reason=" + args.reason, "at=" + now_ct()]
+            if args.successor:
+                lines.append("successor=" + args.successor)
+            control = lanedir / "control"
+            control.mkdir(mode=0o755, exist_ok=True)
+            marker = control / "stop"
+            tmp = control / (".stop.tmp.%d" % os.getpid())
+            marker_fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
+            with os.fdopen(marker_fd, "w") as stream:
+                stream.write("\n".join(lines) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(tmp, marker)
+            directory_fd = os.open(control, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+            if not args.no_stop:
+                stop_exit = systemctl("stop", "--no-block", unit).returncode
+        finally:
+            os.close(fd)
+        if stop_exit == 0:
+            deadline = time.monotonic() + wait
+            while time.monotonic() < deadline:
+                shown = systemctl("show", "-p", "ActiveState", "-p", "InvocationID", unit)
+                fields = dict(line.split("=", 1) for line in shown.stdout.splitlines() if "=" in line)
+                if fields.get("InvocationID") != invocation or fields.get("ActiveState") in ("inactive", "failed", ""):
+                    break
+                time.sleep(poll)
+            else:
+                stop_exit = "timeout"
+        receipt = {"state": "CANCEL_RECORDED", "lane": lane, "run": run, "marker": str(marker),
+                   "unit": unit, "stop_exit": stop_exit}
+        code = 0 if stop_exit in (None, 0) else 1
+    except Exception:
+        try:
+            ensure_state()
+            log_error("cancel")
+        except Exception:
+            pass
+        receipt, code = {"state": "FAILED", "disposition": "local_error"}, 2
+    print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
+    return code
+
+
+def main():
+    if sys.argv[1:2] == ["milestone"]:
+        return milestone_main(sys.argv[2:])
+    if sys.argv[1:2] == ["cancel"]:
+        return cancel_main(sys.argv[2:])
+    if sys.argv[1:2] == ["requeue"]:
+        return requeue_main(sys.argv[2:])
+    try:
+        run(sys.argv[1:])
+    except BaseException:
+        try:
+            ensure_state()
+            log_error("hook")
+        except BaseException:
+            pass
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
