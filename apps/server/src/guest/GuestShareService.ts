@@ -19,6 +19,7 @@ import {
   type OrchestrationV2Run,
   type GuestTurnItem,
   type ThreadGuestShare,
+  type OrchestrationV2TurnItem,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
@@ -211,21 +212,23 @@ export class GuestShareService extends Context.Service<
 >()("t3/guest/GuestShareService") {}
 
 /**
- * A guest's files show only on messages from their own share. A replacement link can still show
- * an earlier guest's messages from the history window, but never their files.
+ * A guest's files show only on messages sent through their own link, as recorded when the owner
+ * sent it. A replacement link can still show an earlier guest's messages from the history window,
+ * but never their files, in the stream, the item detail, or the file route.
  */
-const isOwnGuestMessage = (
-  share: Pick<ThreadGuestShare, "messages">,
-  guestMessageId: GuestMessageId,
-) => share.messages.some((message) => message.id === guestMessageId);
+const isOwnGuestMessage = (domain: OrchestrationV2TurnItem, shareId: GuestShareId) =>
+  domain.type === "user_message" && domain.context?.guest?.shareId === shareId;
 
-const withOwnGuestFiles = (item: GuestTurnItem, share: Pick<ThreadGuestShare, "messages">) =>
-  item.type === "user_message" &&
-  item.attachments.length > 0 &&
-  (item.context?.guest === undefined ||
-    !isOwnGuestMessage(share, item.context.guest.guestMessageId))
-    ? { ...item, attachments: [] }
-    : item;
+const withOwnGuestFiles = <T extends GuestTurnItem | GuestTurnItemDetail>(
+  projected: T,
+  domain: OrchestrationV2TurnItem,
+  shareId: GuestShareId,
+): T =>
+  projected.type === "user_message" &&
+  projected.attachments.length > 0 &&
+  !isOwnGuestMessage(domain, shareId)
+    ? { ...projected, attachments: [] }
+    : projected;
 
 const make = Effect.gen(function* () {
   const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -516,6 +519,9 @@ const make = Effect.gen(function* () {
     const providers = yield* providerRegistry.getProviders;
     const viewOf = (current: OrchestrationV2AppThread) =>
       guestShareView(current, guestThreadModel(current.modelSelection, providers));
+    const domainItems = new Map(
+      projection.visibleTurnItems.map((entry) => [entry.item.id, entry.item] as const),
+    );
     const guestSnapshot = projectSnapshotForGuest(projection, share.historyStartRunOrdinal, roots);
     const visibleRunIds = new Set<RunId>(guestSnapshot.runs.map((run) => run.id));
     // Kept to re-send a run when its provider turn ends, which arrives as its own event.
@@ -559,9 +565,9 @@ const make = Effect.gen(function* () {
               const runId = event.payload.runId;
               if (runId === null || !visibleRunIds.has(runId)) return [];
               const item = projectTurnItemForGuest(event.payload, roots);
-              return item === null || !thread.guestShare
+              return item === null
                 ? []
-                : [{ type: "item", item: withOwnGuestFiles(item, thread.guestShare) }];
+                : [{ type: "item", item: withOwnGuestFiles(item, event.payload, share.id) }];
             }
             case "thread.archived":
             case "thread.deleted":
@@ -590,7 +596,10 @@ const make = Effect.gen(function* () {
       type: "snapshot",
       view: initialView,
       runs: guestSnapshot.runs,
-      items: guestSnapshot.items.map((item) => withOwnGuestFiles(item, share)),
+      items: guestSnapshot.items.map((item) => {
+        const domain = domainItems.get(item.id);
+        return domain === undefined ? item : withOwnGuestFiles(item, domain, share.id);
+      }),
     };
     return Stream.concat(
       Stream.make(snapshotEvent),
@@ -672,10 +681,10 @@ const make = Effect.gen(function* () {
   });
 
   const item = Effect.fn("GuestShareService.item")(function* (session: string, itemId: string) {
-    const { thread, item } = yield* visibleItem(session, itemId);
+    const { thread, share, item } = yield* visibleItem(session, itemId);
     const roots = guestPathRoots([thread.worktreePath, yield* projectRootOf(thread)], home);
     const detail = projectTurnItemForGuestDetail(item, roots);
-    return detail === null ? yield* unavailable : detail;
+    return detail === null ? yield* unavailable : withOwnGuestFiles(detail, item, share.id);
   });
 
   const commandOutput = Effect.fn("GuestShareService.commandOutput")(function* (
@@ -736,11 +745,7 @@ const make = Effect.gen(function* () {
       fromMessage ??
       (yield* guestSnapshot(session)).visibleItems
         .flatMap((item) =>
-          item.type === "user_message" &&
-          item.context?.guest !== undefined &&
-          isOwnGuestMessage(share, item.context.guest.guestMessageId)
-            ? item.attachments
-            : [],
+          item.type === "user_message" && isOwnGuestMessage(item, share.id) ? item.attachments : [],
         )
         .find((candidate) => candidate.id === attachmentId);
     const path =
