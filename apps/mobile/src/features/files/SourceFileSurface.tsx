@@ -36,6 +36,7 @@ import {
 import { SourceText } from "@t3tools/mobile-source-text";
 
 import { boundedSelectableSourceTokens, prepareSourceFileDocument } from "./source-file-document";
+import { startSourceLineJump } from "./source-line-jump";
 import { sourceHighlightAtom } from "./sourceHighlightingState";
 
 interface SourceFileSurfaceProps {
@@ -241,6 +242,7 @@ function JavaScriptSourceFileSurface(props: SourceFileSurfaceProps) {
   const { normalizedContents, lines, status, targetIndex, tokens } = useSourceFileModel(props);
   const selectableTokens = props.selectable ? boundedSelectableSourceTokens(tokens) : null;
   const listRef = useRef<FlatList<string>>(null);
+  const lineJumpRef = useRef<ReturnType<typeof startSourceLineJump> | null>(null);
   const { isPullRefreshing, handlePullToRefresh } = useSourceFileRefresh(props.onRefresh);
   const refreshControl = props.onRefresh ? (
     <RefreshControl refreshing={isPullRefreshing} onRefresh={() => void handlePullToRefresh()} />
@@ -250,10 +252,12 @@ function JavaScriptSourceFileSurface(props: SourceFileSurfaceProps) {
     if (targetIndex === null) {
       return;
     }
-    const frame = requestAnimationFrame(() => {
-      listRef.current?.scrollToIndex({ index: targetIndex, animated: false, viewPosition: 0.3 });
-    });
-    return () => cancelAnimationFrame(frame);
+    const jump = startSourceLineJump(() => listRef.current, targetIndex);
+    lineJumpRef.current = jump;
+    return () => {
+      lineJumpRef.current = null;
+      jump.cancel();
+    };
   }, [props.path, targetIndex]);
 
   const renderLine = ({ item, index }: { item: string; index: number }) => (
@@ -342,6 +346,9 @@ function JavaScriptSourceFileSurface(props: SourceFileSurfaceProps) {
         paddingTop: 8,
       }}
       renderItem={renderLine}
+      onScrollToIndexFailed={(info) =>
+        lineJumpRef.current?.retry(info.averageItemLength, codeSurface.rowHeight)
+      }
     />
   );
 
