@@ -179,7 +179,8 @@ const makeReconcile = <R>(input: {
 
       // 1. Close scopes for instances that disappeared or whose config
       //    changed. Do this BEFORE creating replacements so ids map 1-to-1
-      //    to live scopes at all times.
+      //    to live scopes at all times. Their ids leave `entries` first, so
+      //    `getInstance` never returns a closed runtime while replacements build.
       const removedIds: Array<ProviderInstanceId> = [];
       const replacedIds = new Set<ProviderInstanceId>();
       for (const [instanceId, live] of previousEntries) {
@@ -192,7 +193,15 @@ const makeReconcile = <R>(input: {
           replacedIds.add(instanceId);
         }
       }
-      for (const id of [...removedIds, ...replacedIds]) {
+      const retiredIds = [...removedIds, ...replacedIds];
+      if (retiredIds.length > 0) {
+        yield* Ref.update(state.entries, (entries) => {
+          const remaining = new Map(entries);
+          for (const id of retiredIds) remaining.delete(id);
+          return remaining;
+        });
+      }
+      for (const id of retiredIds) {
         const live = previousEntries.get(id);
         if (live) {
           yield* Scope.close(live.scope, Exit.void).pipe(Effect.ignore);
