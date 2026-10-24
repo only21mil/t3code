@@ -1,0 +1,16 @@
+# notice-package-20261023 candidate
+
+Reviewable in place: `git log --oneline base..HEAD`, `git diff base..HEAD -- <path>`. Tags mark each step:
+`base` (live files and the suite frozen with them), `patch-1`, `patch-2`, `item-5`, `item-6`, `item-7`.
+
+| Repo path | Installs to | Package item |
+|---|---|---|
+| `tools/sats-stall-watchdog/src/sats_stall_asks.py` | `~/.local/lib/sats-stall-watchdog/sats_stall_asks.py` | 1, 5, 6 |
+| `tools/sats-stall-watchdog/tests/` | none (suite; also lands in victor-vault, item 4) | 1, 5, 6 |
+| `mcp/mcp_call.py`, `mcp/tests/` | `~/work/t3-mcp-connect-2026-10-07/scripts/mcp_call.py` | 2 |
+| `notify/sats-completion-notify`, `notify/tests/` | `~/.local/bin/sats-completion-notify` | 7b, 7c |
+| `notify/systemd/` | `~/.config/systemd/user/` | 7a |
+| `install/` | none: `install.sh`, `rollback.sh`, `rehearse.sh`, `events_migration.py`, `requeue-triage.json` | all |
+
+`INSTALL.md`, `ROLLBACK.md` and `RECEIPTS.md` sit beside this file. Canon items 3 and 4 are commits in
+`../canon-clone/` (only21mil/victor-vault), not here.

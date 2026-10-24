@@ -3,6 +3,7 @@
 #   rehearse.sh <empty sandbox dir inside the lane> <asks.sqlite3 copy> <requeue copy dir>
 # The sandbox holds the base files (from the candidate's base tag), a copy of asks.sqlite3 and of the requeue
 # entries; a systemctl shim records calls instead of acting. Exit 0 only when every assertion holds.
+# shellcheck disable=SC2034  # the path and state variables are read inside the check strings
 set -euo pipefail
 umask 077
 SB="${1:?sandbox dir}" DBCOPY="${2:?asks.sqlite3 copy}" RQCOPY="${3:?requeue copy dir}"
