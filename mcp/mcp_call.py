@@ -94,8 +94,21 @@ TERMINAL_RUN = {"completed", "failed", "cancelled", "interrupted", "rolled_back"
 VERDICT = re.compile(r"(ACCEPT|REQUEST_CHANGES)\b")
 RESULT_PATH = re.compile(r"(/(?:home|Users)/[A-Za-z0-9._/-]+/RESULT\.md)")
 STILL_OPEN = re.compile(r"NEEDS-VICTOR|^[ \t>*_-]*(?:BLOCKED|FAILED|CANCEL+ED)\b", re.M)
-# A reviewer child: one that voted, or whose title or thread id names a review (review-and-babysit task names).
-REVIEWER = re.compile(r"review", re.I)
+# A reviewer child: one that voted, or whose title or thread id names a review seat in the fleet's forms: a
+# review_<task> name ("Sol 6.1 Max · review_openrouter_hub_audit"), a leading review ("review-r1-opus"),
+# "<seat> review · <task>", a numbered review or re-review ("Kimi K3.1 review round 1 DeepSeek", "re-review 2 Opus"),
+# or a re-review named for its seat ("focused re-review DeepSeek"). A title that only mentions a review ("Round-1
+# repair of review findings"), or names a producer before it ("Repair review round 2 findings"), is no seat (NEW-2).
+REVIEWER = re.compile(r"(?:^|[\s·:|/-])(?:re-?)?review_|^\s*(?:re-?)?review\b|\b(?:re-?)?review\s+·"
+                      r"|\b(?:re-?)?review\s+(?:round\s*|r)?\d"
+                      r"|\bre-?review\s+(?:opus|deepseek|sol|gpt|claude|kimi|grok|gemini|qwen|glm|sonnet|haiku|fable|codex)\b", re.I)
+PRODUCER = re.compile(r"(?:^|[\s·:|/_-])(?:repair|produce|producer|fix|implement|build|write|draft)(?:_|\b)", re.I)
+
+
+def reviewer_seat(name: str) -> bool:
+    """True when a child's title or thread id names a review seat (REVIEWER) with no producer named before it."""
+    found = REVIEWER.search(name)
+    return found is not None and not PRODUCER.search(name[:found.start()])
 # The F-D stall watchdog's install: its classify() is the ask detection a settle must agree with.
 WATCHDOG_LIB = "/home/victor/.local/lib/sats-stall-watchdog"
 TEXT_LIMIT = 20000
@@ -172,11 +185,12 @@ def sweep_settle_refusal(rpc, host: str, thread_id: str) -> str | None:
                                        "maxCharsPerItem": 200, "afterPosition": max(0, state["thread"]["itemCount"] - 21)})
         said = [i for i in last["items"] if i["type"] == "assistant_message" and i["status"] == "completed"]
         verdict = VERDICT.match(said[-1]["text"].lstrip()) if said else None
-        named = " ".join(str(v or "") for v in (child.get("title"), state["thread"].get("title"), child["threadId"]))
-        if verdict or REVIEWER.search(named):
+        named = (child.get("title"), state["thread"].get("title"), child["threadId"])
+        if verdict or any(reviewer_seat(str(v or "")) for v in named):
             # Every reviewer seat the parent started is required, and a seat is its model: its newest review
             # stands. A review that ended without a verdict (BLOCKED, no reply, a failed or cancelled run) is that
-            # seat's missing vote (SOL-6).
+            # seat's missing vote (SOL-6). A reviewer the parent never started is not visible here; the controller's
+            # review record owns that coverage.
             seat = state["thread"].get("model") or child["threadId"]
             at = (runs[0].get("completedAt") or "") if runs else ""
             vote = verdict.group(1) if verdict and runs and runs[0]["status"] == "completed" else "no ACCEPT"

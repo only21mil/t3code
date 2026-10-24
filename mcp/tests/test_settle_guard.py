@@ -149,6 +149,25 @@ class SettleGuardTests(unittest.TestCase):
                 self.assertIsNone(guard(self.model(self.done(), children=children), 'fd', 'p'))
 
     @unittest.skipIf(guard is None, 'no guard in this mcp_call.py')
+    def test_NEW2_a_producer_or_repair_child_is_no_required_reviewer(self):
+        # DeepSeek round 2: any title containing "review" made a producer or repair child a required reviewer, so a
+        # settle with every real vote ACCEPT was refused. Titles below are the fleet's (RCA presettle evidence).
+        accepted = [('completed', 'ACCEPT', 'opus'), ('completed', 'ACCEPT', 'deepseek')]
+        for title in ('Round-1 repair of review findings', 'Opus 5.5 High · repair_muse_exec_final_report',
+                      'gpt-6.1-sol high - Kimi K3.1 repair round 1 findings', 'Repair review round 2 findings',
+                      'Sol 6.1 Max · produce_openrouter_hub_audit', 'Opus 5.5 High · verify_muse_exec_fleet_r3'):
+            with self.subTest(producer=title):
+                children = [('completed', 'DONE. Findings repaired.', 'sol', title)] + accepted
+                self.assertIsNone(guard(self.model(self.done(), children=children), 'fd', 'p'))
+        # A genuine review seat that ended without a vote is still required, in each naming form.
+        for title in ('review_mbp_standby_key_replace_deepseek', 'Sol 6.1 Max · review_openrouter_hub_audit',
+                      'DeepSeek V4.1 Flash High review · review_muse_exec_route_r2', 'deepseek-v4.1-flash high - Kimi K3.1 review round 1 DeepSeek',
+                      'claude-opus-5-5 high - Kimi K3.1 re-review 2 Opus', 'deepseek-v4.1-flash high - Kimi K3.1 focused re-review DeepSeek'):
+            with self.subTest(reviewer=title):
+                children = accepted + [('completed', 'BLOCKED: the provider rejected the review', 'sol', title)]
+                self.assertIn('ended without an ACCEPT', guard(self.model(self.done(), children=children), 'fd', 'p') or '')
+
+    @unittest.skipIf(guard is None, 'no guard in this mcp_call.py')
     def test_SOL5_missing_watchdog_detection_refuses(self):
         rpc = self.model(self.done(), children=[('completed', 'ACCEPT', 'opus')])
         with patch.object(mcp_call, 'WATCHDOG_LIB', str(self.directory / 'absent')), \
