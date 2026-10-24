@@ -1,6 +1,4 @@
 import * as Dialog from "../../components/ui/Dialog";
-import { AuthRelayWriteScope } from "@t3tools/contracts";
-import { readEnvironmentScope } from "../../state/session";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { useAuth } from "@clerk/expo";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
@@ -32,11 +30,9 @@ import {
   refreshAgentAwarenessRegistration,
   subscribeAgentAwarenessRegistrationStatus,
 } from "../agent-awareness/remoteRegistration";
-import { refreshManagedRelayEnvironments } from "../cloud/managedRelayState";
-import { hasCloudPublicConfig, resolveRelayClerkTokenOptions } from "../cloud/publicConfig";
+import { hasCloudPublicConfig } from "../cloud/publicConfig";
 import { runtime } from "../../lib/runtime";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
-import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
 import { SettingsRow } from "./components/SettingsRow";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
@@ -44,7 +40,7 @@ import { SettingsScreen } from "./components/SettingsScreen";
 import { resolveAgentAwarenessPlatformPresentation } from "./SettingsRouteScreen.logic";
 
 type NotificationStatus = "checking" | "enabled" | "disabled" | "unsupported";
-type LiveActivityStatus = "checking" | "enabled" | "disabled" | "signed-out" | "linking";
+type LiveActivityStatus = "checking" | "enabled" | "disabled" | "signed-out" | "saving";
 
 function useDeviceRegistered(): boolean {
   const status = useSyncExternalStore(
@@ -85,8 +81,7 @@ function ConfiguredSettingsNotificationsRouteScreen() {
       : agentAwarenessPlatform.subtitle;
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
-  const { getToken, isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
-  const { savedConnectionsById } = useSavedRemoteConnections();
+  const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
   const [notificationStatus, setNotificationStatus] = useState<NotificationStatus>("checking");
   const [liveActivityStatus, setLiveActivityStatus] = useState<LiveActivityStatus>("checking");
   const liveActivityWriteInFlight = useRef(false);
@@ -97,9 +92,6 @@ function ConfiguredSettingsNotificationsRouteScreen() {
   const canClearLiveActivitiesPreference =
     AsyncResult.isSuccess(preferencesResult) &&
     preferencesResult.value.liveActivitiesEnabled !== false;
-
-  const connections = Object.values(savedConnectionsById);
-  const environmentCount = connections.length;
 
   const refreshNotifications = async () => {
     if (Platform.OS !== "ios" && Platform.OS !== "android") {
@@ -215,13 +207,13 @@ function ConfiguredSettingsNotificationsRouteScreen() {
     );
   };
 
-  const linkEnvironments = async () => {
+  const enableLiveActivities = async () => {
     if (!isSignedIn) {
       promptSignIn();
       return;
     }
 
-    setLiveActivityStatus("linking");
+    setLiveActivityStatus("saving");
     if (Platform.OS === "android") {
       const permission = await settleAsyncResult(() =>
         runtime.runPromiseExit(requestAgentNotificationPermission),
@@ -249,31 +241,12 @@ function ConfiguredSettingsNotificationsRouteScreen() {
       }
       setNotificationStatus("enabled");
     }
-    const tokenResult = await settlePromise(() => getToken(resolveRelayClerkTokenOptions()));
-    if (tokenResult._tag === "Failure") {
-      setLiveActivityStatus("disabled");
-      const error = squashAtomCommandFailure(tokenResult);
-      Dialog.alert(
-        Platform.OS === "android" ? "Ongoing activity unavailable" : "Live Activities unavailable",
-        error instanceof Error ? error.message : "Could not enable agent activity updates.",
-      );
-      return;
-    }
-    if (!tokenResult.value) {
-      promptSignIn();
-      setLiveActivityStatus("signed-out");
-      return;
-    }
 
     const updateResult = await settleAsyncResult(() =>
       runtime.runPromiseExit(
         setLiveActivityUpdatesEnabled({
-          canConfigureEnvironment: (environmentId) =>
-            readEnvironmentScope(environmentId, AuthRelayWriteScope),
           enabled: true,
           previousEnabled: liveActivitiesPreferenceEnabled,
-          clerkToken: tokenResult.value,
-          connections,
         }),
       ),
     );
@@ -292,17 +265,14 @@ function ConfiguredSettingsNotificationsRouteScreen() {
     }
 
     savePreferences({ liveActivitiesEnabled: true });
-    refreshManagedRelayEnvironments();
     setLiveActivityStatus("enabled");
-    // The environment link can succeed while this device's own registration
-    // (the push-to-start token the relay needs) has not — don't claim Live
+    // The preference can save while this device's registration (the
+    // push-to-start token the relay needs) fails, so don't claim Live
     // Activities are live until the device is actually registered.
     if (getAgentAwarenessRegistrationStatus() === "registered") {
       Dialog.alert(
         Platform.OS === "android" ? "Ongoing activity enabled" : "Live Activities enabled",
-        environmentCount > 0
-          ? "Agent activity updates are enabled for environments this connection can configure."
-          : "Agent activity updates are enabled. Add an environment to start receiving updates.",
+        "Agent activity updates are enabled for this device.",
       );
     } else {
       Dialog.alert(
@@ -333,28 +303,11 @@ function ConfiguredSettingsNotificationsRouteScreen() {
   };
 
   async function disableLiveActivities() {
-    let token: string | null = null;
-    if (isSignedIn) {
-      const tokenResult = await settlePromise(() => getToken(resolveRelayClerkTokenOptions()));
-      if (tokenResult._tag === "Failure") {
-        setLiveActivityStatus("enabled");
-        reportAtomCommandResult(tokenResult, {
-          label: "live activity disable token lookup",
-        });
-        return;
-      }
-      token = tokenResult.value;
-    }
-
     const updateResult = await settleAsyncResult(() =>
       runtime.runPromiseExit(
         setLiveActivityUpdatesEnabled({
-          canConfigureEnvironment: (environmentId) =>
-            readEnvironmentScope(environmentId, AuthRelayWriteScope),
           enabled: false,
           previousEnabled: liveActivitiesPreferenceEnabled,
-          clerkToken: token,
-          connections,
         }),
       ),
     );
@@ -366,7 +319,6 @@ function ConfiguredSettingsNotificationsRouteScreen() {
       return;
     }
     savePreferences({ liveActivitiesEnabled: false });
-    refreshManagedRelayEnvironments();
     setLiveActivityStatus("disabled");
   }
 
@@ -375,7 +327,7 @@ function ConfiguredSettingsNotificationsRouteScreen() {
     if (liveActivityWriteInFlight.current) return;
     if (!enabled) {
       liveActivityWriteInFlight.current = true;
-      setLiveActivityStatus("linking");
+      setLiveActivityStatus("saving");
       await disableLiveActivities();
       liveActivityWriteInFlight.current = false;
       return;
@@ -387,7 +339,7 @@ function ConfiguredSettingsNotificationsRouteScreen() {
     }
 
     liveActivityWriteInFlight.current = true;
-    await linkEnvironments();
+    await enableLiveActivities();
     liveActivityWriteInFlight.current = false;
   };
 
@@ -424,7 +376,7 @@ function ConfiguredSettingsNotificationsRouteScreen() {
               !agentAwarenessPushAvailable ||
               !isLoaded ||
               liveActivityStatus === "checking" ||
-              liveActivityStatus === "linking"
+              liveActivityStatus === "saving"
             }
             icon="bolt.circle"
             label={
@@ -437,7 +389,7 @@ function ConfiguredSettingsNotificationsRouteScreen() {
             subtitle={agentAwarenessSubtitle}
             value={
               agentAwarenessPushAvailable &&
-              (liveActivityStatus === "enabled" || liveActivityStatus === "linking") &&
+              (liveActivityStatus === "enabled" || liveActivityStatus === "saving") &&
               deviceRegistered
             }
             onValueChange={(enabled) => void handleLiveActivitiesChange(enabled)}

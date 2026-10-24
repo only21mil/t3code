@@ -73,10 +73,3 @@ export function useManagedRelayEnvironments() {
     refresh,
   };
 }
-
-export function refreshManagedRelayEnvironments(): void {
-  const session = appAtomRegistry.get(managedRelaySessionAtom);
-  if (session) {
-    managedRelayQueryManager.refreshEnvironments(appAtomRegistry, session.accountId);
-  }
-}
