@@ -141,6 +141,40 @@ describe("normalizeReviewGuide", () => {
     ]);
   });
 
+  it("keeps the lines and notes of bridged excerpts beyond the length cap", () => {
+    const long = parseReviewGuideChange(
+      "src/long.ts\0",
+      [
+        "diff --git a/src/long.ts b/src/long.ts",
+        "--- a/src/long.ts",
+        "+++ b/src/long.ts",
+        "@@ -0,0 +1,60 @@",
+        "+added",
+        "",
+      ].join("\n"),
+    );
+    const result = normalizeReviewGuide(
+      guide({
+        stops: [
+          stop({
+            excerpts: [
+              excerpt("src/long.ts", 1, 25),
+              excerpt("src/long.ts", 30, 45),
+              excerpt("src/long.ts", 20, 35),
+            ],
+            notes: [{ path: "src/long.ts", line: 40, title: "Tail", body: "" }],
+          }),
+        ],
+      }),
+      long,
+    );
+    expect(result.stops[0]?.excerpts).toEqual([
+      excerpt("src/long.ts", 1, 25),
+      excerpt("src/long.ts", 26, 45),
+    ]);
+    expect(result.stops[0]?.notes.map((note) => note.title)).toEqual(["Tail"]);
+  });
+
   it("drops notes outside the stop's remaining excerpts", () => {
     const result = normalizeReviewGuide(
       guide({

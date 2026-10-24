@@ -75,7 +75,11 @@ function mergeExcerpts(
   excerpts: ReadonlyArray<PullRequestReviewGuideExcerpt>,
 ): Array<PullRequestReviewGuideExcerpt> {
   let merged: Array<PullRequestReviewGuideExcerpt> = [];
-  for (const excerpt of excerpts) {
+  for (const requested of excerpts) {
+    const excerpt = {
+      ...requested,
+      end: Math.min(requested.end, requested.start + MAX_EXCERPT_LINES - 1),
+    };
     const touches = (other: PullRequestReviewGuideExcerpt) =>
       other.path === excerpt.path &&
       other.side === excerpt.side &&
@@ -98,10 +102,20 @@ function mergeExcerpts(
       other === first ? [combined] : touches(other) ? [] : [other],
     );
   }
-  return merged.map((excerpt) => ({
-    ...excerpt,
-    end: Math.min(excerpt.end, excerpt.start + MAX_EXCERPT_LINES - 1),
-  }));
+  // Splitting rather than truncating keeps every requested line. Each input fits the cap, so
+  // a stop never ends up with more excerpts than it asked for.
+  return merged.flatMap((excerpt) => {
+    const pieces: Array<PullRequestReviewGuideExcerpt> = [];
+    for (let start = excerpt.start; start <= excerpt.end; start += MAX_EXCERPT_LINES) {
+      pieces.push({
+        ...excerpt,
+        start,
+        end: Math.min(excerpt.end, start + MAX_EXCERPT_LINES - 1),
+        caption: start === excerpt.start ? excerpt.caption : "",
+      });
+    }
+    return pieces;
+  });
 }
 
 const nonEmpty = (value: string) => value.trim() !== "";
