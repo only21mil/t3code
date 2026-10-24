@@ -41,6 +41,13 @@ export const loopbackUrlHostForAddress = (address: NetAddress.InetAddress): stri
     ? "[::1]"
     : "127.0.0.1";
 
+// Only a wildcard listener also answers on loopback; a server bound to one
+// address (a LAN or tailnet IP) refuses connections everywhere else.
+export const listenerUrlHostForAddress = (address: NetAddress.InetAddress): string =>
+  NetAddress.isUnspecified(address.address)
+    ? loopbackUrlHostForAddress(address)
+    : NetAddress.formatUrlHost(address.address);
+
 const normalizeHost = (host: string): string =>
   host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
 
