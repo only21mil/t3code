@@ -2,12 +2,16 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
+import * as TestClock from "effect/testing/TestClock";
 import type { PullRequestReaction } from "@t3tools/contracts";
 
 import * as GitHubRequestPolicy from "./GitHubRequestPolicy.ts";
 import * as SourceControlRateLimit from "@t3tools/source-control-core/server/SourceControlRateLimit";
 import * as GitHubPullRequestApi from "./GitHubPullRequestApi.ts";
-import type { GitHubPullRequestCore } from "./gitHubPullRequestJson.ts";
+import type {
+  GitHubPullRequestCore,
+  GitHubPullRequestSearchItem,
+} from "./gitHubPullRequestJson.ts";
 import { gitHubViewerPermissions, loginAvatarUrl, make } from "./GitHubPullRequestProvider.ts";
 import type { GitHubReviewThreadComments } from "./gitHubPullRequestJson.ts";
 
@@ -769,4 +773,90 @@ describe("loginAvatarUrl", () => {
       expect(loginAvatarUrl(login, "github.com")).toBeNull();
     }
   });
+});
+
+describe("listChangeRequestsAcross", () => {
+  const searched = (repository: string): GitHubPullRequestSearchItem => ({
+    repository,
+    number: 1,
+    title: "Change",
+    url: `https://github.com/${repository}/pull/1`,
+    author: null,
+    authorId: null,
+    headBranch: "feature",
+    baseBranch: "main",
+    state: "open" as const,
+    isDraft: false,
+    mergeability: "mergeable" as const,
+    additions: 0,
+    deletions: 0,
+    createdAt: "2026-07-01T00:00:00Z",
+    updatedAt: "2026-07-02T00:00:00Z",
+    reviewRequestLogins: [],
+    hasTeamReviewRequest: false,
+    labels: [],
+    reviewDecision: null,
+    checksState: null,
+  });
+  const across = {
+    cwd: "/w",
+    host: "github.com",
+    repositories: ["acme/web", "acme/docs"],
+    state: "open" as const,
+    involvement: "all" as const,
+    viewer: "viewer",
+    limit: 50,
+  };
+  const providerAnswering = (answers: Array<GitHubPullRequestApi.GitHubPullRequestSearchBatch>) =>
+    make.pipe(
+      Effect.provide(
+        Layer.mock(GitHubPullRequestApi.GitHubPullRequestApi)({
+          searchPullRequests: () => Effect.succeed(answers.shift()!),
+        }),
+      ),
+      Effect.map((provider) => provider.listChangeRequestsAcross!),
+    );
+
+  it.effect("leaves a repository search has not shown to be read on its own", () =>
+    Effect.gen(function* () {
+      const read = yield* providerAnswering([
+        { items: [searched("acme/web")], truncated: false },
+        { items: [searched("acme/web"), searched("acme/docs")], truncated: false },
+        { items: [searched("acme/web")], truncated: false },
+      ]);
+      expect((yield* read(across)).unresolved).toEqual(["acme/docs"]);
+      expect((yield* read(across)).unresolved).toEqual([]);
+      // Search has shown acme/docs lately, so its silence now is an empty answer.
+      expect((yield* read(across)).unresolved).toEqual([]);
+    }),
+  );
+
+  it.effect("vouches for no silent repository in a truncated first slice, and any past it", () =>
+    Effect.gen(function* () {
+      const read = yield* providerAnswering([
+        { items: [searched("acme/web"), searched("acme/docs")], truncated: false },
+        { items: [searched("acme/web")], truncated: true },
+        { items: [searched("acme/web")], truncated: true },
+      ]);
+      yield* read(across);
+      expect((yield* read(across)).unresolved).toEqual(["acme/docs"]);
+      const later = yield* read({
+        ...across,
+        cursor: { updatedBefore: "2026-07-02T00:00:00Z", delivered: 1 },
+      });
+      expect(later.unresolved).toEqual([]);
+    }),
+  );
+
+  it.effect("forgets what search has shown after a while", () =>
+    Effect.gen(function* () {
+      const read = yield* providerAnswering([
+        { items: [searched("acme/web"), searched("acme/docs")], truncated: false },
+        { items: [searched("acme/web")], truncated: false },
+      ]);
+      yield* read(across);
+      yield* TestClock.adjust("11 minutes");
+      expect((yield* read(across)).unresolved).toEqual(["acme/docs"]);
+    }),
+  );
 });
