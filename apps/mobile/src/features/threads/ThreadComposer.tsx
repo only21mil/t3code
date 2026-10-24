@@ -1053,7 +1053,8 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
               ]}
             >
               <ComposerEditor
-                hidden={props.hidden}
+                // display: none destroys the native iOS editor, so dictation must remount it too.
+                hidden={props.hidden || showsCompactDictation}
                 draftKey={composerDraftKey}
                 environmentId={props.environmentId}
                 onOpenMention={(path) => {
