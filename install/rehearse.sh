@@ -7,7 +7,8 @@
 # (DS-M4). A thread-reader fixture answers the replay recheck (SOL-7); nothing reads the network. sleep is a no-op.
 # Cases: main (dry run, install, rollback), answered (the replay ask was answered after the triage), resume (an
 # interrupted install resumed, then rolled back; SOL-8). REHEARSE_SCRIPTS=<dir> runs another install.sh and
-# rollback.sh (the before-repair receipts). Exit 0 only when every check passes.
+# rollback.sh, and SHIM_REALTIME=1 brings back the old shim's realtime next elapse so pre-repair scripts get past
+# their gate; both exist only for the before-repair receipts. Exit 0 only when every check passes.
 # shellcheck disable=SC2034  # the path and state variables are read inside the check strings
 set -uo pipefail
 umask 077
@@ -30,7 +31,8 @@ echo "systemctl $*" >> "$SHIM_LOG"
 case "$*" in
   *"show -p ActiveState --value sats-stall-watchdog.service") echo inactive ;;
   *"show -p ActiveState --value sats-stall-watchdog.timer") echo active ;;
-  *"show -p NextElapseUSecRealtime --value sats-stall-watchdog.timer") echo ;;  # systemd 259, monotonic timer
+  *"show -p NextElapseUSecRealtime --value sats-stall-watchdog.timer")  # empty: systemd 259, monotonic timer
+    if [ -n "${SHIM_REALTIME:-}" ]; then date -d '+4 min' '+%a %Y-%m-%d %H:%M:%S %Z'; else echo; fi ;;
   *"show -p NextElapseUSecMonotonic --value sats-stall-watchdog.timer")
     python3 -I -c 'import time
 t = time.monotonic() + 240; d, r = divmod(t, 86400); h, r = divmod(r, 3600); m, s = divmod(r, 60)
