@@ -23,28 +23,88 @@ interface SentCommand {
   readonly sessionId: string | undefined;
 }
 
+/**
+ * Models the Chromium behavior the host relies on: auto-attach with
+ * waitForDebuggerOnStart pauses each new child target, and turning auto-attach
+ * off detaches every auto-attached session (resuming it) before the command
+ * returns. Held commands take effect when released.
+ */
 const makeDebuggee = (held: (method: string) => boolean = () => true) => {
   const emitter = new NodeEvents.EventEmitter();
   const pending: Array<() => void> = [];
   const sent: Array<SentCommand> = [];
-  const sentWaiters: Array<() => void> = [];
+  const waiters: Array<() => void> = [];
+  const wake = () => waiters.splice(0).forEach((resume) => resume());
+  emitter.on("removeListener", wake);
+  let autoAttach = { enabled: false, waitForDebuggerOnStart: false };
+  let attached = true;
+  const children = new Map<string, "paused" | "running">();
+  const sessions = new Set<string>();
+  const emit = (method: string, params: unknown) => {
+    emitter.emit("message", {}, method, params, "");
+    wake();
+  };
+  const detachSession = (sessionId: string) => {
+    sessions.delete(sessionId);
+    children.set(sessionId, "running");
+    emit("Target.detachedFromTarget", { sessionId });
+  };
+  const execute = (method: string, params: unknown, sessionId: string | undefined) => {
+    if (sessionId !== undefined && !sessions.has(sessionId)) {
+      throw new Error(`No session with given id: ${sessionId}`);
+    }
+    const options = (params ?? {}) as {
+      autoAttach?: boolean;
+      waitForDebuggerOnStart?: boolean;
+      sessionId?: string;
+    };
+    switch (method) {
+      case "Target.getTargetInfo":
+        return { targetInfo: { targetId: "GUEST" } };
+      case "Target.setAutoAttach":
+        autoAttach = {
+          enabled: options.autoAttach === true,
+          waitForDebuggerOnStart: options.waitForDebuggerOnStart === true,
+        };
+        if (!autoAttach.enabled) [...sessions].forEach(detachSession);
+        return {};
+      case "Runtime.runIfWaitingForDebugger":
+        if (sessionId !== undefined) children.set(sessionId, "running");
+        return {};
+      case "Target.detachFromTarget":
+        if (!options.sessionId || !sessions.has(options.sessionId)) {
+          throw new Error(`No session with given id: ${options.sessionId}`);
+        }
+        detachSession(options.sessionId);
+        return {};
+      default:
+        return {};
+    }
+  };
   const debuggee = Object.assign(emitter, {
     sendCommand: (method: string, params?: unknown, sessionId?: string) =>
-      new Promise((resolve) => {
+      new Promise((resolve, reject) => {
         sent.push({ method, params, sessionId });
-        sentWaiters.splice(0).forEach((wake) => wake());
-        if (method === "Target.getTargetInfo") {
-          resolve({ targetInfo: { targetId: "GUEST" } });
-          return;
-        }
-        if (held(method)) pending.push(() => resolve({ method }));
-        else resolve({});
+        const run = () => {
+          try {
+            resolve(execute(method, params, sessionId));
+          } catch (cause) {
+            reject(cause);
+          }
+          wake();
+        };
+        if (method !== "Target.getTargetInfo" && held(method)) pending.push(run);
+        else run();
       }),
+    detach: () => {
+      attached = false;
+    },
+    isAttached: () => attached,
   });
-  const untilSent = (done: (commands: ReadonlyArray<SentCommand>) => boolean): Promise<void> =>
-    done(sent)
+  const until = (done: () => boolean): Promise<void> =>
+    done()
       ? Promise.resolve()
-      : new Promise<void>((wake) => void sentWaiters.push(wake)).then(() => untilSent(done));
+      : new Promise<void>((resume) => void waiters.push(resume)).then(() => until(done));
   const webContents = {
     getURL: () => "http://localhost/",
     getTitle: () => "Page",
@@ -55,11 +115,26 @@ const makeDebuggee = (held: (method: string) => boolean = () => true) => {
       webContents: webContents as unknown as Electron.WebContents,
       debugger: debuggee as unknown as Electron.Debugger,
     },
-    emit: (method: string, params: unknown) => emitter.emit("message", {}, method, params, ""),
-    release: () => pending.splice(0).forEach((resolve) => resolve()),
+    emit,
+    /** A new iframe or worker starts in the page. */
+    startChild: (sessionId: string) => {
+      if (!autoAttach.enabled) {
+        children.set(sessionId, "running");
+        return;
+      }
+      sessions.add(sessionId);
+      children.set(sessionId, autoAttach.waitForDebuggerOnStart ? "paused" : "running");
+      emit("Target.attachedToTarget", {
+        sessionId,
+        waitingForDebugger: autoAttach.waitForDebuggerOnStart,
+      });
+    },
+    children: () => Object.fromEntries(children),
+    release: () => pending.splice(0).forEach((run) => run()),
     sent,
-    untilSent,
+    until,
     listeners: () => emitter.listenerCount("message"),
+    debuggerAttached: () => attached,
   };
 };
 
@@ -227,44 +302,46 @@ describe("DesktopBrowserHost", () => {
         }),
       );
       yield* Queue.takeN(events, 2);
-      debuggee.emit("Target.attachedToTarget", { sessionId: "IFRAME", waitingForDebugger: true });
+      // Playwright turns auto-attach on for the page's own children.
+      yield* host.handleCommandLine(
+        encodeJson({
+          type: "cdp",
+          ...key,
+          message: encodeJson({
+            id: 2,
+            method: "Target.setAutoAttach",
+            sessionId: "t3-preview-page",
+            params: { autoAttach: true, waitForDebuggerOnStart: true, flatten: true },
+          }),
+        }),
+      );
+      debuggee.release();
       yield* Queue.take(events);
-      const before = debuggee.sent.length;
+      debuggee.startChild("IFRAME");
+      yield* Queue.take(events);
+      expect(debuggee.children()).toEqual({ IFRAME: "paused" });
 
       debuggee.emit("Runtime.consoleAPICalled", {
         args: Array(2048).fill("x".repeat(40 * 1024)),
       });
       expect(yield* Queue.take(events)).toMatchObject({ type: "detached", ...key });
-      // A worker that attaches before auto-attach is off is paused too.
-      debuggee.emit("Target.attachedToTarget", { sessionId: "WORKER", waitingForDebugger: true });
+      // A worker that starts before auto-attach is off is paused too.
+      debuggee.startChild("WORKER");
       debuggee.release();
-      yield* Effect.promise(() =>
-        debuggee.untilSent(
-          (sent) =>
-            sent.filter((command) => command.method === "Target.detachFromTarget").length === 2,
-        ),
-      );
+      yield* Effect.promise(() => debuggee.until(() => debuggee.listeners() === 0));
+      debuggee.startChild("LATE_IFRAME");
 
-      expect(debuggee.sent.slice(before)).toEqual([
-        {
-          method: "Target.setAutoAttach",
-          params: { autoAttach: false, waitForDebuggerOnStart: false, flatten: true },
-          sessionId: undefined,
-        },
-        { method: "Runtime.runIfWaitingForDebugger", params: {}, sessionId: "IFRAME" },
-        { method: "Runtime.runIfWaitingForDebugger", params: {}, sessionId: "WORKER" },
-        {
-          method: "Target.detachFromTarget",
-          params: { sessionId: "IFRAME" },
-          sessionId: undefined,
-        },
-        {
-          method: "Target.detachFromTarget",
-          params: { sessionId: "WORKER" },
-          sessionId: undefined,
-        },
-      ]);
-      expect(debuggee.listeners()).toBe(0);
+      expect(debuggee.children()).toEqual({
+        IFRAME: "running",
+        WORKER: "running",
+        LATE_IFRAME: "running",
+      });
+      expect(debuggee.debuggerAttached()).toBe(true);
+      expect(debuggee.sent).toContainEqual({
+        method: "Target.setAutoAttach",
+        params: { autoAttach: false, waitForDebuggerOnStart: false, flatten: true },
+        sessionId: undefined,
+      });
     }).pipe(Effect.scoped),
   );
 });
