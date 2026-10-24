@@ -1,5 +1,7 @@
 import { SourceControlProviderKind } from "@t3tools/contracts";
 import { removeAgentCredits } from "@t3tools/source-control-core/server/mergeMessage";
+import * as Cache from "effect/Cache";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import type {
   PullRequestActor,
@@ -185,11 +187,50 @@ export function loginAvatarUrl(login: string, host: string): string | null {
   return /^[a-z0-9][a-z0-9-]{0,38}$/iu.test(login) ? `https://${host}/${login}.png?size=80` : null;
 }
 
+const SEARCH_VISIBILITY_TTL = Duration.minutes(10);
+const SEARCH_VISIBILITY_CAPACITY = 4096;
+
 const rendersEmpty = (body: string): boolean =>
   body.replace(/<!--[\s\S]*?-->/g, "").trim().length === 0;
 
 export const make = Effect.gen(function* () {
   const cli = yield* GitHubPullRequestApi.GitHubPullRequestApi;
+
+  // GitHub does not index every repository for search: a renamed one answers for its old name
+  // with silence rather than with an error. A repository a search has shown lately is indexed,
+  // so its silence is a real empty answer; any other the caller reads on its own.
+  const searchVisible = yield* Cache.make({
+    capacity: SEARCH_VISIBILITY_CAPACITY,
+    timeToLive: SEARCH_VISIBILITY_TTL,
+    // Entries are only ever set from a search's rows, so the lookup never runs.
+    lookup: (_key: string) => Effect.succeed(true),
+  });
+  const searchVisibilityKey = (host: string, repository: string) =>
+    `${host}\n${repository.trim().toLowerCase()}`;
+  const unresolvedBySearch = Effect.fn("GitHubPullRequestProvider.unresolvedBySearch")(function* (
+    input: Parameters<NonNullable<PullRequestProviderApi["listChangeRequestsAcross"]>>[0],
+    batch: GitHubPullRequestApi.GitHubPullRequestSearchBatch,
+  ) {
+    yield* Effect.forEach(
+      batch.items,
+      (item) => Cache.set(searchVisible, searchVisibilityKey(input.host, item.repository), true),
+      { discard: true },
+    );
+    // Past the first slice a repository has a boundary to carry on from, and silence there
+    // means its rows are older rather than absent. A truncated slice can be silent about a
+    // repository whose rows are just older than the cut, so it vouches for none.
+    if (input.cursor !== undefined) return [];
+    const answered = new Set(batch.items.map((item) => item.repository.trim().toLowerCase()));
+    return yield* Effect.filter(
+      input.repositories.filter((repository) => !answered.has(repository.trim().toLowerCase())),
+      (repository) =>
+        batch.truncated
+          ? Effect.succeed(true)
+          : Cache.has(searchVisible, searchVisibilityKey(input.host, repository)).pipe(
+              Effect.map((visible) => !visible),
+            ),
+    );
+  });
 
   const fail = (operation: string) => (error: GitHubPullRequestApi.GitHubPullRequestApiError) =>
     new PullRequestProviderError({
@@ -306,9 +347,6 @@ export const make = Effect.gen(function* () {
           ),
         ),
 
-    // GitHub does not index every repository for search: a renamed one answers for its old name
-    // with silence rather than with an error.
-    listsAcrossMayOmitRepositories: true,
     listChangeRequestsAcross: (input) =>
       cli
         .searchPullRequests({
@@ -325,13 +363,16 @@ export const make = Effect.gen(function* () {
         })
         .pipe(
           Effect.mapError(fail("listChangeRequestsAcross")),
-          Effect.map((batch) => ({
-            truncated: batch.truncated,
-            items: batch.items.map((item) => ({
-              ...item,
-              author: withAvatar(item.author, new Map<string, string>(), input.host),
+          Effect.flatMap((batch) =>
+            Effect.map(unresolvedBySearch(input, batch), (unresolved) => ({
+              truncated: batch.truncated,
+              items: batch.items.map((item) => ({
+                ...item,
+                author: withAvatar(item.author, new Map<string, string>(), input.host),
+              })),
+              unresolved,
             })),
-          })),
+          ),
         ),
 
     listChangeRequestStats: (input) =>
