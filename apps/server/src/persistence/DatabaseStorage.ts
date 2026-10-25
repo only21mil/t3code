@@ -84,7 +84,7 @@ const make = Effect.gen(function* () {
     Effect.catch((cause) => Effect.logWarning("Database space reclamation failed", { cause })),
   );
 
-  // Even a pass that deletes nothing scans the event store. Persist completion
+  // Even a pass that deletes nothing scans the events written since the last one. Persist completion
   // so restarting does not trigger another scan before the six-hour interval.
   const compactedAtPath = path.join(path.dirname(config.dbPath), "compacted-at");
   const compact = Effect.gen(function* () {

@@ -37,6 +37,8 @@ export interface ProjectionMaintenanceV2Shape {
       readonly deletedEventCount: number;
       readonly deletedReceiptCount: number;
       readonly reclaimableBytes: number;
+      /** Event index entries this pass read: compactable events since the last pass, rows kept for the threads and entities they touch, and v1 events of imported threads. */
+      readonly scannedEventCount: number;
     },
     ProjectionMaintenanceError
   >;
@@ -222,166 +224,304 @@ export const layer: Layer.Layer<
 
     const supersedableThreadEventTypes = new Set(SUPERSEDABLE_THREAD_EVENT_TYPES);
     const readStateThreadEventTypes = new Set(READ_STATE_THREAD_EVENT_TYPES);
+    const KEYED_EVENT_TYPES = [
+      "thread.pull-request-link-updated",
+      "message.updated",
+      "node.updated",
+    ];
+    const keyedEventTypes = new Set(KEYED_EVENT_TYPES);
+    const quoteList = (values: ReadonlyArray<string>) =>
+      values.map((value) => `'${value}'`).join(", ");
+    // Partial index predicates and the key expression in migration 070 must match these element for element.
+    const compactableEventTypes = sql.literal(
+      quoteList([
+        ...SUPERSEDABLE_THREAD_EVENT_TYPES,
+        ...READ_STATE_THREAD_EVENT_TYPES,
+        ...KEYED_EVENT_TYPES,
+      ]),
+    );
+    const threadStateEventTypes = sql.literal(
+      quoteList([
+        ...SUPERSEDABLE_THREAD_EVENT_TYPES,
+        ...READ_STATE_THREAD_EVENT_TYPES,
+        "thread.pull-request-link-updated",
+      ]),
+    );
+    const compactionKey = sql.literal(`(CASE
+        WHEN event.event_type IN ('message.updated', 'node.updated')
+        THEN json_extract(event.payload_json, '$.id')
+        WHEN event.event_type = 'thread.pull-request-link-updated'
+        THEN json_array(json_extract(event.payload_json, '$.host'),
+          json_extract(event.payload_json, '$.repository'),
+          json_extract(event.payload_json, '$.number'))
+      END)`);
     // Keep subagent.updated and turn-item.updated rows: slimmed payloads reference their prompts.
     // Small pages bound work on the reader worker and synchronous fallback.
     const COMPACTION_PAGE_SIZE = 50;
 
-    /** Retain newest and oldest keyed events to preserve client insertion order; page all events to bound sparse scans.
-     * Keep turn-item.updated because replay assigns positions on first write. */
+    type CompactableEventRow = {
+      readonly sequence: number;
+      readonly stream_id: string;
+      readonly event_type: string;
+      readonly entity_id: string | null;
+    };
+
+    /** Retain newest and oldest keyed events to preserve client insertion order; keep turn-item.updated because
+     * replay assigns positions on first write. Partial indexes hold only deletable event types. A pass walks those
+     * written since the last completed pass, then the rows earlier passes kept for each thread and entity it met,
+     * so it deletes what one full newest-first pass would. */
     const compactEventStore = Effect.gen(function* () {
       const bounds = yield* sql<{
         readonly event_sequence: number;
-        readonly receipt_row_id: number;
+        readonly imported_transcript_count: number;
       }>`
         SELECT
           COALESCE((SELECT MAX(sequence) FROM orchestration_events), 0) AS event_sequence,
-          COALESCE((SELECT MAX(rowid) FROM orchestration_command_receipts), 0) AS receipt_row_id
+          (
+            SELECT COUNT(*) FROM orchestration_v2_legacy_imports
+            WHERE transcript_imported_at IS NOT NULL
+          ) AS imported_transcript_count
       `;
-      let throughSequence = bounds[0]?.event_sequence ?? 0;
-      let throughReceiptRowId = bounds[0]?.receipt_row_id ?? 0;
+      const eventSequence = bounds[0]?.event_sequence ?? 0;
+      const importedTranscriptCount = bounds[0]?.imported_transcript_count ?? 0;
+      const watermark = (yield* sql<{
+        readonly event_sequence: number;
+        readonly imported_transcript_count: number;
+      }>`
+        SELECT event_sequence, imported_transcript_count
+        FROM orchestration_v2_compaction_watermark
+        WHERE id = 1
+      `)[0];
+      // A watermark above the current log describes a different event table; walk it all.
+      const afterSequence =
+        watermark !== undefined && watermark.event_sequence <= eventSequence
+          ? watermark.event_sequence
+          : 0;
+      // transcript_imported_at never resets, so a changed count means an import completed since the last pass.
+      const importedSinceWatermark =
+        afterSequence === 0 || watermark?.imported_transcript_count !== importedTranscriptCount;
       const retainedThreadIds = new Set<string>();
       const retainedReadStateThreadIds = new Set<string>();
       // Retain each key's oldest candidate, deleting it only when an older event appears.
       const oldestCandidateByEntityKey = new Map<string, number | null>();
+      // Threads and entities with new events; rows earlier passes kept for them may now be obsolete.
+      const touchedThreadIds = new Set<string>();
+      const touchedEntities = new Map<string, CompactableEventRow>();
       let deletedEventCount = 0;
       let deletedReceiptCount = 0;
+      let scannedEventCount = 0;
 
-      while (throughSequence > 0) {
-        const rows = yield* sql<{
-          readonly sequence: number;
-          readonly application_event_version: number;
-          readonly aggregate_kind: string;
-          readonly stream_id: string;
-          readonly event_type: string;
-          readonly entity_id: string | null;
-          readonly imported_legacy_thread: number;
-        }>`
-          SELECT
-            event.sequence,
-            event.application_event_version,
-            event.aggregate_kind,
-            event.stream_id,
-            event.event_type,
-            CASE
-              WHEN event.application_event_version = 2
-                AND event.event_type IN ('message.updated', 'node.updated')
-              THEN json_extract(event.payload_json, '$.id')
-              WHEN event.application_event_version = 2
-                AND event.event_type = 'thread.pull-request-link-updated'
-              THEN json_array(json_extract(event.payload_json, '$.host'),
-                json_extract(event.payload_json, '$.repository'),
-                json_extract(event.payload_json, '$.number'))
-              ELSE NULL
-            END AS entity_id,
-            CASE
-              WHEN event.application_event_version = 1 AND event.aggregate_kind = 'thread'
-              THEN EXISTS (
-                SELECT 1 FROM orchestration_v2_legacy_imports AS legacy_import
-                WHERE legacy_import.thread_id = event.stream_id
-                  AND legacy_import.transcript_imported_at IS NOT NULL
-              )
-              ELSE 0
-            END AS imported_legacy_thread
-          FROM orchestration_events AS event
-          WHERE event.sequence <= ${throughSequence}
-          ORDER BY event.sequence DESC
-          LIMIT ${COMPACTION_PAGE_SIZE}
-        `.pipe(NodeSqliteClient.readOnly);
-        const obsolete: number[] = [];
-        for (const row of rows) {
-          if (row.imported_legacy_thread === 1) {
-            obsolete.push(row.sequence);
-          } else if (row.application_event_version === 2) {
-            if (
-              row.aggregate_kind === "thread" &&
-              supersedableThreadEventTypes.has(row.event_type)
-            ) {
-              if (retainedThreadIds.has(row.stream_id)) obsolete.push(row.sequence);
-              else retainedThreadIds.add(row.stream_id);
-            } else if (
-              row.aggregate_kind === "thread" &&
-              readStateThreadEventTypes.has(row.event_type)
-            ) {
-              if (
-                retainedThreadIds.has(row.stream_id) ||
-                retainedReadStateThreadIds.has(row.stream_id)
-              ) {
-                obsolete.push(row.sequence);
-              } else retainedReadStateThreadIds.add(row.stream_id);
-            } else if (
-              row.event_type === "thread.pull-request-link-updated" &&
-              retainedThreadIds.has(row.stream_id)
-            ) {
-              // A newer whole-thread payload already carries this link's state.
-              obsolete.push(row.sequence);
-            } else if (
-              row.event_type === "thread.pull-request-link-updated" ||
-              row.event_type === "message.updated" ||
-              row.event_type === "node.updated"
-            ) {
-              const key = encodeEntityKey([row.event_type, row.stream_id, row.entity_id]);
-              const candidate = oldestCandidateByEntityKey.get(key);
-              if (candidate === undefined) oldestCandidateByEntityKey.set(key, null);
-              else {
-                if (candidate !== null) obsolete.push(candidate);
-                oldestCandidateByEntityKey.set(key, row.sequence);
-              }
-            }
-          }
-        }
-        // Yield even without deletions for clients using the synchronous fallback.
-        yield* Effect.yieldNow;
-        if (obsolete.length > 0) {
+      const deleteEvents =
+        /* This helper runs once per compaction page; the enclosing operation owns the span. */
+        Effect.fnUntraced(function* (obsolete: ReadonlyArray<number>) {
+          // Yield even without deletions for clients using the synchronous fallback.
+          yield* Effect.yieldNow;
+          if (obsolete.length === 0) return;
           yield* sql`DELETE FROM orchestration_events WHERE sequence IN ${sql.in(obsolete)}`;
           deletedEventCount += obsolete.length;
           yield* Effect.yieldNow;
+        });
+
+      // Rows must arrive newest first per thread and entity.
+      const classify = (row: CompactableEventRow, obsolete: Array<number>) => {
+        if (supersedableThreadEventTypes.has(row.event_type)) {
+          if (retainedThreadIds.has(row.stream_id)) obsolete.push(row.sequence);
+          else retainedThreadIds.add(row.stream_id);
+        } else if (readStateThreadEventTypes.has(row.event_type)) {
+          if (
+            retainedThreadIds.has(row.stream_id) ||
+            retainedReadStateThreadIds.has(row.stream_id)
+          ) {
+            obsolete.push(row.sequence);
+          } else retainedReadStateThreadIds.add(row.stream_id);
+        } else if (
+          row.event_type === "thread.pull-request-link-updated" &&
+          retainedThreadIds.has(row.stream_id)
+        ) {
+          // A newer whole-thread payload already carries this link's state.
+          obsolete.push(row.sequence);
+        } else if (keyedEventTypes.has(row.event_type)) {
+          const key = encodeEntityKey([row.event_type, row.stream_id, row.entity_id]);
+          const candidate = oldestCandidateByEntityKey.get(key);
+          if (candidate === undefined) oldestCandidateByEntityKey.set(key, null);
+          else {
+            if (candidate !== null) obsolete.push(candidate);
+            oldestCandidateByEntityKey.set(key, row.sequence);
+          }
         }
+      };
+
+      let throughSequence = eventSequence;
+      while (throughSequence > afterSequence) {
+        const rows = yield* sql<CompactableEventRow>`
+          SELECT
+            event.sequence,
+            event.stream_id,
+            event.event_type,
+            ${compactionKey} AS entity_id
+          FROM orchestration_events AS event
+            INDEXED BY orchestration_events_compaction_sequence_idx
+          WHERE event.application_event_version = 2
+            AND event.aggregate_kind = 'thread'
+            AND event.event_type IN (${compactableEventTypes})
+            AND event.sequence <= ${throughSequence}
+            AND event.sequence > ${afterSequence}
+          ORDER BY event.sequence DESC
+          LIMIT ${COMPACTION_PAGE_SIZE}
+        `.pipe(NodeSqliteClient.readOnly);
+        scannedEventCount += rows.length;
+        const obsolete: Array<number> = [];
+        for (const row of rows) {
+          classify(row, obsolete);
+          if (row.event_type === "message.updated" || row.event_type === "node.updated") {
+            touchedEntities.set(
+              encodeEntityKey([row.event_type, row.stream_id, row.entity_id]),
+              row,
+            );
+          } else touchedThreadIds.add(row.stream_id);
+        }
+        yield* deleteEvents(obsolete);
         throughSequence = (rows.at(-1)?.sequence ?? 1) - 1;
         if (rows.length < COMPACTION_PAGE_SIZE) break;
       }
 
-      while (throughReceiptRowId > 0) {
-        const rows = yield* sql<{
-          readonly row_id: number;
-          readonly command_id: string;
-          readonly imported_legacy_thread: number;
-        }>`
-          SELECT
-            receipt.rowid AS row_id,
-            receipt.command_id,
-            CASE
-              WHEN receipt.command_type = 'legacy' AND receipt.aggregate_kind = 'thread'
-              THEN EXISTS (
-                SELECT 1 FROM orchestration_v2_legacy_imports AS legacy_import
-                WHERE legacy_import.thread_id = receipt.aggregate_id
-                  AND legacy_import.transcript_imported_at IS NOT NULL
-              )
-              ELSE 0
-            END AS imported_legacy_thread
-          FROM orchestration_command_receipts AS receipt
-          WHERE receipt.rowid <= ${throughReceiptRowId}
-          ORDER BY receipt.rowid DESC
-          LIMIT ${COMPACTION_PAGE_SIZE}
-        `.pipe(NodeSqliteClient.readOnly);
-        const obsolete = rows
-          .filter((row) => row.imported_legacy_thread === 1)
-          .map((row) => row.command_id);
-        yield* Effect.yieldNow;
-        if (obsolete.length > 0) {
-          yield* sql`DELETE FROM orchestration_command_receipts WHERE command_id IN ${sql.in(obsolete)}`;
-          deletedReceiptCount += obsolete.length;
-          yield* Effect.yieldNow;
+      // Continue the walk below the watermark. Earlier passes left each thread at most one supersedable and one
+      // read-state event plus the newest and oldest event per link, and each entity its newest and oldest event.
+      if (afterSequence > 0) {
+        const obsolete: Array<number> = [];
+        const flush = Effect.suspend(() =>
+          obsolete.length >= COMPACTION_PAGE_SIZE
+            ? deleteEvents(obsolete.splice(0))
+            : Effect.yieldNow,
+        );
+        const threadIds = Array.from(touchedThreadIds);
+        for (let index = 0; index < threadIds.length; index += COMPACTION_PAGE_SIZE) {
+          // The first event_type term satisfies the partial index predicate; the second picks thread state.
+          const rows = yield* sql<CompactableEventRow>`
+            SELECT
+              event.sequence,
+              event.stream_id,
+              event.event_type,
+              ${compactionKey} AS entity_id
+            FROM orchestration_events AS event
+              INDEXED BY orchestration_events_compaction_key_idx
+            WHERE event.aggregate_kind = 'thread'
+              AND event.application_event_version = 2
+              AND event.event_type IN (${compactableEventTypes})
+              AND event.stream_id IN ${sql.in(threadIds.slice(index, index + COMPACTION_PAGE_SIZE))}
+              AND event.event_type IN (${threadStateEventTypes})
+              AND event.sequence <= ${afterSequence}
+            ORDER BY event.sequence DESC
+          `.pipe(NodeSqliteClient.readOnly);
+          scannedEventCount += rows.length;
+          for (const row of rows) classify(row, obsolete);
+          yield* flush;
         }
-        throughReceiptRowId = (rows.at(-1)?.row_id ?? 1) - 1;
-        if (rows.length < COMPACTION_PAGE_SIZE) break;
+        const entities = Array.from(touchedEntities.values());
+        for (let index = 0; index < entities.length; index += COMPACTION_PAGE_SIZE) {
+          const keys = entities
+            .slice(index, index + COMPACTION_PAGE_SIZE)
+            .map((entity) => sql`(${entity.stream_id}, ${entity.event_type}, ${entity.entity_id})`);
+          // CROSS JOIN keeps the key list outermost, so each key is one index seek.
+          const rows = yield* sql<CompactableEventRow>`
+            WITH entity(stream_id, event_type, entity_id) AS (VALUES ${sql.csv(keys)})
+            SELECT
+              event.sequence,
+              event.stream_id,
+              event.event_type,
+              ${compactionKey} AS entity_id
+            FROM entity
+            CROSS JOIN orchestration_events AS event
+              INDEXED BY orchestration_events_compaction_key_idx
+            WHERE event.aggregate_kind = 'thread'
+              AND event.application_event_version = 2
+              AND event.event_type IN (${compactableEventTypes})
+              AND event.stream_id = entity.stream_id
+              AND event.event_type = entity.event_type
+              AND ${compactionKey} IS entity.entity_id
+              AND event.sequence <= ${afterSequence}
+            ORDER BY event.sequence DESC
+          `.pipe(NodeSqliteClient.readOnly);
+          scannedEventCount += rows.length;
+          for (const row of rows) classify(row, obsolete);
+          yield* flush;
+        }
+        yield* deleteEvents(obsolete);
       }
+
+      // Imported transcripts replace their thread's v1 events and legacy receipts. New writes are never v1.
+      if (importedSinceWatermark) {
+        let afterThreadId = "";
+        while (true) {
+          const imports = yield* sql<{ readonly thread_id: string }>`
+            SELECT thread_id
+            FROM orchestration_v2_legacy_imports
+            WHERE transcript_imported_at IS NOT NULL
+              AND thread_id > ${afterThreadId}
+            ORDER BY thread_id ASC
+            LIMIT ${COMPACTION_PAGE_SIZE}
+          `.pipe(NodeSqliteClient.readOnly);
+          for (const { thread_id: threadId } of imports) {
+            while (true) {
+              const rows = yield* sql<{ readonly sequence: number }>`
+                SELECT event.sequence
+                FROM orchestration_events AS event
+                  INDEXED BY orchestration_events_compaction_key_idx
+                WHERE event.aggregate_kind = 'thread'
+                  AND event.application_event_version = 1
+                  AND event.stream_id = ${threadId}
+                LIMIT ${COMPACTION_PAGE_SIZE}
+              `.pipe(NodeSqliteClient.readOnly);
+              scannedEventCount += rows.length;
+              yield* deleteEvents(rows.map((row) => row.sequence));
+              if (rows.length < COMPACTION_PAGE_SIZE) break;
+            }
+            while (true) {
+              const rows = yield* sql<{ readonly row_id: number }>`
+                SELECT receipt.rowid AS row_id
+                FROM orchestration_command_receipts AS receipt
+                  INDEXED BY orchestration_command_receipts_legacy_thread_idx
+                WHERE receipt.command_type = 'legacy'
+                  AND receipt.aggregate_kind = 'thread'
+                  AND receipt.aggregate_id = ${threadId}
+                LIMIT ${COMPACTION_PAGE_SIZE}
+              `.pipe(NodeSqliteClient.readOnly);
+              yield* Effect.yieldNow;
+              if (rows.length > 0) {
+                yield* sql`DELETE FROM orchestration_command_receipts WHERE rowid IN ${sql.in(rows.map((row) => row.row_id))}`;
+                deletedReceiptCount += rows.length;
+                yield* Effect.yieldNow;
+              }
+              if (rows.length < COMPACTION_PAGE_SIZE) break;
+            }
+          }
+          afterThreadId = imports.at(-1)?.thread_id ?? afterThreadId;
+          if (imports.length < COMPACTION_PAGE_SIZE) break;
+        }
+      }
+
+      // Written only after a completed pass; an interrupted pass resumes from the previous watermark.
+      const updatedAt = DateTime.formatIso(yield* DateTime.now);
+      yield* sql`
+        INSERT INTO orchestration_v2_compaction_watermark (
+          id,
+          event_sequence,
+          imported_transcript_count,
+          updated_at
+        )
+        VALUES (1, ${eventSequence}, ${importedTranscriptCount}, ${updatedAt})
+        ON CONFLICT(id) DO UPDATE SET
+          event_sequence = excluded.event_sequence,
+          imported_transcript_count = excluded.imported_transcript_count,
+          updated_at = excluded.updated_at
+      `;
 
       const freelistRows = yield* sql<{ readonly freelist_count: number }>`PRAGMA freelist_count`;
       const pageSizeRows = yield* sql<{ readonly page_size: number }>`PRAGMA page_size`;
       const reclaimableBytes =
         (freelistRows[0]?.freelist_count ?? 0) * (pageSizeRows[0]?.page_size ?? 0);
 
-      return { deletedEventCount, deletedReceiptCount, reclaimableBytes };
+      return { deletedEventCount, deletedReceiptCount, reclaimableBytes, scannedEventCount };
     });
 
     return ProjectionMaintenanceV2.of({

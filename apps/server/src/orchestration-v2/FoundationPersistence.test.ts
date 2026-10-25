@@ -3184,8 +3184,11 @@ it.effect.each(["events", "receipts"] as const)(
         const discoveryStarted = yield* Deferred.make<Tracer.Span>();
         const observeDiscovery: Statement.Transformer = (statement, _sql, _fiber, span) => {
           const [query] = statement.compile();
+          // Receipts of imported threads are found by walking the imported threads.
           const pageQuery =
-            kind === "events" ? /^\s*SELECT\s+event\.sequence/ : /^\s*SELECT\s+receipt\.rowid/;
+            kind === "events"
+              ? /^\s*SELECT\s+event\.sequence/
+              : /^\s*SELECT\s+thread_id\s+FROM\s+orchestration_v2_legacy_imports/;
           return pageQuery.test(query)
             ? Deferred.succeed(discoveryStarted, span).pipe(Effect.as(statement))
             : Effect.succeed(statement);
@@ -3214,6 +3217,330 @@ it.effect.each(["events", "receipts"] as const)(
         assert.deepEqual(retained, [{ id: "pending" }]);
       }).pipe(Effect.provide(maintenanceLayer));
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+const compactionHistory = (threadId: ThreadId, now: DateTime.Utc) => {
+  const thread = makeThread(threadId, now);
+  const id = (suffix: string) => EventId.make(`event:${threadId}:${suffix}`);
+  return {
+    created: threadCreatedEvent({ id: `event:${threadId}:created`, thread, now }),
+    state: (
+      suffix: string,
+      type: "thread.visited" | "thread.metadata-updated",
+    ): OrchestrationV2DomainEvent => ({
+      id: id(suffix),
+      type,
+      threadId,
+      providerInstanceId,
+      occurredAt: now,
+      payload: { ...thread, lastVisitedAt: now },
+    }),
+    message: (suffix: string, messageId: string, text: string): OrchestrationV2DomainEvent => ({
+      id: id(suffix),
+      type: "message.updated",
+      threadId,
+      occurredAt: now,
+      payload: {
+        createdBy: "user",
+        creationSource: "web",
+        id: MessageId.make(messageId),
+        threadId,
+        runId: null,
+        nodeId: null,
+        role: "user",
+        text,
+        attachments: [],
+        streaming: false,
+        createdAt: now,
+        updatedAt: now,
+      },
+    }),
+    node: (
+      suffix: string,
+      nodeIdValue: string,
+      status: "running" | "completed",
+    ): OrchestrationV2DomainEvent => {
+      const nodeId = NodeId.make(nodeIdValue);
+      return {
+        id: id(suffix),
+        type: "node.updated",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id: nodeId,
+          threadId,
+          runId: null,
+          parentNodeId: null,
+          rootNodeId: nodeId,
+          kind: "assistant_message",
+          status,
+          countsForRun: false,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          runtimeRequestId: null,
+          checkpointScopeId: null,
+          startedAt: now,
+          completedAt: status === "completed" ? now : null,
+        },
+      };
+    },
+    item: (suffix: string, itemId: string, text: string): OrchestrationV2DomainEvent => ({
+      id: id(suffix),
+      type: "turn-item.updated",
+      threadId,
+      occurredAt: now,
+      payload: {
+        id: TurnItemId.make(itemId),
+        threadId,
+        runId: null,
+        nodeId: null,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 1,
+        status: "completed",
+        title: null,
+        startedAt: now,
+        completedAt: now,
+        updatedAt: now,
+        type: "assistant_message",
+        messageId: MessageId.make(`message:${itemId}`),
+        text,
+        streaming: false,
+      },
+    }),
+  };
+};
+
+const remainingEventIds = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const rows = yield* sql<{ readonly event_id: string }>`
+    SELECT event_id FROM orchestration_events ORDER BY sequence ASC
+  `;
+  return rows.map((row) => row.event_id);
+});
+
+const turnItemProjectionRows = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  return {
+    items: yield* sql`
+      SELECT * FROM orchestration_v2_projection_turn_items ORDER BY thread_id, turn_item_id
+    `,
+    positions: yield* sql`
+      SELECT * FROM orchestration_v2_turn_item_positions ORDER BY thread_id, turn_item_id
+    `,
+  };
+});
+
+it.effect("reads only compactable events since the last pass and rows kept for their keys", () =>
+  Effect.gen(function* () {
+    const eventSink = yield* EventSink.EventSinkV2;
+    const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+    const sql = yield* SqlClient.SqlClient;
+    const history = compactionHistory(ThreadId.make("thread:compaction-scan"), yield* DateTime.now);
+
+    yield* eventSink.write({
+      events: [
+        history.created,
+        history.message("a1", "message:a", "a1"),
+        history.message("a2", "message:a", "a2"),
+        history.message("a3", "message:a", "a3"),
+        history.item("i1", "item:i", "i1"),
+      ],
+    });
+    const first = yield* maintenance.compactEventStore;
+    assert.equal(first.scannedEventCount, 3);
+    assert.equal(first.deletedEventCount, 1);
+
+    // Forty non-compactable events and a new message: the pass reads only the message's three rows.
+    yield* eventSink.write({
+      events: [
+        ...Array.from({ length: 40 }, (_, index) =>
+          history.item(`bulk-${index}`, `item:bulk-${index}`, "bulk"),
+        ),
+        history.message("b1", "message:b", "b1"),
+        history.message("b2", "message:b", "b2"),
+        history.message("b3", "message:b", "b3"),
+      ],
+    });
+    const second = yield* maintenance.compactEventStore;
+    assert.equal(second.scannedEventCount, 3);
+    assert.equal(second.deletedEventCount, 1);
+
+    const idle = yield* maintenance.compactEventStore;
+    assert.equal(idle.scannedEventCount, 0);
+    assert.equal(idle.deletedEventCount, 0);
+
+    // A new version of message:a also reads the two rows earlier passes kept for it, oldest and newest.
+    yield* eventSink.write({ events: [history.message("a4", "message:a", "a4")] });
+    const touched = yield* maintenance.compactEventStore;
+    assert.equal(touched.scannedEventCount, 3);
+    assert.equal(touched.deletedEventCount, 1);
+    const messageIds = (yield* remainingEventIds).filter((eventId) => /:(a|b)\d$/.test(eventId));
+    assert.deepEqual(messageIds, [
+      "event:thread:compaction-scan:a1",
+      "event:thread:compaction-scan:b1",
+      "event:thread:compaction-scan:b3",
+      "event:thread:compaction-scan:a4",
+    ]);
+    const total = yield* sql<{ readonly count: number }>`
+      SELECT COUNT(*) AS count FROM orchestration_events
+    `;
+    assert.isAbove(total[0]?.count ?? 0, 40);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("leaves the same events and replay state over several passes as one full pass", () =>
+  Effect.gen(function* () {
+    const now = yield* DateTime.now;
+    const threadId = ThreadId.make("thread:compaction-equivalence");
+    const history = compactionHistory(threadId, now);
+    const firstWindow = [
+      history.created,
+      history.state("meta-1", "thread.metadata-updated"),
+      history.state("visit-1", "thread.visited"),
+      history.message("a1", "message:a", "a1"),
+      history.message("a2", "message:a", "a2"),
+      history.message("a3", "message:a", "a3"),
+      history.node("n1", "node:n", "running"),
+      history.node("n2", "node:n", "running"),
+      history.item("i1", "item:i", "i1"),
+      history.item("i2", "item:i", "i2"),
+    ];
+    const secondWindow = [
+      history.state("meta-2", "thread.metadata-updated"),
+      history.state("visit-2", "thread.visited"),
+      history.message("a4", "message:a", "a4"),
+      history.message("a5", "message:a", "a5"),
+      history.node("n3", "node:n", "completed"),
+      history.message("b1", "message:b", "b1"),
+      history.message("b2", "message:b", "b2"),
+      history.item("i3", "item:i", "i3"),
+    ];
+    const compactInWindows = (windows: ReadonlyArray<ReadonlyArray<OrchestrationV2DomainEvent>>) =>
+      Effect.gen(function* () {
+        const eventSink = yield* EventSink.EventSinkV2;
+        const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+        const projections = yield* ProjectionStore.ProjectionStoreV2;
+        for (const events of windows) {
+          yield* eventSink.write({ events });
+          yield* maintenance.compactEventStore;
+        }
+        const beforeRebuild = {
+          thread: yield* projections.getThreadProjection(threadId),
+          rows: yield* turnItemProjectionRows,
+        };
+        assert.isTrue((yield* maintenance.rebuild).valid);
+        assert.deepEqual(yield* projections.getThreadProjection(threadId), beforeRebuild.thread);
+        assert.deepEqual(yield* turnItemProjectionRows, beforeRebuild.rows);
+        return yield* remainingEventIds;
+      }).pipe(Effect.provide(layerTest));
+
+    const incremental = yield* compactInWindows([firstWindow, secondWindow]);
+    const full = yield* compactInWindows([[...firstWindow, ...secondWindow]]);
+    assert.deepEqual(incremental, full);
+    assert.notInclude(incremental, `event:${threadId}:meta-1`);
+    assert.notInclude(incremental, `event:${threadId}:visit-1`);
+    assert.notInclude(incremental, `event:${threadId}:a3`);
+    assert.notInclude(incremental, `event:${threadId}:n2`);
+    assert.include(incremental, `event:${threadId}:a1`);
+  }),
+);
+
+it.effect("deletes v1 events and receipts of a transcript imported after the last pass", () =>
+  Effect.gen(function* () {
+    const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+    const sql = yield* SqlClient.SqlClient;
+    const now = DateTime.formatIso(yield* DateTime.now);
+    const threadId = "thread:compaction-late-import";
+    yield* sql`
+      INSERT INTO orchestration_v2_legacy_imports (
+        thread_id, source_updated_at, shell_imported_at, transcript_imported_at,
+        imported_message_count, last_error
+      ) VALUES (${threadId}, ${now}, ${now}, NULL, 0, NULL)
+    `;
+    for (const version of [1, 2, 3]) {
+      yield* sql`
+        INSERT INTO orchestration_events (
+          event_id, aggregate_kind, stream_id, stream_version, event_type,
+          occurred_at, actor_kind, payload_json, metadata_json, application_event_version
+        ) VALUES (
+          ${`${threadId}:${version}`}, 'thread', ${threadId}, ${version},
+          'thread.message-appended', ${now}, 'user', '{}', '{}', 1
+        )
+      `;
+    }
+    yield* sql`
+      INSERT INTO orchestration_command_receipts (
+        command_id, aggregate_kind, aggregate_id, accepted_at, result_sequence, status, command_type
+      ) VALUES (${`${threadId}:command`}, 'thread', ${threadId}, ${now}, 1, 'accepted', 'legacy')
+    `;
+    const pending = yield* maintenance.compactEventStore;
+    assert.equal(pending.deletedEventCount, 0);
+    assert.equal(pending.deletedReceiptCount, 0);
+
+    yield* sql`
+      UPDATE orchestration_v2_legacy_imports
+      SET transcript_imported_at = ${now}
+      WHERE thread_id = ${threadId}
+    `;
+    const imported = yield* maintenance.compactEventStore;
+    assert.equal(imported.deletedEventCount, 3);
+    assert.equal(imported.deletedReceiptCount, 1);
+    assert.equal(imported.scannedEventCount, 3);
+    assert.deepEqual(yield* remainingEventIds, []);
+
+    const idle = yield* maintenance.compactEventStore;
+    assert.equal(idle.scannedEventCount, 0);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("keeps the compaction watermark across connections", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "compaction-watermark-" });
+    const maintenanceLayer = () =>
+      ProjectionMaintenance.layer.pipe(
+        Layer.provide(Layer.merge(EventStore.layer, ProjectionStore.layer)),
+        Layer.provideMerge(SqlitePersistence.layerFromPath(path.join(directory, "statev2.sqlite"))),
+      );
+    let streamVersion = 0;
+    const insertVisits = (threadId: string, count: number) =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        for (let index = 0; index < count; index++) {
+          streamVersion += 1;
+          yield* sql`
+            INSERT INTO orchestration_events (
+              event_id, aggregate_kind, stream_id, stream_version, event_type,
+              occurred_at, actor_kind, payload_json, metadata_json, application_event_version
+            ) VALUES (
+              ${`visit:${streamVersion}`}, 'thread', ${threadId}, ${streamVersion},
+              'thread.visited', '2026-10-25T00:00:00.000Z', 'user', '{}', '{}', 2
+            )
+          `;
+        }
+      });
+
+    yield* Effect.gen(function* () {
+      const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+      yield* insertVisits("thread:a", 3);
+      const first = yield* maintenance.compactEventStore;
+      assert.equal(first.scannedEventCount, 3);
+      assert.equal(first.deletedEventCount, 2);
+    }).pipe(Effect.provide(maintenanceLayer()));
+
+    yield* Effect.gen(function* () {
+      const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+      yield* insertVisits("thread:b", 2);
+      const reopened = yield* maintenance.compactEventStore;
+      assert.equal(reopened.scannedEventCount, 2);
+      assert.equal(reopened.deletedEventCount, 1);
+    }).pipe(Effect.provide(maintenanceLayer()));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
 it.effect("routes projection node lookups to the reader connection", () =>
