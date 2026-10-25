@@ -576,7 +576,7 @@ export const OrchestratorMcpScheduleTaskInput = Schema.Struct({
   bindToCurrentThread: Schema.optional(
     Schema.Boolean.annotate({
       description:
-        "In this thread's project, true (default) posts each run into this thread and false creates a fresh top-level thread per run. In another project, or without a calling thread, each run launches a fresh thread and true is rejected.",
+        "True: runs post in this thread, which must be in the target project. False: new thread per run. Default: true when allowed.",
     }),
   ),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
