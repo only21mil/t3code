@@ -36,7 +36,8 @@ export default Effect.gen(function* () {
         THEN json_extract(payload_json, '$.promptSequence')
       END),
       application_event_version,
-      aggregate_kind
+      aggregate_kind,
+      command_id
     )
     WHERE application_event_version = 2
       AND aggregate_kind = 'thread'
@@ -69,7 +70,12 @@ export default Effect.gen(function* () {
           json_extract(payload_json, '$.number'))
       END),
       sequence,
-      aggregate_kind
+      aggregate_kind,
+      command_id,
+      (CASE
+        WHEN event_type = 'turn-item.updated'
+        THEN json_extract(payload_json, '$.promptSequence')
+      END)
     )
     WHERE aggregate_kind = 'thread'
       AND (

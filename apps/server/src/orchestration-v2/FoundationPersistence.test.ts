@@ -3400,6 +3400,155 @@ it.effect("reads only compactable events since the last pass and rows kept for t
   }).pipe(Effect.provide(layerTest)),
 );
 
+it.effect("bounds incremental retained-link discovery and deletion", () =>
+  Effect.gen(function* () {
+    const eventSink = yield* EventSink.EventSinkV2;
+    const eventStore = yield* EventStore.EventStoreV2;
+    const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const sql = yield* SqlClient.SqlClient;
+    const now = yield* DateTime.now;
+    const timestamp = DateTime.formatIso(now);
+    const threads = Array.from({ length: 50 }, (_, index) =>
+      makeThread(ThreadId.make(`thread:bounded-links:${index + 1}`), now),
+    );
+    yield* eventSink.write({
+      events: threads.map((thread) =>
+        threadCreatedEvent({ id: `event:${thread.id}:created`, thread, now }),
+      ),
+    });
+    // Two retained versions of 330 links in each of 50 threads exceed SQLite's default binding limit.
+    yield* sql`
+      WITH RECURSIVE
+        threads(id) AS (SELECT 1 UNION ALL SELECT id + 1 FROM threads WHERE id < 50),
+        versions(version) AS (SELECT 1 UNION ALL SELECT version + 1 FROM versions WHERE version < 660)
+      INSERT INTO orchestration_events (
+        event_id, aggregate_kind, stream_id, stream_version, event_type,
+        occurred_at, actor_kind, payload_json, metadata_json, application_event_version
+      )
+      SELECT
+        'link:' || id || ':' || version, 'thread', 'thread:bounded-links:' || id,
+        version + 1, 'thread.pull-request-link-updated', ${timestamp}, 'user',
+        json_object(
+          'host', 'github.com', 'repository', 'owner/repo', 'number', ((version - 1) / 2) + 1,
+          'url', 'https://github.com/owner/repo/pull/' || (((version - 1) / 2) + 1),
+          'source', 'manual', 'linkedAt', ${timestamp}, 'snapshot', NULL, 'stack', NULL
+        ), '{}', 2
+      FROM threads CROSS JOIN versions
+    `;
+    assert.equal((yield* maintenance.compactEventStore).deletedEventCount, 0);
+    yield* eventSink.write({
+      events: threads.map((thread) => ({
+        id: EventId.make(`event:${thread.id}:metadata`),
+        type: "thread.metadata-updated" as const,
+        threadId: thread.id,
+        occurredAt: now,
+        payload: {
+          ...thread,
+          pullRequests: Array.from({ length: 330 }, (_, index) => ({
+            host: "github.com",
+            repository: "owner/repo",
+            number: index + 1,
+            url: `https://github.com/owner/repo/pull/${index + 1}`,
+            source: "manual" as const,
+            linkedAt: timestamp,
+            snapshot: null,
+            stack: null,
+          })),
+        },
+      })),
+    });
+    const before = yield* Effect.forEach(threads, (thread) =>
+      projections.getThreadProjection(thread.id),
+    );
+    const deletes: Array<number> = [];
+    let oldPageCount = 0;
+    const observe: Statement.Transformer = (statement) => {
+      const [query, parameters] = statement.compile();
+      if (/^\s*DELETE FROM orchestration_events/.test(query)) {
+        deletes.push(parameters.length);
+        assert.isAtMost(parameters.length, 50);
+      }
+      if (/SELECT\s+event\.sequence/.test(query) && /event.stream_id IN/.test(query)) {
+        oldPageCount += 1;
+        assert.match(query, /LIMIT \?/);
+        assert.equal(parameters.at(-1), 50);
+      }
+      return Effect.succeed(statement);
+    };
+    const result = yield* maintenance.compactEventStore.pipe(
+      Effect.provideService(Statement.CurrentTransformer, observe),
+    );
+    assert.equal(result.scannedEventCount, 33_050);
+    assert.equal(result.deletedEventCount, 33_000);
+    assert.isAtLeast(oldPageCount, 660);
+    assert.equal(
+      deletes.reduce((sum, count) => sum + count, 0),
+      33_000,
+    );
+    assert.deepEqual(yield* sql`SELECT event_sequence FROM orchestration_v2_compaction_watermark`, [
+      { event_sequence: yield* eventStore.latestApplicationSequence },
+    ]);
+    assert.isTrue((yield* maintenance.rebuild).valid);
+    assert.deepEqual(
+      yield* Effect.forEach(threads, (thread) => projections.getThreadProjection(thread.id)),
+      before,
+    );
+    assert.equal((yield* maintenance.compactEventStore).scannedEventCount, 0);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect("preserves command-attributed turn-item events for command-result replay", () =>
+  Effect.gen(function* () {
+    const eventSink = yield* EventSink.EventSinkV2;
+    const eventStore = yield* EventStore.EventStoreV2;
+    const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const now = yield* DateTime.now;
+    const threadId = ThreadId.make("thread:command-item-replay");
+    const history = compactionHistory(threadId, now);
+    const commandId = CommandId.make("command:item-replay");
+    yield* eventSink.write({
+      events: [history.created, history.item("oldest", "item:command-replay", "oldest")],
+    });
+    yield* eventSink.commitCommand({
+      commandId,
+      threadId,
+      commandType: "foundation.item-replay",
+      acceptedAt: now,
+      events: [history.item("command", "item:command-replay", "command result")],
+      effects: [],
+    });
+    const commandEvents = yield* eventSink.readByCommandId({ commandId }).pipe(Stream.runCollect);
+    yield* eventSink.write({
+      events: [
+        history.item("middle", "item:command-replay", "middle"),
+        history.item("newest", "item:command-replay", "newest"),
+      ],
+    });
+    assert.equal((yield* maintenance.compactEventStore).deletedEventCount, 1);
+    assert.deepEqual(
+      yield* eventSink.readByCommandId({ commandId }).pipe(Stream.runCollect),
+      commandEvents,
+    );
+    yield* eventSink.write({ events: [history.item("later", "item:command-replay", "later")] });
+    const before = yield* projections.getThreadProjection(threadId);
+    assert.equal((yield* maintenance.compactEventStore).deletedEventCount, 1);
+    assert.deepEqual(
+      yield* eventStore.readByCommandId({ commandId }).pipe(Stream.runCollect),
+      commandEvents,
+    );
+    assert.deepEqual(yield* remainingEventIds, [
+      `event:${threadId}:created`,
+      `event:${threadId}:oldest`,
+      `event:${threadId}:command`,
+      `event:${threadId}:later`,
+    ]);
+    assert.isTrue((yield* maintenance.rebuild).valid);
+    assert.deepEqual(yield* projections.getThreadProjection(threadId), before);
+  }).pipe(Effect.provide(layerTest)),
+);
+
 it.effect("leaves the same events and replay state over several passes as one full pass", () =>
   Effect.gen(function* () {
     const now = yield* DateTime.now;
@@ -3545,6 +3694,38 @@ it.effect(
       assert.isTrue((yield* maintenance.rebuild).valid);
       assert.deepEqual(yield* projections.getThreadProjection(threadId), before.thread);
       assert.deepEqual(yield* turnItemProjectionRows, before.rows);
+
+      const commandId = CommandId.make("command:compaction-prompt-replay");
+      yield* eventSink.commitCommand({
+        commandId,
+        threadId,
+        commandType: "foundation.prompt-replay",
+        acceptedAt: now,
+        events: [subagentItem(6, secondPrompt)],
+        effects: [],
+      });
+      const commandEvents = yield* eventStore
+        .readByCommandId({ commandId })
+        .pipe(Stream.runCollect);
+      yield* eventSink.write({
+        events: [7, 8, 9].map((index) => subagentItem(index, "A third prompt.")),
+      });
+      yield* maintenance.compactEventStore;
+      assert.deepEqual(
+        yield* eventStore.readByCommandId({ commandId }).pipe(Stream.runCollect),
+        commandEvents,
+      );
+      // The command and its citation are now below the watermark; the newest prompt no longer cites either.
+      yield* eventSink.write({ events: [subagentItem(10, "A fourth prompt.")] });
+      yield* maintenance.compactEventStore;
+      assert.deepEqual(
+        yield* eventStore.readByCommandId({ commandId }).pipe(Stream.runCollect),
+        commandEvents,
+      );
+      assert.deepEqual(
+        (yield* remainingEventIds).filter((eventId) => eventId.includes(":subagent-")),
+        [0, 3, 6, 10].map((index) => `event:${threadId}:subagent-${index}`),
+      );
     }).pipe(Effect.provide(layerTest)),
 );
 

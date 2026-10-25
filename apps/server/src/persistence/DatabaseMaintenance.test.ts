@@ -9,6 +9,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 import * as DatabaseMaintenance from "./DatabaseMaintenance.ts";
 import * as Sqlite from "./Sqlite.ts";
+import { runMigrations } from "./Migrations.ts";
 import * as EventStore from "../orchestration-v2/EventStore.ts";
 import * as ProjectionMaintenance from "../orchestration-v2/ProjectionMaintenance.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
@@ -66,6 +67,67 @@ it.layer(DatabaseMaintenance.layer.pipe(Layer.provideMerge(NodeServices.layer)))
         assert.isFalse(yield* fs.exists(`${legacy}-wal`));
         assert.isTrue(yield* fs.exists(dbPath));
         assert.isNull((yield* maintenance.inspect(dbPath)).legacyDatabaseBytes);
+      }).pipe(Effect.scoped),
+    );
+
+    it.effect("migrates a migration-69 database under the offline maintenance lock", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const maintenance = yield* DatabaseMaintenance.DatabaseMaintenance;
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-compact-upgrade-" });
+        const dbPath = path.join(directory, "statev2.sqlite");
+        yield* Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`PRAGMA journal_mode = WAL`;
+          yield* runMigrations({ toMigrationInclusive: 69 });
+          yield* Effect.flatMap(
+            ProjectionMaintenance.ProjectionMaintenanceV2,
+            (projections) => projections.rebuild,
+          ).pipe(
+            Effect.provide(
+              ProjectionMaintenance.layer.pipe(
+                Layer.provide(Layer.merge(EventStore.layer, ProjectionStore.layer)),
+              ),
+            ),
+          );
+        }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: dbPath })));
+
+        yield* Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`SELECT migration_id FROM effect_sql_migrations`;
+          const failure = yield* Effect.flip(maintenance.compact(dbPath));
+          assert.equal(failure._tag, "DatabaseInUseError");
+          assert.deepEqual(
+            yield* sql`SELECT MAX(migration_id) AS migration_id FROM effect_sql_migrations`,
+            [{ migration_id: 69 }],
+          );
+          assert.deepEqual(
+            yield* sql`SELECT name FROM sqlite_schema WHERE name = 'orchestration_v2_compaction_watermark'`,
+            [],
+          );
+        }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: dbPath })));
+
+        const result = yield* maintenance.compact(dbPath);
+        assert.equal(result.deletedEventCount, 0);
+        yield* Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          assert.deepEqual(
+            yield* sql`SELECT MAX(migration_id) AS migration_id FROM effect_sql_migrations`,
+            [{ migration_id: 70 }],
+          );
+          assert.deepEqual(
+            yield* sql`SELECT event_sequence FROM orchestration_v2_compaction_watermark`,
+            [{ event_sequence: 0 }],
+          );
+          assert.deepEqual(
+            yield* sql`SELECT name FROM sqlite_schema WHERE name LIKE 'orchestration_events_compaction_%' ORDER BY name`,
+            [
+              { name: "orchestration_events_compaction_key_idx" },
+              { name: "orchestration_events_compaction_sequence_idx" },
+            ],
+          );
+        }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: dbPath, readonly: true })));
       }).pipe(Effect.scoped),
     );
 

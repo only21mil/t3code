@@ -268,13 +268,14 @@ export const layer: Layer.Layer<
       readonly sequence: number;
       readonly stream_id: string;
       readonly event_type: string;
+      readonly command_id: string | null;
       readonly entity_id: string | null;
       /** The prompt anchor a slimmed subagent turn item names; read only for an item's newest event. */
       readonly prompt_sequence: number | null;
     };
 
-    /** Retain newest and oldest keyed events to preserve client insertion order, and the prompt anchor a turn
-     * item's newest event names. Partial indexes hold only deletable event types. A pass walks those
+    /** Retain newest and oldest uncommanded keyed events to preserve client insertion order. Keep command-written
+     * turn items and the prompt anchors retained items cite. Partial indexes hold only compactable event types. A pass walks those
      * written since the last completed pass, then the rows earlier passes kept for each thread and entity it met,
      * so it deletes what one full newest-first pass would. */
     const compactEventStore = Effect.gen(function* () {
@@ -311,8 +312,8 @@ export const layer: Layer.Layer<
       const retainedReadStateThreadIds = new Set<string>();
       // Retain each key's oldest candidate, deleting it only when an older event appears.
       const oldestCandidateByEntityKey = new Map<string, number | null>();
-      // Item IDs come from unique commands, so a turn item's prompt anchor is one of its own events.
-      const citedPromptSequenceByEntityKey = new Map<string, number | null>();
+      // Command-result replay also needs anchors cited by retained intermediate command events.
+      const citedPromptSequences = new Set<number>();
       // Threads and entities with new events; rows earlier passes kept for them may now be obsolete.
       const touchedThreadIds = new Set<string>();
       const touchedEntities = new Map<string, CompactableEventRow>();
@@ -325,14 +326,21 @@ export const layer: Layer.Layer<
         Effect.fnUntraced(function* (obsolete: ReadonlyArray<number>) {
           // Yield even without deletions for clients using the synchronous fallback.
           yield* Effect.yieldNow;
-          if (obsolete.length === 0) return;
-          yield* sql`DELETE FROM orchestration_events WHERE sequence IN ${sql.in(obsolete)}`;
-          deletedEventCount += obsolete.length;
-          yield* Effect.yieldNow;
+          for (let index = 0; index < obsolete.length; index += COMPACTION_PAGE_SIZE) {
+            const page = obsolete.slice(index, index + COMPACTION_PAGE_SIZE);
+            yield* sql`DELETE FROM orchestration_events WHERE sequence IN ${sql.in(page)}`;
+            deletedEventCount += page.length;
+            yield* Effect.yieldNow;
+          }
         });
 
       // Rows must arrive newest first per thread and entity.
       const classify = (row: CompactableEventRow, obsolete: Array<number>) => {
+        // Command receipts replay these exact events, including intermediate item versions.
+        if (row.event_type === "turn-item.updated" && row.command_id !== null) {
+          if (row.prompt_sequence !== null) citedPromptSequences.add(row.prompt_sequence);
+          return;
+        }
         if (supersedableThreadEventTypes.has(row.event_type)) {
           if (retainedThreadIds.has(row.stream_id)) obsolete.push(row.sequence);
           else retainedThreadIds.add(row.stream_id);
@@ -354,9 +362,11 @@ export const layer: Layer.Layer<
           const candidate = oldestCandidateByEntityKey.get(key);
           if (candidate === undefined) {
             oldestCandidateByEntityKey.set(key, null);
-            citedPromptSequenceByEntityKey.set(key, row.prompt_sequence);
+            if (row.prompt_sequence !== null) {
+              citedPromptSequences.add(row.prompt_sequence);
+            }
           } else {
-            if (candidate !== null && candidate !== citedPromptSequenceByEntityKey.get(key)) {
+            if (candidate !== null && !citedPromptSequences.has(candidate)) {
               obsolete.push(candidate);
             }
             oldestCandidateByEntityKey.set(key, row.sequence);
@@ -371,6 +381,7 @@ export const layer: Layer.Layer<
             event.sequence,
             event.stream_id,
             event.event_type,
+            event.command_id,
             ${compactionKey} AS entity_id,
             ${citedPromptSequence} AS prompt_sequence
           FROM orchestration_events AS event
@@ -387,42 +398,40 @@ export const layer: Layer.Layer<
         const obsolete: Array<number> = [];
         for (const row of rows) {
           classify(row, obsolete);
-          if (
-            row.event_type === "message.updated" ||
-            row.event_type === "node.updated" ||
-            row.event_type === "turn-item.updated"
-          ) {
-            touchedEntities.set(
-              encodeEntityKey([row.event_type, row.stream_id, row.entity_id]),
-              row,
-            );
-          } else touchedThreadIds.add(row.stream_id);
+          if (afterSequence > 0) {
+            if (
+              row.event_type === "message.updated" ||
+              row.event_type === "node.updated" ||
+              row.event_type === "turn-item.updated"
+            ) {
+              touchedEntities.set(
+                encodeEntityKey([row.event_type, row.stream_id, row.entity_id]),
+                row,
+              );
+            } else touchedThreadIds.add(row.stream_id);
+          }
         }
         yield* deleteEvents(obsolete);
         throughSequence = (rows.at(-1)?.sequence ?? 1) - 1;
         if (rows.length < COMPACTION_PAGE_SIZE) break;
       }
 
-      // Continue the walk below the watermark. Earlier passes left each thread at most one supersedable and one
-      // read-state event plus the newest and oldest event per link, and each entity its newest and oldest event
-      // (and a turn item's cited prompt anchor).
+      // Continue below the watermark through retained thread state and each link/entity's boundary events.
+      // Turn items can also retain any number of command-written versions and their cited prompt anchors.
       if (afterSequence > 0) {
-        const obsolete: Array<number> = [];
-        const flush = Effect.suspend(() =>
-          obsolete.length >= COMPACTION_PAGE_SIZE
-            ? deleteEvents(obsolete.splice(0))
-            : Effect.yieldNow,
-        );
         const threadIds = Array.from(touchedThreadIds);
         for (let index = 0; index < threadIds.length; index += COMPACTION_PAGE_SIZE) {
-          // The first event_type term satisfies the partial index predicate; the second picks thread state.
-          const rows = yield* sql<CompactableEventRow>`
+          let oldThroughSequence = afterSequence;
+          while (oldThroughSequence > 0) {
+            // The first event_type term satisfies the partial index predicate; the second picks thread state.
+            const rows = yield* sql<CompactableEventRow>`
             SELECT
               event.sequence,
               event.stream_id,
               event.event_type,
+              event.command_id,
               ${compactionKey} AS entity_id,
-              NULL AS prompt_sequence
+              ${citedPromptSequence} AS prompt_sequence
             FROM orchestration_events AS event
               INDEXED BY orchestration_events_compaction_key_idx
             WHERE event.aggregate_kind = 'thread'
@@ -430,27 +439,35 @@ export const layer: Layer.Layer<
               AND event.event_type IN (${compactableEventTypes})
               AND event.stream_id IN ${sql.in(threadIds.slice(index, index + COMPACTION_PAGE_SIZE))}
               AND event.event_type IN (${threadStateEventTypes})
-              AND event.sequence <= ${afterSequence}
+              AND event.sequence <= ${oldThroughSequence}
             ORDER BY event.sequence DESC
+            LIMIT ${COMPACTION_PAGE_SIZE}
           `.pipe(NodeSqliteClient.readOnly);
-          scannedEventCount += rows.length;
-          for (const row of rows) classify(row, obsolete);
-          yield* flush;
+            scannedEventCount += rows.length;
+            const obsolete: Array<number> = [];
+            for (const row of rows) classify(row, obsolete);
+            yield* deleteEvents(obsolete);
+            oldThroughSequence = (rows.at(-1)?.sequence ?? 1) - 1;
+            if (rows.length < COMPACTION_PAGE_SIZE) break;
+          }
         }
         const entities = Array.from(touchedEntities.values());
         for (let index = 0; index < entities.length; index += COMPACTION_PAGE_SIZE) {
           const keys = entities
             .slice(index, index + COMPACTION_PAGE_SIZE)
             .map((entity) => sql`(${entity.stream_id}, ${entity.event_type}, ${entity.entity_id})`);
-          // CROSS JOIN keeps the key list outermost, so each key is one index seek.
-          const rows = yield* sql<CompactableEventRow>`
+          let oldThroughSequence = afterSequence;
+          while (oldThroughSequence > 0) {
+            // CROSS JOIN keeps the key list outermost, so each key is one index seek.
+            const rows = yield* sql<CompactableEventRow>`
             WITH entity(stream_id, event_type, entity_id) AS (VALUES ${sql.csv(keys)})
             SELECT
               event.sequence,
               event.stream_id,
               event.event_type,
+              event.command_id,
               ${compactionKey} AS entity_id,
-              NULL AS prompt_sequence
+              ${citedPromptSequence} AS prompt_sequence
             FROM entity
             CROSS JOIN orchestration_events AS event
               INDEXED BY orchestration_events_compaction_key_idx
@@ -460,14 +477,18 @@ export const layer: Layer.Layer<
               AND event.stream_id = entity.stream_id
               AND event.event_type = entity.event_type
               AND ${compactionKey} IS entity.entity_id
-              AND event.sequence <= ${afterSequence}
+              AND event.sequence <= ${oldThroughSequence}
             ORDER BY event.sequence DESC
+            LIMIT ${COMPACTION_PAGE_SIZE}
           `.pipe(NodeSqliteClient.readOnly);
-          scannedEventCount += rows.length;
-          for (const row of rows) classify(row, obsolete);
-          yield* flush;
+            scannedEventCount += rows.length;
+            const obsolete: Array<number> = [];
+            for (const row of rows) classify(row, obsolete);
+            yield* deleteEvents(obsolete);
+            oldThroughSequence = (rows.at(-1)?.sequence ?? 1) - 1;
+            if (rows.length < COMPACTION_PAGE_SIZE) break;
+          }
         }
-        yield* deleteEvents(obsolete);
       }
 
       // Imported transcripts replace their thread's v1 events and legacy receipts. New writes are never v1.

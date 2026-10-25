@@ -11,6 +11,7 @@ import { isSqlError } from "effect/sql/SqlError";
 import * as EventStore from "../orchestration-v2/EventStore.ts";
 import * as ProjectionMaintenance from "../orchestration-v2/ProjectionMaintenance.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
+import { runMigrations } from "./Migrations.ts";
 import { rebuildMessageSearch } from "../orchestration-v2/messageSearchIndex.ts";
 
 export class DatabaseMissingError extends Schema.TaggedError<DatabaseMissingError>()(
@@ -178,28 +179,31 @@ const make = Effect.gen(function* () {
       const result = yield* Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         yield* lockExclusively(databasePath);
-        const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
-        if (!(yield* maintenance.verify).valid) {
-          return yield* new DatabaseProjectionsInvalidError({ path: databasePath });
-        }
-        const summary = yield* maintenance.compactEventStore;
-        if (!(yield* maintenance.verify).valid) {
-          return yield* new DatabaseProjectionsInvalidError({ path: databasePath });
-        }
-        // VACUUM is required to enable incremental auto_vacuum on existing databases.
-        yield* sql`PRAGMA auto_vacuum = INCREMENTAL`;
-        yield* sql`VACUUM`;
-        yield* rebuildMessageSearch(sql);
-        yield* sql`PRAGMA wal_checkpoint(TRUNCATE)`;
-        return summary;
-      }).pipe(
-        Effect.provide(
-          ProjectionMaintenance.layer.pipe(
-            Layer.provide(Layer.merge(EventStore.layer, ProjectionStore.layer)),
-            Layer.provideMerge(NodeSqliteClient.layer({ filename: databasePath })),
+        // Doctor may run before the updated server has migrated this database.
+        yield* runMigrations();
+        return yield* Effect.gen(function* () {
+          const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+          if (!(yield* maintenance.verify).valid) {
+            return yield* new DatabaseProjectionsInvalidError({ path: databasePath });
+          }
+          const summary = yield* maintenance.compactEventStore;
+          if (!(yield* maintenance.verify).valid) {
+            return yield* new DatabaseProjectionsInvalidError({ path: databasePath });
+          }
+          // VACUUM is required to enable incremental auto_vacuum on existing databases.
+          yield* sql`PRAGMA auto_vacuum = INCREMENTAL`;
+          yield* sql`VACUUM`;
+          yield* rebuildMessageSearch(sql);
+          yield* sql`PRAGMA wal_checkpoint(TRUNCATE)`;
+          return summary;
+        }).pipe(
+          Effect.provide(
+            ProjectionMaintenance.layer.pipe(
+              Layer.provide(Layer.merge(EventStore.layer, ProjectionStore.layer)),
+            ),
           ),
-        ),
-      );
+        );
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: databasePath })));
       const afterBytes = Number((yield* fs.stat(databasePath)).size);
       return {
         beforeBytes,
