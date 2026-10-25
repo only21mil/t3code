@@ -56,6 +56,7 @@ import {
   View,
 } from "react-native";
 import { NativeScrollViewMarker as ScrollViewMarker } from "../../native/NativeScrollViewMarker";
+import { ColumnInsetContent, ColumnInsetLayer } from "../../components/ui/ScreenScrollView";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../components/ui/AppText";
@@ -123,7 +124,9 @@ const EMPTY_IDS: readonly string[] = [];
 function PullRequestTabScrollView(props: ScrollViewProps) {
   return (
     <ScrollViewMarker style={{ flex: 1 }}>
-      <ScrollView {...props} />
+      <ScrollView {...props}>
+        <ColumnInsetContent>{props.children}</ColumnInsetContent>
+      </ScrollView>
     </ScrollViewMarker>
   );
 }
@@ -746,12 +749,14 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
               </View>
             ))}
         </View>
-        <PullRequestActionToolbar
-          pr={pr}
-          params={params}
-          onOpenFiles={openFiles}
-          onHeightChange={setToolbarHeight}
-        />
+        <ColumnInsetLayer>
+          <PullRequestActionToolbar
+            pr={pr}
+            params={params}
+            onOpenFiles={openFiles}
+            onHeightChange={setToolbarHeight}
+          />
+        </ColumnInsetLayer>
       </View>
     </PullRequestMarkdownRepository>
   );

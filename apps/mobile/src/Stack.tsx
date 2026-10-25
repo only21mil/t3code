@@ -643,7 +643,7 @@ const RootStackConfig = createWorkspaceStackNavigator({
         path: "pull-requests/:environmentId/:projectId/:repository/:number",
         parse: { number: Number },
       },
-      options: { ...DETAIL_HEADER_OPTIONS, ...FIXED_DUO_HEADER },
+      options: { ...DETAIL_HEADER_OPTIONS, ...FIXED_DUO_HEADER, ...LISTS_UNDER_DUO_BAR },
     }),
     PullRequestGuideStop: createNativeStackScreen({
       screen: PullRequestGuideStopScreen,
