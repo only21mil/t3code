@@ -218,7 +218,6 @@ class AcpModelSelectionError extends Schema.TaggedError<AcpModelSelectionError>(
 
 export interface AcpAdapterV2Flavor {
   readonly promptFailure?: (cause: unknown) => OrchestrationV2ProviderFailure;
-  /** True when a failed session open waits on the user signing in, so retrying cannot help. */
   readonly requiresSignIn?: (cause: unknown) => boolean;
   /**
    * Runs before attachment paths, T3 instructions and native slash-command detection,
