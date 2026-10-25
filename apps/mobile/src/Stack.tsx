@@ -715,7 +715,7 @@ const RootStackConfig = createWorkspaceStackNavigator({
     Thread: createNativeStackScreen({
       screen: ThreadRouteScreen,
       linking: { path: "threads/:environmentId?/:threadId?", alias: ["new/draft"] },
-      options: THREAD_HEADER_OPTIONS,
+      options: { ...THREAD_HEADER_OPTIONS, ...LISTS_UNDER_DUO_BAR },
     }),
     NewTaskProject: createNativeStackScreen({
       screen: NewTaskRouteScreen,

@@ -1,5 +1,5 @@
 import { createContext, use, type ComponentProps, type ReactNode } from "react";
-import { Platform } from "react-native";
+import { Platform, StyleSheet } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { withUniwind } from "uniwind";
 import { cn } from "../../lib/cn";
@@ -19,6 +19,25 @@ const InsetContent = withUniwind(SafeAreaView);
  * A list's content inside its scroll view: takes the column's left and right safe areas
  * natively when the column leaves them to the screen (see ScreenScrollView).
  */
+/**
+ * Overlays above a screen whose column leaves its left and right safe areas to it: a layer that
+ * fills the screen minus those safe areas, applied natively. Children position against it.
+ */
+export function ColumnInsetLayer(props: { readonly children: ReactNode }) {
+  return Platform.OS === "ios" && use(NativeColumnLeavesHorizontalInsets) ? (
+    <SafeAreaView
+      edges={["left", "right"]}
+      mode="margin"
+      pointerEvents="box-none"
+      style={StyleSheet.absoluteFill}
+    >
+      {props.children}
+    </SafeAreaView>
+  ) : (
+    props.children
+  );
+}
+
 export function ColumnInsetContent(props: { readonly children: ReactNode }) {
   return Platform.OS === "ios" && use(NativeColumnLeavesHorizontalInsets) ? (
     <InsetContent edges={["left", "right"]} style={{ flexGrow: 1 }}>

@@ -134,6 +134,7 @@ import { isPdfFile } from "../../lib/filePreview";
 import { flattenThemeColor } from "../../lib/mobileTheme";
 import { PresentationSource } from "../../components/ui/NativePresentation";
 import { NativeScrollViewMarker } from "../../native/NativeScrollViewMarker";
+import { ColumnInsetContent } from "../../components/ui/ScreenScrollView";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, { FadeIn, FadeInUp, type SharedValue } from "react-native-reanimated";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
@@ -779,7 +780,10 @@ const THREAD_MEDIA_VIEWABILITY_CONFIG = { itemVisiblePercentThreshold: 0 };
 function ThreadFeedScrollView(props: ComponentPropsWithRef<typeof Animated.ScrollView>) {
   return (
     <NativeScrollViewMarker style={{ flex: 1 }}>
-      <Animated.ScrollView {...props} />
+      <Animated.ScrollView {...props}>
+        {/* LegendList passes plain children; Reanimated's prop type also allows shared values. */}
+        <ColumnInsetContent>{props.children as ReactNode}</ColumnInsetContent>
+      </Animated.ScrollView>
     </NativeScrollViewMarker>
   );
 }
