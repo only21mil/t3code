@@ -9,11 +9,10 @@ import { isCommandAvailable, resolveCommandPaths } from "./shell.ts";
 
 type Editor = (typeof EDITORS)[number];
 
-// On Windows, Zed's stable, Preview and Nightly channels each install a `zed`
-// CLI in their own folder, so PATH order alone can open a prerelease build
-// when the user picked "Zed". The nearest folder naming Zed is the install
-// (`Zed`, `Zed Nightly`, `Zed Preview`) and decides the channel, so a user or
-// parent folder further up, such as `zedpreview`, cannot mark stable Zed.
+// Windows Zed channels each install a `zed` CLI in their own folder, so PATH
+// order alone can open a prerelease build when the user picked "Zed". The
+// nearest folder naming Zed (`Zed`, `Zed Nightly`, `Zed Preview`) decides the
+// channel, so a parent folder such as `zedpreview` cannot mark stable Zed.
 const isPrereleaseZedPath = (filePath: string) => {
   const install = filePath
     .split(/[\\/]/)
