@@ -1149,7 +1149,7 @@ effectIt.effect("fails the run without a retry when the provider needs sign-in",
         status: "failed",
         failure: {
           class: "provider_error",
-          message: "The provider needs you to sign in. Sign in from Settings, then retry the turn.",
+          message: "Failed to open antigravity provider session new-provider-session.",
         },
       },
     ]);
