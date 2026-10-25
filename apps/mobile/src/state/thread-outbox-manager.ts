@@ -52,6 +52,7 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       console.warn(message, error);
     });
   let loadPromise: Promise<"complete" | "undecodable" | "failed"> | null = null;
+  let undecodableMessageIds: ReadonlySet<MessageId> = new Set();
   let mutationQueue: Promise<void> = Promise.resolve();
   const revisions = new Map<MessageId, number>();
   const bumpRevision = (messageId: MessageId): void => {
@@ -100,6 +101,11 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
         (message) => !currentIds.has(message.messageId) && !revisions.has(message.messageId),
       );
       if (recovered.length > 0) setMessages([...recovered, ...current]);
+      undecodableMessageIds = new Set(
+        result.errors.flatMap((error) =>
+          isUndecodable(error) && error.messageId !== null ? [error.messageId] : [],
+        ),
+      );
       if (result.errors.length === 0) return "complete" as const;
       loadFailed(new AggregateError(result.errors, "Some queued messages could not be read."));
       return result.errors.every(isUndecodable) ? ("undecodable" as const) : ("failed" as const);
@@ -118,6 +124,11 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
     const status = await loadStatus();
     return status === "complete" || (allowUndecodable && status === "undecodable");
   };
+
+  // Enqueueing a message over a record this build cannot decode replaces that
+  // record's file, and with it the attachments it owns. Reflects the last load.
+  const hasUndecodableRecord = (messageId: MessageId): boolean =>
+    undecodableMessageIds.has(messageId);
 
   const enqueue = (message: QueuedThreadMessage): Promise<void> => {
     bumpRevision(message.messageId);
@@ -379,6 +390,7 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
     queuedMessagesByThreadKeyAtom,
     serialize,
     load,
+    hasUndecodableRecord,
     enqueue,
     confirmQueued,
     revisionOf: (messageId: MessageId): number => revisions.get(messageId) ?? 0,

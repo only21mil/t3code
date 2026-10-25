@@ -2610,6 +2610,79 @@ describe("mobile composer drafts", () => {
     expect(registry.get(drafts.composerCloudDraftsAtom).signedOut).toEqual({});
   });
 
+  it("keeps a saved queued message saved while its outbox file cannot be decoded", async () => {
+    vi.resetModules();
+    const drafts = await import("./use-composer-drafts");
+    const { threadOutboxManager: manager } = await import("./thread-outbox");
+    const { expoThreadOutboxStorage: storage, ThreadOutboxStorageError } =
+      await import("./thread-outbox-storage");
+    const { appAtomRegistry: registry } = await import("./atom-registry");
+    onTestFinished(() => registry.dispose());
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    onTestFinished(() => warning.mockRestore());
+    const file = {
+      id: "file-saved-message",
+      type: "file" as const,
+      name: "saved-message.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 42,
+      fileUri: "file:///documents/t3-composer-attachments/saved-message.pdf",
+    };
+    const message = (id: string): QueuedThreadMessage => ({
+      environmentId: EnvironmentId.make("environment-1"),
+      threadId: ThreadId.make("thread-1"),
+      messageId: MessageId.make(id),
+      commandId: CommandId.make(`command-${id}`),
+      text: "Send after signing back in",
+      attachments: [file],
+      createdAt: "2026-09-04T00:00:00.000Z",
+    });
+    const colliding = message("message-undecodable");
+    const restorable = message("message-restorable");
+    const load = vi.spyOn(storage, "load").mockResolvedValue({
+      messages: [],
+      errors: [
+        new ThreadOutboxStorageError({
+          operation: "decode-message",
+          environmentId: null,
+          threadId: null,
+          messageId: colliding.messageId,
+          fileName: "message-undecodable.json",
+          cause: new Error("unsupported schema version"),
+        }),
+      ],
+    });
+    const write = vi.spyOn(storage, "write").mockResolvedValue();
+    onTestFinished(() => {
+      load.mockRestore();
+      write.mockRestore();
+    });
+    await drafts.waitForComposerDraftsLoaded();
+    const kept = {
+      drafts: { "pending-task:message-undecodable": { text: "Edited", attachments: [file] } },
+      queuedMessages: [colliding],
+    };
+    registry.set(drafts.composerCloudDraftsAtom, {
+      accountId: null,
+      signedOut: {
+        "account-a": { ...kept, queuedMessages: [colliding, restorable] },
+      },
+    });
+
+    await drafts.restoreCloudComposerDrafts("account-a");
+    expect(write).toHaveBeenCalledExactlyOnceWith(restorable);
+    expect(registry.get(manager.queuedMessagesByThreadKeyAtom)).toEqual({
+      "environment-1:thread-1": [restorable],
+    });
+    expect(registry.get(drafts.composerDraftsAtom)).toEqual({});
+    expect(registry.get(drafts.composerCloudDraftsAtom)).toEqual({
+      accountId: "account-a",
+      signedOut: { "account-a": kept },
+    });
+    await drafts.releaseUnusedComposerAttachmentFiles([file]);
+    expect(composerAttachmentCleanupMocks.remove).not.toHaveBeenCalled();
+  });
+
   it("hydrates persisted drafts before a cold-start sweep deletes their files", async () => {
     const file = {
       id: "file-cold-start",

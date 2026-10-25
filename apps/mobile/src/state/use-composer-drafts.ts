@@ -1192,11 +1192,27 @@ export async function restoreCloudComposerDrafts(accountId: string): Promise<voi
   await waitForComposerDraftsLoaded();
   const cloud = appAtomRegistry.get(composerCloudDraftsAtom);
   const saved = cloud.signedOut[accountId];
+  // Enqueueing a message whose outbox file this build cannot decode would
+  // overwrite that file. Keep such messages and their editors saved instead;
+  // a later sign-in restores them once the file decodes or is gone.
+  const keptDrafts: Record<string, ComposerDraft> = {};
+  const keptMessages: QueuedThreadMessage[] = [];
   if (saved) {
     if (!(await threadOutboxManager.load({ allowUndecodable: true }))) {
       throw new Error("Could not restore queued messages.");
     }
+    const drafts = { ...saved.drafts };
     for (const message of saved.queuedMessages) {
+      if (threadOutboxManager.hasUndecodableRecord(message.messageId)) {
+        const editorKey = `pending-task:${message.messageId}`;
+        const editor = drafts[editorKey];
+        if (editor) {
+          keptDrafts[editorKey] = editor;
+          delete drafts[editorKey];
+        }
+        keptMessages.push(message);
+        continue;
+      }
       const alreadyQueued = Object.values(
         appAtomRegistry.get(threadOutboxManager.queuedMessagesByThreadKeyAtom),
       )
@@ -1206,7 +1222,7 @@ export async function restoreCloudComposerDrafts(accountId: string): Promise<voi
     }
     updateComposerDrafts((current) => {
       const restored = { ...current };
-      for (const [key, draft] of Object.entries(saved.drafts)) {
+      for (const [key, draft] of Object.entries(drafts)) {
         const existing = current[key];
         const attachmentIds = new Set(existing?.attachments.map((attachment) => attachment.id));
         restored[key] = existing
@@ -1237,7 +1253,11 @@ export async function restoreCloudComposerDrafts(accountId: string): Promise<voi
     });
   }
   const signedOut = { ...cloud.signedOut };
-  delete signedOut[accountId];
+  if (keptMessages.length > 0) {
+    signedOut[accountId] = { drafts: keptDrafts, queuedMessages: keptMessages };
+  } else {
+    delete signedOut[accountId];
+  }
   appAtomRegistry.set(composerCloudDraftsAtom, { accountId, signedOut });
   schedulePersistComposerState();
   await flushComposerDrafts();

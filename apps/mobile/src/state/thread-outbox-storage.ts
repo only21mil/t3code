@@ -1,4 +1,5 @@
 import { EnvironmentId, MessageId, ThreadId } from "@t3tools/contracts";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import { writeFileAtomically } from "../lib/atomic-file";
@@ -59,6 +60,20 @@ function messageFileName(messageId: MessageId): string {
   return `${encodeURIComponent(messageId)}.json`;
 }
 
+const decodeMessageId = Schema.decodeUnknownOption(MessageId);
+
+// A record that fails to read or decode still names, through its file, the
+// message whose write would replace it.
+function messageIdFromFileName(fileName: string): MessageId | null {
+  try {
+    return Option.getOrNull(
+      decodeMessageId(decodeURIComponent(fileName.slice(0, -".json".length))),
+    );
+  } catch {
+    return null;
+  }
+}
+
 async function getOutboxDirectory() {
   const { Directory, Paths } = await import("expo-file-system");
   const directory = new Directory(Paths.document, THREAD_OUTBOX_DIRECTORY);
@@ -94,7 +109,7 @@ export const expoThreadOutboxStorage: ThreadOutboxStorage = {
               operation,
               environmentId: null,
               threadId: null,
-              messageId: null,
+              messageId: messageIdFromFileName(entry.name),
               fileName: entry.name,
               cause,
             }),

@@ -167,7 +167,7 @@ describe("thread outbox", () => {
 
       await expect(expoThreadOutboxStorage.load()).resolves.toMatchObject({
         messages: [first],
-        errors: [{ operation, fileName: "message-2.json" }],
+        errors: [{ operation, messageId: "message-2", fileName: "message-2.json" }],
       });
 
       const registry = AtomRegistry.make();
