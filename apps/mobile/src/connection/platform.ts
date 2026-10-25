@@ -18,7 +18,7 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import Constants from "expo-constants";
 import * as Network from "expo-network";
-import { AppState } from "react-native";
+import { AppState, Platform } from "react-native";
 
 import { authClientMetadata } from "../lib/authClientMetadata";
 import * as Runtime from "../lib/runtime";
@@ -30,8 +30,12 @@ import { clearThreadComposerErrorsForEnvironment } from "../state/thread-compose
 import { mobileApplicationActiveWakeup } from "./app-state-wakeups";
 import * as ConnectionStorage from "./storage";
 
+// Repair r1 capture fixture, never in the PR: an iOS simulator shares the Mac's network
+// and cannot go offline, so on iOS expo-network's report is held at "offline".
+const FIXTURE_STALE_OFFLINE = Platform.OS === "ios";
+
 function networkStatus(state: Network.NetworkState): "unknown" | "offline" | "online" {
-  if (state.isConnected === false) {
+  if (FIXTURE_STALE_OFFLINE || state.isConnected === false) {
     return "offline";
   }
   if (state.isConnected === true) {
