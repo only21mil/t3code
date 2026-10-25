@@ -286,14 +286,6 @@ function pullRequestBaseRepositoryKey(url: string): string | null {
   return key === null ? null : sourceControlDefinitions.canonicalRepositoryKey(key);
 }
 
-function pullRequestRepositoryName(url: string, key: string): string {
-  // Preserve the spelling in recognized links when reporting the mismatch.
-  const link = sourceControlDefinitions.parseChangeRequestUrl(url)?.link;
-  return link === undefined
-    ? splitRepositoryKey(key).path
-    : new URL(url).pathname.slice(1, link.repository.length + 1);
-}
-
 function splitRepositoryKey(key: string): { readonly host: string; readonly path: string } {
   const slash = key.indexOf("/");
   return { host: key.slice(0, slash), path: key.slice(slash + 1) };
@@ -330,37 +322,8 @@ function namesRepository(
   );
 }
 
-// Any hosted remote can establish a match; absent evidence does not establish a mismatch.
-function pullRequestCheckoutMismatch(
-  remoteUrls: ReadonlyArray<string>,
-  pullRequest: ResolvedPullRequest & PullRequestHeadRemoteInfo,
-): string | null {
-  const baseKey = pullRequestBaseRepositoryKey(pullRequest.url);
-  const hosted = remoteUrls.filter(
-    (url) => parseRepositoryNameWithOwnerFromRemoteUrl(url) !== null,
-  );
-  if (baseKey === null || hosted.length === 0) {
-    return null;
-  }
-  const base = splitRepositoryKey(baseKey);
-  const head = resolveHeadRepositoryNameWithOwner(pullRequest);
-  const holds = (remoteUrl: string) => {
-    // Forgejo HTTP forks retain the installation mount omitted by the head's owner/name.
-    const mount =
-      httpPort(remoteUrl) !== null &&
-      sourceControlDefinitions.parseChangeRequestUrl(pullRequest.url)?.link.authority !== undefined
-        ? base.path.replace(/[^/]+\/[^/]+$/u, "")
-        : "";
-    return (
-      namesRepository(remoteUrl, pullRequest.url, baseKey) ||
-      (head !== null &&
-        namesRepository(remoteUrl, pullRequest.url, `${base.host}/${mount}${head.toLowerCase()}`))
-    );
-  };
-  return hosted.some(holds) ? null : baseKey;
-}
-
-// PR numbers belong to the base repository, even when a fork remote allowed the checkout.
+// PR numbers belong to the base repository; a fork's `refs/pull/N` is another pull request.
+// Null when hosted remotes exist but none names the base, so the ref fetch fails instead.
 function pullRequestRefRemote(
   remotes: ReadonlyMap<string, string>,
   primaryRemote: string | null,
@@ -2802,7 +2765,7 @@ export const make = Effect.gen(function* () {
   });
 
   // Fetch uses the first configured URL, before insteadOf rewrites. Empty entries changed
-  // behavior in Git 2.46, so a remote containing any empty URL supplies no evidence.
+  // behavior in Git 2.46, so a remote containing any empty URL names no repository.
   const readCheckoutRemoteUrls = Effect.fn("readCheckoutRemoteUrls")(function* (cwd: string) {
     const { stdout } = yield* gitCore.execute({
       operation: "GitManager.readCheckoutRemoteUrls",
@@ -2862,23 +2825,6 @@ export const make = Effect.gen(function* () {
         reference: normalizedReference,
       });
       const pullRequest = toResolvedPullRequest(pullRequestSummary);
-      const pullRequestWithRemoteInfo = {
-        ...pullRequest,
-        ...toPullRequestHeadRemoteInfo(pullRequestSummary),
-      } as const;
-      // Hosting reads can borrow another project's credentials; they do not verify this checkout.
-      const remotes = yield* readCheckoutRemoteUrls(input.cwd);
-      const mismatch = pullRequestCheckoutMismatch(
-        [...remotes.values()],
-        pullRequestWithRemoteInfo,
-      );
-      if (mismatch !== null) {
-        return yield* new GitManagerError({
-          operation: "preparePullRequestThread",
-          cwd: input.cwd,
-          detail: `This project is not a checkout of ${pullRequestRepositoryName(pullRequest.url, mismatch)}. Open the pull request from a project that is, or, if the repository was renamed, point this project's remote at its new name.`,
-        });
-      }
 
       if (input.mode === "local") {
         yield* ensureNoTrackedChanges(input.cwd, pullRequest.number);
@@ -2888,7 +2834,14 @@ export const make = Effect.gen(function* () {
         });
         const details = yield* gitCore.statusDetails(input.cwd);
         const branch = details.branch ?? pullRequest.headBranch;
-        yield* configurePullRequestHeadUpstream(input.cwd, pullRequestWithRemoteInfo, branch);
+        yield* configurePullRequestHeadUpstream(
+          input.cwd,
+          {
+            ...pullRequest,
+            ...toPullRequestHeadRemoteInfo(pullRequestSummary),
+          },
+          branch,
+        );
         return {
           pullRequest,
           branch,
@@ -2903,15 +2856,22 @@ export const make = Effect.gen(function* () {
         const details = yield* gitCore.statusDetails(worktreePath);
         yield* configurePullRequestHeadUpstream(
           worktreePath,
-          pullRequestWithRemoteInfo,
+          {
+            ...pullRequest,
+            ...toPullRequestHeadRemoteInfo(pullRequestSummary),
+          },
           details.branch ?? pullRequest.headBranch,
         );
       });
 
+      const pullRequestWithRemoteInfo = {
+        ...pullRequest,
+        ...toPullRequestHeadRemoteInfo(pullRequestSummary),
+      } as const;
       const localPullRequestBranch =
         resolvePullRequestWorktreeLocalBranchName(pullRequestWithRemoteInfo);
       const pullRequestRemote = pullRequestRefRemote(
-        remotes,
+        yield* readCheckoutRemoteUrls(input.cwd),
         yield* gitCore.resolvePrimaryRemoteName(input.cwd).pipe(Effect.orElseSucceed(() => null)),
         pullRequest.url,
       );
