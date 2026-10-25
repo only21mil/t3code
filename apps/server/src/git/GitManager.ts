@@ -1036,6 +1036,24 @@ export const make = Effect.gen(function* () {
     return ref;
   });
 
+  // Fetch uses the first configured URL, before insteadOf rewrites. Empty entries changed
+  // behavior in Git 2.46, so a remote containing any empty URL names no repository.
+  const readCheckoutRemoteUrls = Effect.fn("readCheckoutRemoteUrls")(function* (cwd: string) {
+    const { stdout } = yield* gitCore.execute({
+      operation: "GitManager.readCheckoutRemoteUrls",
+      cwd,
+      args: ["config", "--get-regexp", "^remote\\..+\\.url$"],
+      allowNonZeroExit: true,
+      timeoutMs: 5_000,
+    });
+    const urls = new Map<string, string>();
+    for (const line of stdout.split("\n")) {
+      const [, name = "", url = ""] = /^remote\.(.+?)\.url(?:\s+(.*))?$/.exec(line.trim()) ?? [];
+      if (name.length > 0 && (url.length === 0 || !urls.has(name))) urls.set(name, url);
+    }
+    return urls;
+  });
+
   const fetchChangeRequestHeadIntoBranch = Effect.fn("GitManager.fetchChangeRequestHeadIntoBranch")(
     function* (cwd: string, remoteName: string | null, number: number, branch: string) {
       const ref = yield* changeRequestHeadRef(cwd, number);
@@ -2762,24 +2780,6 @@ export const make = Effect.gen(function* () {
         detail: `This repository has uncommitted changes. Commit or stash them before checking out pull request #${pullRequestNumber} here, or check it out in its own folder.`,
       });
     }
-  });
-
-  // Fetch uses the first configured URL, before insteadOf rewrites. Empty entries changed
-  // behavior in Git 2.46, so a remote containing any empty URL names no repository.
-  const readCheckoutRemoteUrls = Effect.fn("readCheckoutRemoteUrls")(function* (cwd: string) {
-    const { stdout } = yield* gitCore.execute({
-      operation: "GitManager.readCheckoutRemoteUrls",
-      cwd,
-      args: ["config", "--get-regexp", "^remote\\..+\\.url$"],
-      allowNonZeroExit: true,
-      timeoutMs: 5_000,
-    });
-    const urls = new Map<string, string>();
-    for (const line of stdout.split("\n")) {
-      const [, name = "", url = ""] = /^remote\.(.+?)\.url(?:\s+(.*))?$/.exec(line.trim()) ?? [];
-      if (name.length > 0 && (url.length === 0 || !urls.has(name))) urls.set(name, url);
-    }
-    return urls;
   });
 
   // Some hosts only switch branches on checkout; use the existing lossless refresh to advance them.
