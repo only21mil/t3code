@@ -1,3 +1,10 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as FileSystem from "effect/FileSystem";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import { HttpClientError } from "effect/http";
+// @effect-diagnostics-next-line nodeBuiltinImport:off - A real HTTP socket peer verifies the transport, not a mocked client.
+import * as NodeHttp from "node:http";
+import { driver } from "./driver.ts";
 import { describe, expect, it } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Effect from "effect/Effect";
@@ -6,7 +13,8 @@ import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
 import * as Tracer from "effect/Tracer";
 import { ChildProcessSpawner } from "effect/process";
-import { VcsProcessTimeoutError } from "@t3tools/contracts";
+import * as PlatformError from "effect/PlatformError";
+import { VcsProcessSpawnError, VcsProcessTimeoutError } from "@t3tools/contracts";
 import { HttpClient, HttpClientResponse, type HttpClientRequest } from "effect/http";
 
 import * as GitHubRest from "./GitHubRest.ts";
@@ -287,5 +295,223 @@ describe("GitHubCredentials", () => {
         ),
       ),
     ),
+  );
+});
+
+describe("GitHub driver Unix socket REST", () => {
+  const readStack = Effect.gen(function* () {
+    const instance = yield* driver.make;
+    return yield* instance.pullRequests!.getChangeRequestStack!({
+      cwd: "/fixture",
+      repository: "acme/web",
+      host: "github.com",
+      number: 7,
+    });
+  }).pipe(Effect.provideService(HostProcess.Environment, {}));
+
+  const services = (socketPath: string, ordinary: HttpClient.HttpClient, missingKey = false) =>
+    Layer.mergeAll(
+      NodeServices.layer,
+      NodeCrypto.layer,
+      SourceControlRateLimit.layer,
+      Layer.succeed(HttpClient.HttpClient, ordinary),
+      TestSourceControlHost.layer({
+        process: {
+          run: (input) => {
+            expect(input.command).toBe("gh");
+            if (input.args[0] === "config") {
+              expect(input.args).toEqual(["config", "get", "http_unix_socket"]);
+              return Effect.succeed(
+                TestSourceControlHost.processOutput(
+                  socketPath + "\n",
+                  missingKey
+                    ? {
+                        exitCode: ChildProcessSpawner.ExitCode(1),
+                        stderr: 'could not find key "http_unix_socket"\n',
+                      }
+                    : undefined,
+                ),
+              );
+            }
+            expect(input.args).toEqual(["auth", "token", "--hostname", "github.com"]);
+            return Effect.succeed(TestSourceControlHost.processOutput("placeholder\n"));
+          },
+        },
+      }),
+    );
+
+  // quarantine: #24958 This fixture exercises Unix-domain sockets on Linux and macOS.
+  it.live("reads REST through gh's plain HTTP socket with the API authority and query", (context) =>
+    Effect.gen(function* () {
+      if ((yield* HostProcess.Platform) === "win32") return context.skip();
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped();
+      const socketPath = `${dir}/gh.sock`;
+      const received: Array<{
+        host: string | undefined;
+        path: string | undefined;
+        auth: string | undefined;
+      }> = [];
+      const server = NodeHttp.createServer((request, response) => {
+        received.push({
+          host: request.headers.host,
+          path: request.url,
+          auth: request.headers.authorization,
+        });
+        response.setHeader("content-type", "application/json");
+        response.end("[]");
+      });
+      yield* Effect.acquireRelease(
+        Effect.callback<void>((resume) => {
+          server.once("error", (error) => resume(Effect.die(error)));
+          server.listen(socketPath, () => resume(Effect.void));
+        }),
+        () =>
+          Effect.promise(
+            () =>
+              new Promise<void>((resolve, reject) =>
+                server.close((error) => (error ? reject(error) : resolve())),
+              ),
+          ),
+      );
+      const ordinaryRequests: Array<string> = [];
+      const ordinary = HttpClient.make((request) => {
+        ordinaryRequests.push(request.url);
+        return Effect.fail(
+          new HttpClientError.HttpClientError({
+            reason: new HttpClientError.TransportError({
+              request,
+              cause: "ordinary-client sentinel",
+            }),
+          }),
+        );
+      });
+      yield* Effect.gen(function* () {
+        const instance = yield* driver.make;
+        expect(
+          yield* instance.pullRequests!.getChangeRequestStack!({
+            cwd: "/fixture",
+            repository: "acme/web",
+            host: "github.com",
+            number: 7,
+          }),
+        ).toBeNull();
+        const mediaError = yield* Effect.flip(
+          instance.fetchMedia!({
+            url: "https://objects.example.test/file.png",
+            headers: {},
+          }),
+        );
+        expect(mediaError.reason._tag).toBe("TransportError");
+      }).pipe(
+        Effect.provideService(HostProcess.Environment, {}),
+        Effect.provide(services(socketPath, ordinary)),
+      );
+      expect(ordinaryRequests).toEqual(["https://objects.example.test/file.png"]);
+      expect(received).toEqual([
+        {
+          host: "api.github.com",
+          path: "/repos/acme/web/stacks?pull_request=7",
+          auth: "Bearer placeholder",
+        },
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  // quarantine: #24958 This fixture exercises Unix-domain sockets on Linux and macOS.
+  it.live("never falls back to the ordinary client when the configured socket fails", (context) =>
+    Effect.gen(function* () {
+      if ((yield* HostProcess.Platform) === "win32") return context.skip();
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped();
+      let ordinaryCalls = 0;
+      const ordinary = HttpClient.make((request) => {
+        ordinaryCalls++;
+        return Effect.succeed(HttpClientResponse.fromWeb(request, json([])));
+      });
+      const error = yield* Effect.flip(
+        readStack.pipe(Effect.provide(services(`${dir}/missing.sock`, ordinary))),
+      );
+      expect(error.reason).toBe("failed");
+      expect(ordinaryCalls).toBe(0);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.live.each([false, true])(
+    "retains the ordinary client for unset gh config, missing key: %s",
+    (missingKey) => {
+      const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+      const ordinary = HttpClient.make((request) => {
+        requests.push(request);
+        return Effect.succeed(HttpClientResponse.fromWeb(request, json([])));
+      });
+      return Effect.gen(function* () {
+        expect(yield* readStack).toBeNull();
+        expect(requests.map((request) => request.url)).toEqual([
+          "https://api.github.com/repos/acme/web/stacks?pull_request=7",
+        ]);
+      }).pipe(Effect.scoped, Effect.provide(services("", ordinary, missingKey)));
+    },
+  );
+
+  it.live.each(["NotFound", "PermissionDenied"] as const)(
+    "preserves environment credentials when the gh config process fails with %s",
+    (tag) => {
+      const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+      return Effect.gen(function* () {
+        const instance = yield* driver.make;
+        const read = instance.pullRequests!.getChangeRequestStack!({
+          cwd: "/fixture",
+          repository: "acme/web",
+          host: "github.com",
+          number: 7,
+        });
+        if (tag === "NotFound") {
+          expect(yield* read).toBeNull();
+          expect(requests[0]?.headers.authorization).toBe("Bearer environment-placeholder");
+        } else {
+          expect((yield* Effect.flip(read)).reason).toBe("failed");
+          expect(requests).toHaveLength(0);
+        }
+      }).pipe(
+        Effect.scoped,
+        Effect.provideService(HostProcess.Environment, { GH_TOKEN: "environment-placeholder" }),
+        Effect.provide(
+          Layer.mergeAll(
+            NodeServices.layer,
+            NodeCrypto.layer,
+            SourceControlRateLimit.layer,
+            Layer.succeed(
+              HttpClient.HttpClient,
+              HttpClient.make((request) => {
+                requests.push(request);
+                return Effect.succeed(HttpClientResponse.fromWeb(request, json([])));
+              }),
+            ),
+            TestSourceControlHost.layer({
+              process: {
+                run: (input) => {
+                  expect(input.args).toEqual(["config", "get", "http_unix_socket"]);
+                  return Effect.fail(
+                    new VcsProcessSpawnError({
+                      operation: input.operation,
+                      command: input.command,
+                      cwd: input.cwd,
+                      cause: new PlatformError.PlatformError(
+                        new PlatformError.SystemError({
+                          _tag: tag,
+                          module: "ChildProcess",
+                          method: "spawn",
+                        }),
+                      ),
+                    }),
+                  );
+                },
+              },
+            }),
+          ),
+        ),
+      );
+    },
   );
 });

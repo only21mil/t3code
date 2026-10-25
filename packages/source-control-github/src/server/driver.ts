@@ -7,6 +7,7 @@ import * as Layer from "effect/Layer";
 
 import { definition } from "../shared/definition.ts";
 
+import * as GitHubHttpClient from "./gitHubHttpClient.ts";
 import * as GitHubMediaFetch from "./gitHubMediaFetch.ts";
 import * as GitHubPullRequestApi from "./GitHubPullRequestApi.ts";
 import * as GitHubPullRequestProvider from "./GitHubPullRequestProvider.ts";
@@ -17,6 +18,8 @@ import * as GitHubSourceControlProvider from "./GitHubSourceControlProvider.ts";
 // must be built once; the driver is.
 const services = GitHubPullRequestApi.layer.pipe(
   Layer.provideMerge(GitHubRest.layerWithDependencies),
+  // Only API services use gh's socket. Media and its external redirects keep the ordinary client.
+  Layer.provide(GitHubHttpClient.layer),
 );
 
 const makeInstance = Effect.all({

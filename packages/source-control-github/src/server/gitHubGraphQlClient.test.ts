@@ -1,3 +1,12 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as FileSystem from "effect/FileSystem";
+import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as TestSourceControlHost from "@t3tools/source-control-testing/TestSourceControlHost";
+// @effect-diagnostics-next-line nodeBuiltinImport:off - A real HTTP socket peer verifies the transport, not a mocked client.
+import * as NodeHttp from "node:http";
+import { HttpClientError } from "effect/http";
+import { driver } from "./driver.ts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -287,3 +296,113 @@ describe("call", () => {
     }).pipe(Effect.provide(layer));
   });
 });
+
+// quarantine: #24958 This fixture exercises Unix-domain sockets on Linux and macOS.
+it.live("GitHub driver reads GraphQL through gh's plain HTTP Unix socket", (context) =>
+  Effect.gen(function* () {
+    if ((yield* HostProcess.Platform) === "win32") return context.skip();
+    const fs = yield* FileSystem.FileSystem;
+    const dir = yield* fs.makeTempDirectoryScoped();
+    const socketPath = `${dir}/gh.sock`;
+    const received: Array<{
+      host: string | undefined;
+      path: string | undefined;
+      method: string | undefined;
+      body: string;
+    }> = [];
+    const server = NodeHttp.createServer((request, response) => {
+      const chunks: Array<Buffer> = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.on("end", () => {
+        received.push({
+          host: request.headers.host,
+          path: request.url,
+          method: request.method,
+          body: Buffer.concat(chunks).toString(),
+        });
+        response.setHeader("content-type", "application/json");
+        response.end(
+          JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  files: {
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                    nodes: [{ path: "src/main.ts", viewerViewedState: "VIEWED" }],
+                  },
+                },
+              },
+            },
+          }),
+        );
+      });
+    });
+    yield* Effect.acquireRelease(
+      Effect.callback<void>((resume) => {
+        server.once("error", (error) => resume(Effect.die(error)));
+        server.listen(socketPath, () => resume(Effect.void));
+      }),
+      () =>
+        Effect.promise(
+          () =>
+            new Promise<void>((resolve, reject) =>
+              server.close((error) => (error ? reject(error) : resolve())),
+            ),
+        ),
+    );
+    const ordinary = HttpClient.make((request) =>
+      Effect.fail(
+        new HttpClientError.HttpClientError({
+          reason: new HttpClientError.TransportError({
+            request,
+            cause: "ordinary-client sentinel",
+          }),
+        }),
+      ),
+    );
+    const result = yield* Effect.gen(function* () {
+      const instance = yield* driver.make;
+      return yield* instance.pullRequests!.getFilesViewed!({
+        cwd: "/fixture",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+      });
+    }).pipe(
+      Effect.provideService(HostProcess.Environment, {}),
+      Effect.provide(
+        Layer.mergeAll(
+          NodeCrypto.layer,
+          SourceControlRateLimit.layer,
+          Layer.succeed(HttpClient.HttpClient, ordinary),
+          TestSourceControlHost.layer({
+            process: {
+              run: (input) => {
+                expect(input.command).toBe("gh");
+                if (input.args[0] === "config") {
+                  expect(input.args).toEqual(["config", "get", "http_unix_socket"]);
+                  return Effect.succeed(TestSourceControlHost.processOutput(socketPath + "\n"));
+                }
+                expect(input.args).toEqual(["auth", "token", "--hostname", "github.com"]);
+                return Effect.succeed(TestSourceControlHost.processOutput("placeholder\n"));
+              },
+            },
+          }),
+        ),
+      ),
+    );
+    expect(result).toEqual({
+      files: [{ path: "src/main.ts", state: "viewed" }],
+      truncated: false,
+    });
+    expect(received).toHaveLength(1);
+    expect(received[0]).toMatchObject({
+      host: "api.github.com",
+      path: "/graphql",
+      method: "POST",
+    });
+    const body = JSON.parse(received[0]!.body);
+    expect(body.query).toContain("viewerViewedState");
+    expect(body.variables).toMatchObject({ owner: "acme", name: "web", number: 7 });
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
