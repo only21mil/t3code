@@ -44,4 +44,23 @@ class TerminalInputConnectionTest {
 
     assertEquals(listOf(1, 1), deletes)
   }
+
+  @Test
+  fun deletingAnEmojiOneUnitAtATimeSendsOneDelete() {
+    type("a😀")
+    connection.deleteSurroundingText(1, 0)
+    connection.deleteSurroundingText(1, 0)
+
+    assertEquals(listOf(1), deletes)
+  }
+
+  @Test
+  fun textTypedAfterHalfAnEmojiDeletesWithoutTheHalf() {
+    type("a😀")
+    connection.deleteSurroundingText(1, 0)
+    type("b")
+    connection.deleteSurroundingText(2, 0)
+
+    assertEquals(listOf(1, 1), deletes)
+  }
 }

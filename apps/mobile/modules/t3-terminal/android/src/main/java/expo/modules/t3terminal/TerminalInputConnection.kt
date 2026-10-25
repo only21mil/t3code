@@ -7,6 +7,9 @@ private const val MAX_DELETE_LENGTH = 1024
 
 // Text the terminal already received from the hidden input. The input is empty
 // by the time an IME deletes, so this is what its UTF-16 lengths refer to.
+// A high surrogate with no low half after it is what remains when an IME
+// deletes the low half of a pair. That DEL already reached the terminal, so
+// removing the high half sends nothing.
 internal class TerminalSentText {
   private val text = StringBuilder()
 
@@ -17,14 +20,18 @@ internal class TerminalSentText {
 
   fun removeUnits(units: Int): Int {
     val start = (text.length - units).coerceAtLeast(0)
-    val removed = units - (text.length - start) + text.codePointCount(start, text.length)
+    val shown = (start until text.length).count { !text[it].isHighSurrogate() }
+    val removed = units - (text.length - start) + shown
     text.setLength(start)
     return removed
   }
 
   fun removeCodePoints(count: Int): Int {
-    val known = count.coerceAtMost(text.codePointCount(0, text.length))
-    text.setLength(text.offsetByCodePoints(text.length, -known))
+    var left = count
+    while (left > 0 && text.isNotEmpty()) {
+      if (!text.last().isHighSurrogate()) left--
+      text.setLength(text.offsetByCodePoints(text.length, -1))
+    }
     return count
   }
 }
@@ -48,6 +55,6 @@ internal class TerminalInputConnection(
   }
 
   private fun forwardDeletes(count: Int) {
-    sendDeletes(count.coerceAtMost(MAX_DELETE_LENGTH))
+    if (count > 0) sendDeletes(count.coerceAtMost(MAX_DELETE_LENGTH))
   }
 }
