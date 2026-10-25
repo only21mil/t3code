@@ -644,21 +644,38 @@ const isMiseWrapperScript = Effect.fn("isMiseWrapperScript")(function* (
   return script.startsWith("#!") && /\bmise\s+(?:x|exec)\b/.test(script);
 });
 
-// Volta bin links only identify its shim; the package image proves ownership.
+// Volta bin links and Windows forwarding scripts still need package-image ownership proof.
 const isVoltaPackageInstall = Effect.fn("isVoltaPackageInstall")(function* (
   context: ProviderMaintenanceResolutionContext,
   packageName: string,
 ) {
   const path = yield* Path.Path;
-  if (
-    path.basename(normalizeCommandPath(context.realCommandPath)).replace(/\.exe$/, "") !==
-    "volta-shim"
-  ) {
-    return false;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const commandName = path.basename(normalizeCommandPath(context.realCommandPath));
+  if (commandName.replace(/\.exe$/, "") !== "volta-shim") {
+    if (
+      context.platform !== "win32" ||
+      !commandName.endsWith(".cmd") ||
+      path.basename(normalizeCommandPath(path.dirname(context.resolvedCommandPath))) !== "bin"
+    ) {
+      return false;
+    }
+    const size = yield* fileSystem.stat(context.realCommandPath).pipe(
+      Effect.map((info) => Number(info.size)),
+      Effect.orElseSucceed(() => Infinity),
+    );
+    if (size > 16 * 1_024) {
+      return false;
+    }
+    const script = yield* fileSystem
+      .readFileString(context.realCommandPath)
+      .pipe(Effect.orElseSucceed(() => ""));
+    if (!/^\s*@?echo off\r?\n@?volta run %~n0 %\*\s*$/i.test(script)) {
+      return false;
+    }
   }
   const voltaHome = path.dirname(path.dirname(context.resolvedCommandPath));
   const packageDir = path.join(voltaHome, "tools", "image", "packages", ...packageName.split("/"));
-  const fileSystem = yield* FileSystem.FileSystem;
   return yield* fileSystem.exists(packageDir).pipe(Effect.orElseSucceed(() => false));
 });
 

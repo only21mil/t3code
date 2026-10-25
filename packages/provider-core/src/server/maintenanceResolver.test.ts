@@ -1156,6 +1156,106 @@ it.layer(NodeServices.layer)("providerMaintenance", (it) => {
       }),
   );
 
+  it.effect.each([".CMD", ".cmd"])(
+    "updates Windows Volta %s shims only when Volta has the package",
+    (extension) =>
+      Effect.gen(function* () {
+        const voltaHome = yield* makeTempDir("t3-volta-windows-capabilities");
+        const shim = NodePath.join(voltaHome, "bin", `opencode${extension}`);
+        NodeFS.mkdirSync(NodePath.dirname(shim), { recursive: true });
+        NodeFS.writeFileSync(shim, "@echo off\r\nvolta run %~n0 %*\r\n");
+        const resolve = resolvePackageManagedProviderMaintenance(
+          {
+            provider: driver("opencode"),
+            npmPackageName: "@opencode/cli",
+            nativeUpdate: { args: ["upgrade"] },
+          },
+          {
+            binaryPath: shim,
+            resolvedCommandPath: shim,
+            realCommandPath: shim,
+            env: { PATH: "" },
+            platform: "win32",
+          },
+        ).pipe(
+          Effect.provideService(HostProcess.Platform, "win32"),
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawn),
+        );
+
+        expect((yield* resolve).update).toMatchObject({
+          executable: shim,
+          args: ["upgrade"],
+          lockKey: "opencode-native",
+        });
+        NodeFS.mkdirSync(
+          NodePath.join(voltaHome, "tools", "image", "packages", "@opencode", "cli"),
+          { recursive: true },
+        );
+        expect((yield* resolve).update).toMatchObject({
+          executable: "volta",
+          args: ["install", "@opencode/cli@latest"],
+          command: "volta install @opencode/cli@latest",
+          lockKey: "volta",
+        });
+      }),
+  );
+
+  it.effect.each([
+    { case: "an unrelated script", script: "@echo off\r\nnode opencode.js %*\r\n" },
+    { case: "a commented forwarding command", script: "@echo off\r\nrem volta run %~n0 %*\r\n" },
+    { case: "a different command", script: "@echo off\r\nvolta run other-tool %*\r\n" },
+    {
+      case: "additional commands",
+      script: "@echo off\r\nvolta run %~n0 %*\r\nnode other.js\r\n",
+    },
+    {
+      case: "an oversized script",
+      script: `@echo off\r\nvolta run %~n0 %*\r\n${" ".repeat(16_384)}`,
+    },
+    { case: "a missing script", script: null },
+    {
+      case: "a non-bin directory",
+      script: "@echo off\r\nvolta run %~n0 %*\r\n",
+      directory: "other",
+    },
+    { case: "a POSIX command script", script: "@echo off\r\nvolta run %~n0 %*\r\n", posix: true },
+  ])("keeps the native updater for $case beside a Volta image", (input) =>
+    Effect.gen(function* () {
+      const voltaHome = yield* makeTempDir("t3-volta-script-controls");
+      const shim = NodePath.join(voltaHome, input.directory ?? "bin", "opencode.CMD");
+      NodeFS.mkdirSync(NodePath.dirname(shim), { recursive: true });
+      if (input.script !== null) {
+        NodeFS.writeFileSync(shim, input.script);
+      }
+      NodeFS.mkdirSync(NodePath.join(voltaHome, "tools", "image", "packages", "@opencode", "cli"), {
+        recursive: true,
+      });
+      const platform = input.posix ? "linux" : "win32";
+      const capabilities = yield* resolvePackageManagedProviderMaintenance(
+        {
+          provider: driver("opencode"),
+          npmPackageName: "@opencode/cli",
+          nativeUpdate: { args: ["upgrade"] },
+        },
+        {
+          binaryPath: shim,
+          resolvedCommandPath: shim,
+          realCommandPath: shim,
+          env: { PATH: "" },
+          platform,
+        },
+      ).pipe(
+        Effect.provideService(HostProcess.Platform, platform),
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, noSpawn),
+      );
+      expect(capabilities.update).toMatchObject({
+        executable: shim,
+        args: ["upgrade"],
+        lockKey: "opencode-native",
+      });
+    }),
+  );
+
   it.effect.skipIf(windowsHost)("upgrades with the keg's own brew when brew is not on PATH", () =>
     Effect.gen(function* () {
       const tempDir = yield* makeTempDir("t3-homebrew-keg-brew");
