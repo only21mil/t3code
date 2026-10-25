@@ -226,7 +226,11 @@ const THREAD_SETTINGS_SHEET_OPTIONS = {
 
 // Settings pages are root routes so they share the workspace's columns and header. The
 // `Settings` route marks the Settings tab as open (see settings-navigation.ts).
-const SETTINGS_PAGE_OPTIONS = SHEET_GLASS_HEADER_OPTIONS;
+// Lists scroll under the Duo's vertical bar, like the system apps, so the header's scroll-edge
+// material reaches the bar; their content takes the bar's inset natively (ColumnInsetContent).
+const LISTS_UNDER_DUO_BAR = { nativeContentInsetHorizontally: false };
+
+const SETTINGS_PAGE_OPTIONS = { ...SHEET_GLASS_HEADER_OPTIONS, ...LISTS_UNDER_DUO_BAR };
 
 const SETTINGS_SCREENS = {
   Settings: createNativeStackScreen({
@@ -629,6 +633,7 @@ const RootStackConfig = createWorkspaceStackNavigator({
         ...FIXED_DUO_HEADER,
         contentStyle: { backgroundColor: "transparent" },
         headerBackVisible: false,
+        ...LISTS_UNDER_DUO_BAR,
         ...getCompactBrandHeaderOptions(),
       },
     }),

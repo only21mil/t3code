@@ -44,6 +44,7 @@ import type { WorkspaceEnvironment, WorkspaceState } from "../../state/workspace
 import type { SavedRemoteConnection } from "../../lib/connection";
 import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { NativePrimaryColumnContext } from "../../native/v5-workspace-context";
+import { ColumnInsetContent } from "../../components/ui/ScreenScrollView";
 import { nativeHeaderScrollEdgeEffects } from "../../native/scrollEdgeEffects";
 import {
   useNativeColumnLayoutMetrics,
@@ -236,7 +237,9 @@ function HomeScrollView(props: ComponentProps<typeof ScrollView>) {
         {...props}
         // UIKit's scroll-edge material needs the scroll view's own surface color.
         className={cn(props.className, primaryColumn ? "bg-drawer" : "bg-screen")}
-      />
+      >
+        <ColumnInsetContent>{props.children}</ColumnInsetContent>
+      </ScrollView>
     </ScrollViewMarker>
   );
 }

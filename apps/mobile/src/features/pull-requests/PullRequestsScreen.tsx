@@ -41,13 +41,16 @@ import {
   withoutScratchProjectScope,
 } from "./pullRequestList";
 import { useDebouncedValue } from "../../state/queries";
+import { ColumnInsetContent } from "../../components/ui/ScreenScrollView";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
 import { useAndroidWorkspaceSelection } from "../workspace/useAndroidWorkspaceSelection";
 
 function PullRequestScrollView(props: ScrollViewProps) {
   return (
     <ScrollViewMarker style={{ flex: 1 }}>
-      <ScrollView {...props} />
+      <ScrollView {...props}>
+        <ColumnInsetContent>{props.children}</ColumnInsetContent>
+      </ScrollView>
     </ScrollViewMarker>
   );
 }

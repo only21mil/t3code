@@ -36,3 +36,10 @@ export const NativeWorkspaceInspectorContext = createContext<{
   readonly render: (() => ReactNode) | undefined;
   readonly visible: boolean;
 }>({ render: undefined, visible: false });
+
+/**
+ * True when the column leaves its left and right safe areas (the Duo's vertical bar) to the
+ * screen: scroll views then span the column, so the header's scroll-edge material reaches the
+ * bar like in the system apps, and inset only their content.
+ */
+export const NativeColumnLeavesHorizontalInsets = createContext(false);
