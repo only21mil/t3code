@@ -714,8 +714,18 @@ function nextQueuedRun(
 function followsCurrentConversation(
   message: OrchestrationV2ConversationMessage | undefined,
 ): boolean {
+  if (message === undefined) {
+    return false;
+  }
+  // Agent sends and bound scheduled wakes pass no selection; their run only copies the thread's.
+  if (
+    message.scheduledTaskId !== undefined ||
+    (message.createdBy === "agent" && message.creationSource === "mcp")
+  ) {
+    return true;
+  }
   return (
-    message?.notification?.source.kind === "monitor" && !isBufferedProviderNotification(message)
+    message.notification?.source.kind === "monitor" && !isBufferedProviderNotification(message)
   );
 }
 
@@ -724,7 +734,7 @@ function queuedRunModelSelection(
   run: OrchestrationV2Run,
 ): ModelSelection {
   const message = projection.messages.find((candidate) => candidate.id === run.userMessageId);
-  // App-owned monitor updates follow the agent currently handling the thread.
+  // App-owned updates and unpinned agent messages follow the agent currently handling the thread.
   return followsCurrentConversation(message)
     ? projection.thread.modelSelection
     : run.modelSelection;

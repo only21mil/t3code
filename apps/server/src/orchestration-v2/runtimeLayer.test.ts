@@ -4694,6 +4694,89 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
   );
 
   it.effect.each([
+    { name: "agent-send", createdBy: "agent", creationSource: "mcp" },
+    {
+      name: "scheduled-wake",
+      createdBy: "user",
+      creationSource: "web",
+      scheduledTaskId: ScheduledTaskId.make("runtime-layer-queued-wake"),
+    },
+  ] as const)(
+    "starts a queued $name on the selection the user switched to while it waited",
+    ({ name, ...source }) =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const eventSink = yield* EventSink.EventSinkV2;
+        const threadId = ThreadId.make(`runtime-layer-queued-unpinned-${name}`);
+        const switchedSelection = { instanceId: alternateInstanceId, model: "gpt-5.5" };
+        yield* orchestrator.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make(`${threadId}:create`),
+          threadId,
+          projectId: ProjectId.make(`${threadId}:project`),
+          createdBy: "user",
+          creationSource: "web",
+          title: "Unpinned queued message",
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: process.cwd(),
+        });
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make(`${threadId}:active`),
+          threadId,
+          messageId: MessageId.make(`${threadId}:active`),
+          text: "Active",
+          attachments: [],
+          createdBy: "user",
+          creationSource: "web",
+          modelSelection,
+          dispatchMode: { type: "start_immediately" },
+        });
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make(`${threadId}:queued`),
+          threadId,
+          messageId: MessageId.make(`${threadId}:queued`),
+          text: "Queued without a selection",
+          attachments: [],
+          ...source,
+          dispatchMode: { type: "queue_after_active" },
+        });
+        const [active, queued] = (yield* orchestrator.getThreadProjection(threadId)).runs;
+        assert.isDefined(active);
+        assert.isDefined(queued);
+        yield* orchestrator.dispatch({
+          type: "thread.model-selection.set",
+          commandId: CommandId.make(`${threadId}:switch`),
+          threadId,
+          modelSelection: switchedSelection,
+        });
+        const now = yield* DateTime.now;
+        yield* eventSink.write({
+          events: [
+            {
+              id: EventId.make(`${threadId}:completed`),
+              type: "run.updated",
+              threadId,
+              runId: active.id,
+              occurredAt: now,
+              payload: { ...active, status: "completed", completedAt: now },
+            },
+          ],
+        });
+        yield* orchestrator.resumeQueuedRuns;
+        const after = yield* orchestrator.getThreadProjection(threadId);
+        const started = after.runs.find((run) => run.id === queued.id);
+        assert.equal(started?.status, "starting");
+        assert.deepEqual(started?.modelSelection, switchedSelection);
+        assert.deepEqual(after.thread.modelSelection, switchedSelection);
+      }),
+  );
+
+  it.effect.each([
     ["server", modelSelection],
     ["provider", modelSelection],
     ["provider", { ...modelSelection, instanceId: alternateInstanceId }],
