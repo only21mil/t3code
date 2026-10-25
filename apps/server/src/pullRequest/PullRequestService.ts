@@ -2710,13 +2710,10 @@ export const make = Effect.gen(function* () {
   const projectEpochs = new Map<ProjectId, number>();
   let projectEpochFloor = 0;
   const REF_EPOCH_CAPACITY = 2_048;
+  // Projects that borrow a lender's credentials keep their own copies of one pull request, so a
+  // change made from any project has to reach them all.
   const refScope = (ref: PullRequestRef) =>
-    JSON.stringify([
-      ref.projectId,
-      ref.host?.toLowerCase() ?? "",
-      ref.repository.toLowerCase(),
-      ref.number,
-    ]);
+    JSON.stringify([ref.host?.toLowerCase() ?? "", ref.repository.toLowerCase(), ref.number]);
   const mergedEpochs = new Map<string, number>();
   const refEpoch = (ref: PullRequestRef) => {
     const scope = refScope(ref);

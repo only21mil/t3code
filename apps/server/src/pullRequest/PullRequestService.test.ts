@@ -1740,6 +1740,21 @@ it.effect("points a borrowed pull request read at the project that asked for it"
     yield* service.refreshAfterTurn("app" as ProjectId);
     yield* service.summary(fromApp, { recoverTransientFailure: false });
     assert.strictEqual(seen.length, reads + 1);
+
+    // A change made from one project reaches the other projects' copies of the pull request.
+    const others = [
+      { ...reference, projectId: "web" as ProjectId },
+      { ...reference, projectId: "unrelated" as ProjectId },
+    ];
+    yield* Effect.forEach(others, (ref) =>
+      service.summary(ref, { recoverTransientFailure: false }),
+    );
+    const beforeComment = seen.length;
+    yield* service.comment({ ...fromApp, body: "Looks good" });
+    yield* Effect.forEach(others, (ref) =>
+      service.summary(ref, { recoverTransientFailure: false }),
+    );
+    assert.strictEqual(seen.length, beforeComment + 2);
   }),
 );
 
