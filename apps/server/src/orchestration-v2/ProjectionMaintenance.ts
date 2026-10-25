@@ -228,6 +228,7 @@ export const layer: Layer.Layer<
       "thread.pull-request-link-updated",
       "message.updated",
       "node.updated",
+      "turn-item.updated",
     ];
     const keyedEventTypes = new Set(KEYED_EVENT_TYPES);
     const quoteList = (values: ReadonlyArray<string>) =>
@@ -248,14 +249,18 @@ export const layer: Layer.Layer<
       ]),
     );
     const compactionKey = sql.literal(`(CASE
-        WHEN event.event_type IN ('message.updated', 'node.updated')
+        WHEN event.event_type IN ('message.updated', 'node.updated', 'turn-item.updated')
         THEN json_extract(event.payload_json, '$.id')
         WHEN event.event_type = 'thread.pull-request-link-updated'
         THEN json_array(json_extract(event.payload_json, '$.host'),
           json_extract(event.payload_json, '$.repository'),
           json_extract(event.payload_json, '$.number'))
       END)`);
-    // Keep subagent.updated and turn-item.updated rows: slimmed payloads reference their prompts.
+    const citedPromptSequence = sql.literal(`(CASE
+        WHEN event.event_type = 'turn-item.updated'
+        THEN json_extract(event.payload_json, '$.promptSequence')
+      END)`);
+    // Keep subagent.updated rows: slimmed payloads reference their prompts.
     // Small pages bound work on the reader worker and synchronous fallback.
     const COMPACTION_PAGE_SIZE = 50;
 
@@ -264,10 +269,12 @@ export const layer: Layer.Layer<
       readonly stream_id: string;
       readonly event_type: string;
       readonly entity_id: string | null;
+      /** The prompt anchor a slimmed subagent turn item names; read only for an item's newest event. */
+      readonly prompt_sequence: number | null;
     };
 
-    /** Retain newest and oldest keyed events to preserve client insertion order; keep turn-item.updated because
-     * replay assigns positions on first write. Partial indexes hold only deletable event types. A pass walks those
+    /** Retain newest and oldest keyed events to preserve client insertion order, and the prompt anchor a turn
+     * item's newest event names. Partial indexes hold only deletable event types. A pass walks those
      * written since the last completed pass, then the rows earlier passes kept for each thread and entity it met,
      * so it deletes what one full newest-first pass would. */
     const compactEventStore = Effect.gen(function* () {
@@ -304,6 +311,8 @@ export const layer: Layer.Layer<
       const retainedReadStateThreadIds = new Set<string>();
       // Retain each key's oldest candidate, deleting it only when an older event appears.
       const oldestCandidateByEntityKey = new Map<string, number | null>();
+      // Item IDs come from unique commands, so a turn item's prompt anchor is one of its own events.
+      const citedPromptSequenceByEntityKey = new Map<string, number | null>();
       // Threads and entities with new events; rows earlier passes kept for them may now be obsolete.
       const touchedThreadIds = new Set<string>();
       const touchedEntities = new Map<string, CompactableEventRow>();
@@ -343,9 +352,13 @@ export const layer: Layer.Layer<
         } else if (keyedEventTypes.has(row.event_type)) {
           const key = encodeEntityKey([row.event_type, row.stream_id, row.entity_id]);
           const candidate = oldestCandidateByEntityKey.get(key);
-          if (candidate === undefined) oldestCandidateByEntityKey.set(key, null);
-          else {
-            if (candidate !== null) obsolete.push(candidate);
+          if (candidate === undefined) {
+            oldestCandidateByEntityKey.set(key, null);
+            citedPromptSequenceByEntityKey.set(key, row.prompt_sequence);
+          } else {
+            if (candidate !== null && candidate !== citedPromptSequenceByEntityKey.get(key)) {
+              obsolete.push(candidate);
+            }
             oldestCandidateByEntityKey.set(key, row.sequence);
           }
         }
@@ -358,7 +371,8 @@ export const layer: Layer.Layer<
             event.sequence,
             event.stream_id,
             event.event_type,
-            ${compactionKey} AS entity_id
+            ${compactionKey} AS entity_id,
+            ${citedPromptSequence} AS prompt_sequence
           FROM orchestration_events AS event
             INDEXED BY orchestration_events_compaction_sequence_idx
           WHERE event.application_event_version = 2
@@ -373,7 +387,11 @@ export const layer: Layer.Layer<
         const obsolete: Array<number> = [];
         for (const row of rows) {
           classify(row, obsolete);
-          if (row.event_type === "message.updated" || row.event_type === "node.updated") {
+          if (
+            row.event_type === "message.updated" ||
+            row.event_type === "node.updated" ||
+            row.event_type === "turn-item.updated"
+          ) {
             touchedEntities.set(
               encodeEntityKey([row.event_type, row.stream_id, row.entity_id]),
               row,
@@ -386,7 +404,8 @@ export const layer: Layer.Layer<
       }
 
       // Continue the walk below the watermark. Earlier passes left each thread at most one supersedable and one
-      // read-state event plus the newest and oldest event per link, and each entity its newest and oldest event.
+      // read-state event plus the newest and oldest event per link, and each entity its newest and oldest event
+      // (and a turn item's cited prompt anchor).
       if (afterSequence > 0) {
         const obsolete: Array<number> = [];
         const flush = Effect.suspend(() =>
@@ -402,7 +421,8 @@ export const layer: Layer.Layer<
               event.sequence,
               event.stream_id,
               event.event_type,
-              ${compactionKey} AS entity_id
+              ${compactionKey} AS entity_id,
+              NULL AS prompt_sequence
             FROM orchestration_events AS event
               INDEXED BY orchestration_events_compaction_key_idx
             WHERE event.aggregate_kind = 'thread'
@@ -429,7 +449,8 @@ export const layer: Layer.Layer<
               event.sequence,
               event.stream_id,
               event.event_type,
-              ${compactionKey} AS entity_id
+              ${compactionKey} AS entity_id,
+              NULL AS prompt_sequence
             FROM entity
             CROSS JOIN orchestration_events AS event
               INDEXED BY orchestration_events_compaction_key_idx

@@ -16,7 +16,7 @@ export default Effect.gen(function* () {
     )
   `;
 
-  // New compactable events in sequence order, covering their compaction keys.
+  // New compactable events in sequence order, covering their compaction keys and cited prompt anchors.
   yield* sql`
     CREATE INDEX orchestration_events_compaction_sequence_idx
     ON orchestration_events(
@@ -24,12 +24,16 @@ export default Effect.gen(function* () {
       stream_id,
       event_type,
       (CASE
-        WHEN event_type IN ('message.updated', 'node.updated')
+        WHEN event_type IN ('message.updated', 'node.updated', 'turn-item.updated')
         THEN json_extract(payload_json, '$.id')
         WHEN event_type = 'thread.pull-request-link-updated'
         THEN json_array(json_extract(payload_json, '$.host'),
           json_extract(payload_json, '$.repository'),
           json_extract(payload_json, '$.number'))
+      END),
+      (CASE
+        WHEN event_type = 'turn-item.updated'
+        THEN json_extract(payload_json, '$.promptSequence')
       END),
       application_event_version,
       aggregate_kind
@@ -44,7 +48,8 @@ export default Effect.gen(function* () {
         'thread.interaction-mode-updated', 'thread.model-selection-updated',
         'thread.provider-switched', 'thread.guest-share-updated',
         'thread.visited', 'thread.marked-unread',
-        'thread.pull-request-link-updated', 'message.updated', 'node.updated'
+        'thread.pull-request-link-updated', 'message.updated', 'node.updated',
+        'turn-item.updated'
       )
   `;
 
@@ -56,7 +61,7 @@ export default Effect.gen(function* () {
       application_event_version,
       event_type,
       (CASE
-        WHEN event_type IN ('message.updated', 'node.updated')
+        WHEN event_type IN ('message.updated', 'node.updated', 'turn-item.updated')
         THEN json_extract(payload_json, '$.id')
         WHEN event_type = 'thread.pull-request-link-updated'
         THEN json_array(json_extract(payload_json, '$.host'),
@@ -77,7 +82,8 @@ export default Effect.gen(function* () {
           'thread.interaction-mode-updated', 'thread.model-selection-updated',
           'thread.provider-switched', 'thread.guest-share-updated',
           'thread.visited', 'thread.marked-unread',
-          'thread.pull-request-link-updated', 'message.updated', 'node.updated'
+          'thread.pull-request-link-updated', 'message.updated', 'node.updated',
+          'turn-item.updated'
         )
       )
   `;

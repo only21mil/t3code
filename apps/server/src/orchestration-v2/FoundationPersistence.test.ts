@@ -3351,15 +3351,23 @@ it.effect("reads only compactable events since the last pass and rows kept for t
       ],
     });
     const first = yield* maintenance.compactEventStore;
-    assert.equal(first.scannedEventCount, 3);
+    assert.equal(first.scannedEventCount, 4);
     assert.equal(first.deletedEventCount, 1);
 
-    // Forty non-compactable events and a new message: the pass reads only the message's three rows.
+    // Forty events no rule deletes and a new message: the pass reads only the message's three rows.
+    yield* sql`
+      WITH RECURSIVE bulk(version) AS (SELECT 1 UNION ALL SELECT version + 1 FROM bulk WHERE version < 40)
+      INSERT INTO orchestration_events (
+        event_id, aggregate_kind, stream_id, stream_version, event_type,
+        occurred_at, actor_kind, payload_json, metadata_json, application_event_version
+      )
+      SELECT
+        'bulk:' || version, 'thread', 'thread:compaction-scan-bulk', version,
+        'provider-turn.updated', '2026-10-25T00:00:00.000Z', 'provider', '{}', '{}', 2
+      FROM bulk
+    `;
     yield* eventSink.write({
       events: [
-        ...Array.from({ length: 40 }, (_, index) =>
-          history.item(`bulk-${index}`, `item:bulk-${index}`, "bulk"),
-        ),
         history.message("b1", "message:b", "b1"),
         history.message("b2", "message:b", "b2"),
         history.message("b3", "message:b", "b3"),
@@ -3447,6 +3455,97 @@ it.effect("leaves the same events and replay state over several passes as one fu
     assert.notInclude(incremental, `event:${threadId}:n2`);
     assert.include(incremental, `event:${threadId}:a1`);
   }),
+);
+
+it.effect(
+  "keeps each turn item's oldest, newest and cited prompt events and restores the prompt",
+  () =>
+    Effect.gen(function* () {
+      const eventSink = yield* EventSink.EventSinkV2;
+      const eventStore = yield* EventStore.EventStoreV2;
+      const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const sql = yield* SqlClient.SqlClient;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:compaction-subagent-prompt");
+      const history = compactionHistory(threadId, now);
+      const firstPrompt = "Audit the repository. ".repeat(200);
+      const secondPrompt = "Audit it again. ".repeat(200);
+      const subagentItem = (index: number, prompt: string): OrchestrationV2DomainEvent => ({
+        id: EventId.make(`event:${threadId}:subagent-${index}`),
+        type: "turn-item.updated",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id: TurnItemId.make("item:compaction-subagent"),
+          type: "subagent",
+          threadId,
+          runId: null,
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 1,
+          status: "running",
+          title: "Audit",
+          subagentId: NodeId.make("node:compaction-subagent"),
+          origin: "provider_native",
+          driver: providerDriver,
+          providerInstanceId,
+          childThreadId: null,
+          prompt,
+          progress: `step ${index}`,
+          result: null,
+          startedAt: now,
+          completedAt: null,
+          updatedAt: now,
+        },
+      });
+      // Versions 3 to 5 restate the second prompt, so 4 and 5 name 3 as their anchor.
+      yield* eventSink.write({
+        events: [
+          history.created,
+          ...[0, 1, 2].map((index) => subagentItem(index, firstPrompt)),
+          ...[3, 4, 5].map((index) => subagentItem(index, secondPrompt)),
+        ],
+      });
+      const stored = yield* sql<{
+        readonly event_id: string;
+        readonly prompt_sequence: number | null;
+      }>`
+      SELECT event_id, json_extract(payload_json, '$.promptSequence') AS prompt_sequence
+      FROM orchestration_events
+      WHERE stream_id = ${threadId} AND event_type = 'turn-item.updated'
+      ORDER BY sequence ASC
+    `;
+      assert.isNull(stored[3]?.prompt_sequence);
+      assert.isNotNull(stored[5]?.prompt_sequence);
+      const before = {
+        thread: yield* projections.getThreadProjection(threadId),
+        rows: yield* turnItemProjectionRows,
+      };
+
+      assert.equal((yield* maintenance.compactEventStore).deletedEventCount, 3);
+      assert.deepEqual(
+        (yield* remainingEventIds).filter((eventId) => eventId.includes(":subagent-")),
+        [0, 3, 5].map((index) => `event:${threadId}:subagent-${index}`),
+      );
+      const replayed = yield* eventStore
+        .read({ threadId, afterSequence: 0 })
+        .pipe(Stream.runCollect);
+      const newest = Array.from(replayed).findLast(
+        (entry) => entry.event.type === "turn-item.updated" && entry.event.threadId === threadId,
+      );
+      assert.equal(newest?.event.type, "turn-item.updated");
+      if (newest?.event.type !== "turn-item.updated" || newest.event.payload.type !== "subagent") {
+        return assert.fail("missing the newest subagent item");
+      }
+      assert.equal(newest.event.payload.prompt, secondPrompt);
+      assert.isTrue((yield* maintenance.rebuild).valid);
+      assert.deepEqual(yield* projections.getThreadProjection(threadId), before.thread);
+      assert.deepEqual(yield* turnItemProjectionRows, before.rows);
+    }).pipe(Effect.provide(layerTest)),
 );
 
 it.effect("deletes v1 events and receipts of a transcript imported after the last pass", () =>

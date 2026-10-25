@@ -450,7 +450,7 @@ const makeEventStore = Effect.gen(function* () {
           const promptKey = subagent === undefined ? undefined : `${event.type}:${subagent.id}`;
           const hint = promptKey === undefined ? undefined : promptHints.get(promptKey);
           const payloadJson = yield* encodeJson(encoded.payload);
-          // Deduplicate repeated progress prompts via anchor rows that ProjectionMaintenance never deletes.
+          // Deduplicate repeated progress prompts via anchor rows; compaction keeps the anchor an item's newest row names.
           const storedPayload =
             hint !== undefined && subagent !== undefined
               ? sql`CASE WHEN EXISTS (
