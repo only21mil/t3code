@@ -2714,16 +2714,18 @@ export const make = Effect.gen(function* () {
   // change made from any project has to reach them all.
   const refScope = (ref: PullRequestRef) =>
     JSON.stringify([ref.host?.toLowerCase() ?? "", ref.repository.toLowerCase(), ref.number]);
+  // A merge freezes the observing project's own epoch, which means nothing to another project.
+  const mergedScope = (ref: PullRequestRef) => JSON.stringify([ref.projectId, refScope(ref)]);
   const mergedEpochs = new Map<string, number>();
   const refEpoch = (ref: PullRequestRef) => {
     const scope = refScope(ref);
     return Math.max(
-      mergedEpochs.get(scope) ?? projectEpochs.get(ref.projectId) ?? projectEpochFloor,
+      mergedEpochs.get(mergedScope(ref)) ?? projectEpochs.get(ref.projectId) ?? projectEpochFloor,
       refEpochs.get(scope) ?? 0,
     );
   };
   const noteMerged = (ref: PullRequestRef) => {
-    const scope = refScope(ref);
+    const scope = mergedScope(ref);
     if (mergedEpochs.has(scope)) return;
     if (mergedEpochs.size >= REF_EPOCH_CAPACITY) {
       const oldest = mergedEpochs.keys().next().value;

@@ -1758,6 +1758,44 @@ it.effect("points a borrowed pull request read at the project that asked for it"
   }),
 );
 
+it.effect("does not let one project's merged read send another back to an older copy", () =>
+  Effect.gen(function* () {
+    let merged = false;
+    const updatedAt = () => (merged ? "2026-07-03T00:00:00Z" : "2026-07-02T00:00:00Z");
+    const service = yield* makeService({
+      projects: [
+        project({ id: "lender", title: "lender", workspaceRoot: "/l", repository: "acme/lender" }),
+        project({ id: "web", title: "web", workspaceRoot: "/web", repository: "acme/web" }),
+        project({ id: "app", title: "app", workspaceRoot: "/app", repository: "acme/app" }),
+      ],
+      providers: [
+        fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+          getChangeRequest: () =>
+            Effect.sync(() => ({
+              ...hostedChangeRequest("Description"),
+              state: merged ? "merged" : "open",
+              updatedAt: updatedAt(),
+            })),
+          getChangeRequestSummary: () =>
+            Effect.sync(() => ({
+              ...changeRequest(1, updatedAt()),
+              state: merged ? "merged" : "open",
+            })),
+        }),
+      ],
+    });
+    const reference = { host: "github.com", repository: "acme/api", number: 1 };
+    const fromWeb = { ...reference, projectId: "web" as ProjectId };
+
+    yield* service.summary(fromWeb);
+    yield* service.refreshAfterTurn("web" as ProjectId);
+    merged = true;
+    yield* service.detail({ ...reference, projectId: "app" as ProjectId });
+
+    assert.strictEqual((yield* service.summary(fromWeb)).state, "merged");
+  }),
+);
+
 it.effect("routes Azure reads and writes through the requested organization's checkout", () =>
   Effect.gen(function* () {
     const seen: string[] = [];
