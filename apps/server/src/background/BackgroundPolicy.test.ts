@@ -212,11 +212,46 @@ describe("BackgroundPolicy", () => {
       assert.equal(snapshot.shouldRunOpportunisticWork, false);
       assert.equal(yield* policy.hasDemand({ type: "vcs-status", cwd: "/repo" }), true);
       assert.equal(yield* policy.shouldRunScopeWork({ type: "vcs-status", cwd: "/repo" }), false);
+      assert.equal(
+        yield* policy.shouldRunScopeWork({ type: "vcs-status", cwd: "/repo" }, { recovery: true }),
+        false,
+      );
     }).pipe(
       Effect.provide(
         layerFor({
           ...nominalHostPower,
           suspended: true,
+          stale: false,
+        }),
+      ),
+    ),
+  );
+
+  it.effect("recovery work runs through host low power for a foreground client", () =>
+    Effect.gen(function* () {
+      const policy = yield* BackgroundPolicy.BackgroundPolicy;
+      const scope = { type: "provider-status" } as const;
+      yield* policy.reportClientActivity(
+        AuthSessionId.make("session-1"),
+        RpcClientId.make(1),
+        makeReport({ scopes: [scope] }),
+      );
+      yield* policy.reportClientActivity(
+        AuthSessionId.make("session-1"),
+        RpcClientId.make(2),
+        makeReport({ clientId: "client-2", visible: false, focused: false, scopes: [scope] }),
+      );
+
+      assert.equal(yield* policy.shouldRunScopeWork(scope), false);
+      assert.equal(yield* policy.shouldRunScopeWork(scope, { recovery: true }), true);
+      yield* policy.removeRpcClient(AuthSessionId.make("session-1"), RpcClientId.make(1));
+      assert.equal(yield* policy.shouldRunScopeWork(scope, { recovery: true }), false);
+    }).pipe(
+      Effect.provide(
+        layerFor({
+          ...nominalHostPower,
+          onBattery: "true",
+          lowPowerMode: "true",
           stale: false,
         }),
       ),

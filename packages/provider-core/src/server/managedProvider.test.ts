@@ -97,6 +97,7 @@ const refreshedSnapshotSecond: ServerProvider = {
 
 function layerProviderHost(input: {
   readonly runBackgroundWork: boolean;
+  readonly runRecoveryWork?: boolean;
   readonly settings?: Pick<ProviderHost.ProviderHost["Service"], "settings">["settings"];
 }) {
   return Layer.succeed(
@@ -115,7 +116,12 @@ function layerProviderHost(input: {
         changes: Stream.empty,
         subscribe: Effect.succeed(Stream.empty),
       },
-      shouldRunBackgroundWork: () => Effect.succeed(input.runBackgroundWork),
+      shouldRunBackgroundWork: (_scope, options) =>
+        Effect.succeed(
+          options?.recovery
+            ? (input.runRecoveryWork ?? input.runBackgroundWork)
+            : input.runBackgroundWork,
+        ),
       resolveAttachmentPath: () => null,
       credentials: () => Effect.die("unused"),
     }),
@@ -252,6 +258,48 @@ describe("makeManagedServerProvider", () => {
         assert.strictEqual(yield* Ref.get(checkCalls), 2);
       }),
     ).pipe(Effect.provide(Layer.mergeAll(layerAlwaysRunTest, TestClock.layer()))),
+  );
+
+  it.effect("re-checks a failed provider while the host pauses routine refreshes", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const checkCalls = yield* Ref.make(0);
+        const releaseInitialCheck = yield* Deferred.make<void>();
+        const failedSnapshot = { ...refreshedSnapshot, status: "error" as const };
+        const provider = yield* makeManagedServerProvider<TestSettings>({
+          resolveMaintenance: () => Effect.succeed(maintenanceCapabilities),
+          getSettings: Effect.succeed({ enabled: true }),
+          streamSettings: Stream.empty,
+          haveSettingsChanged: (previous, next) => previous.enabled !== next.enabled,
+          initialSnapshot: () => Effect.succeed(initialSnapshot),
+          checkProvider: Deferred.await(releaseInitialCheck).pipe(
+            Effect.andThen(Ref.updateAndGet(checkCalls, (count) => count + 1)),
+            Effect.map((count) => (count === 1 ? failedSnapshot : refreshedSnapshot)),
+          ),
+          refreshInterval: "1 second",
+        });
+        const initialUpdate = yield* provider.streamChanges.pipe(
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        yield* Effect.yieldNow;
+        yield* Deferred.succeed(releaseInitialCheck, undefined);
+        assert.deepStrictEqual(Array.from(yield* Fiber.join(initialUpdate)), [failedSnapshot]);
+
+        yield* TestClock.adjust("1 second");
+        assert.deepStrictEqual(yield* provider.getSnapshot, refreshedSnapshot);
+        yield* TestClock.adjust("3 seconds");
+        assert.strictEqual(yield* Ref.get(checkCalls), 2);
+      }),
+    ).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          layerProviderHost({ runBackgroundWork: false, runRecoveryWork: true }),
+          TestClock.layer(),
+        ),
+      ),
+    ),
   );
 
   it.effect("reruns the provider check when streamed settings change", () =>
