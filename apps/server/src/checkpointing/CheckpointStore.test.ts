@@ -510,5 +510,57 @@ it.layer(layerTest)("CheckpointStore.layer", (it) => {
         );
       }),
     );
+
+    it.effect.each([false, true])(
+      "keeps repository paths from a subdirectory workspace with diff.relative=%s",
+      (relative) =>
+        Effect.gen(function* () {
+          const tmp = yield* makeTmpDir();
+          yield* initRepoWithCommit(tmp);
+          yield* git(tmp, ["config", "diff.relative", String(relative)]);
+          const fileSystem = yield* FileSystem.FileSystem;
+          const cwd = NodePath.join(tmp, "scope");
+          yield* fileSystem.makeDirectory(cwd);
+          yield* writeTextFile(NodePath.join(cwd, "base.txt"), "base\n");
+          yield* git(tmp, ["add", "."]);
+          yield* git(tmp, ["commit", "-m", "scope"]);
+          const checkpointStore = yield* CheckpointStore.CheckpointStore;
+          const threadId = ThreadId.make("checkpoint-authored-paths-relative");
+          const refs = {
+            cwd,
+            fromCheckpointRef: checkpointRefForThreadTurn(threadId, 0),
+            toCheckpointRef: checkpointRefForThreadTurn(threadId, 1),
+          };
+          yield* git(tmp, ["checkout", "-b", "upstream"]);
+          yield* writeTextFile(NodePath.join(cwd, "imported.txt"), "imported\n");
+          yield* git(tmp, ["add", "."]);
+          yield* git(tmp, ["commit", "-m", "imported"], { committedAt: "2020-01-01T00:00:00Z" });
+          yield* git(tmp, ["checkout", "-"]);
+          yield* checkpointStore.captureCheckpoint({ cwd, checkpointRef: refs.fromCheckpointRef });
+          yield* git(tmp, ["merge", "--ff-only", "upstream"]);
+          yield* writeTextFile(NodePath.join(cwd, "own.txt"), "own\n");
+          yield* checkpointStore.captureCheckpoint({ cwd, checkpointRef: refs.toCheckpointRef });
+
+          const numstat = yield* checkpointStore.diffCheckpoints({
+            ...refs,
+            ignoreWhitespace: false,
+            format: "numstat",
+          });
+          expect(parseTurnDiffFilesFromNumstat(numstat).map((file) => file.path)).toEqual([
+            "scope/imported.txt",
+            "scope/own.txt",
+          ]);
+          expect(yield* checkpointStore.listAuthoredPaths(refs)).toEqual(
+            new Set(["scope/own.txt"]),
+          );
+          const patch = yield* checkpointStore.diffCheckpoints({
+            ...refs,
+            ignoreWhitespace: false,
+            filePaths: ["scope/own.txt"],
+          });
+          expect(patch).toContain("diff --git a/scope/own.txt b/scope/own.txt");
+          expect(patch).not.toContain("imported");
+        }),
+    );
   });
 });
