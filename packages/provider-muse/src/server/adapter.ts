@@ -1647,6 +1647,14 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
           }
         }
       });
+      const deliver = (method: string, data: unknown) =>
+        handleNotification(method, data).pipe(
+          Effect.catch((cause) =>
+            INFORMATIONAL_NOTIFICATIONS.has(method)
+              ? Effect.logWarning(`Skipped an unreadable Muse ${method}`, cause)
+              : failHost(cause),
+          ),
+        );
       yield* Stream.fromQueue(inbox).pipe(
         Stream.runForEach((entry) =>
           Effect.gen(function* () {
@@ -1667,13 +1675,7 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
                     { provider: "muse", method: entry.method, params: entry.params },
                     input.threadId,
                   );
-                yield* handleNotification(entry.method, entry.params).pipe(
-                  Effect.catch((cause) =>
-                    INFORMATIONAL_NOTIFICATIONS.has(entry.method)
-                      ? Effect.logWarning(`Skipped an unreadable Muse ${entry.method}`, cause)
-                      : failHost(cause),
-                  ),
-                );
+                yield* deliver(entry.method, entry.params);
               }
             }
           }).pipe(eventPermit.withPermits(1)),
@@ -2057,8 +2059,7 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
           wake = undefined;
           if (continuation && !held) return yield* finish(turn, "completed");
           if (held && !continuation) turn.joined.add(held.nativeId);
-          for (const [method, data] of held?.events ?? [])
-            yield* handleNotification(method, data).pipe(Effect.catch(failHost));
+          for (const [method, data] of held?.events ?? []) yield* deliver(method, data);
         }).pipe(eventPermit.withPermits(1));
         if (continuation) return;
         yield* Effect.gen(function* () {

@@ -1688,6 +1688,58 @@ describe("MuseAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
+  it.effect("skips an unreadable model retry held for a Muse wake and keeps the host", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakeMuse();
+      const offered =
+        yield* Deferred.make<ProviderContinuationRequests.ProviderContinuationRequest>();
+      const buffered = yield* Deferred.make<void>();
+      const harness = yield* makeHarness(
+        fake,
+        INSTANCE_ID,
+        undefined,
+        undefined,
+        undefined,
+        runtimePolicy,
+        {
+          continuationRequests: { offer: (request) => Deferred.succeed(offered, request) },
+          nativeEventLogger: {
+            filePath: "muse-events.ndjson",
+            write: (event) =>
+              (event as { method: string }).method === "session/todoListChanged"
+                ? Deferred.succeed(buffered, undefined)
+                : Effect.void,
+            close: () => Effect.void,
+          },
+        },
+      );
+      yield* fake.emit("turn/started", { turnId: "wake-1" });
+      yield* fake.emit("turn/modelRetryScheduled", {
+        turnId: "wake-1",
+        nextAttempt: "2",
+        maxAttempts: 10,
+      });
+      yield* fake.emit("turn/completed", { turnId: "wake-1", terminal: "completed" });
+      // Logged before handling, so the wake events ahead of it are already buffered.
+      yield* fake.emitHostWide("session/todoListChanged", { sessionId: "other-session" });
+      yield* Deferred.await(offered);
+      yield* Deferred.await(buffered);
+
+      const input = yield* turnInput(harness.providerThread);
+      yield* harness.runtime.startTurn({
+        ...input,
+        message: { ...input.message, createdBy: "agent", creationSource: "provider" },
+      });
+      const woke = yield* harness.takeEvent("turn.terminal");
+      assert.strictEqual(woke.status, "completed");
+
+      const { nativeId } = yield* startConversation(harness, fake, 2);
+      yield* fake.emit("turn/completed", { turnId: nativeId, terminal: "completed" });
+      assert.strictEqual((yield* harness.takeEvent("turn.terminal")).status, "completed");
+      assert.strictEqual(fake.closeCount(), 0);
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
   it.effect("opens a prompt-and-result child thread for a native subagent", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakeMuse();
