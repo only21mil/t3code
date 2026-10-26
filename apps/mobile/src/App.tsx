@@ -1,3 +1,4 @@
+import { DeviceEvidencePanel } from "./features/agent-awareness/deviceEvidence";
 import { PermissionUpdateNotice } from "./features/connection/PermissionUpdateNotice";
 import * as Linking from "expo-linking";
 import * as SplashScreen from "expo-splash-screen";
@@ -100,6 +101,7 @@ function AppContent() {
               {/* Anchored-menu overlays render here — in-window, so the
                 keyboard stays up while a dropdown is open. */}
               <OverlayPortalHost />
+              <DeviceEvidencePanel />
             </VoiceInputProvider>
           </SafeAreaProvider>
         </KeyboardProvider>
