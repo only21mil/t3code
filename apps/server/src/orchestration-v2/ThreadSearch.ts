@@ -103,8 +103,8 @@ const MESSAGE_SCAN_LIMIT = 20_000;
 /**
  * The SQL inputs for a message search, or null when the query has no token
  * long enough to search. Tokens of three or more characters go to the
- * trigram index as quoted phrases; shorter ones, and every token when the
- * index cannot serve the query, are checked as substrings of the hits.
+ * trigram index as quoted phrases; shorter ones, and every token when there
+ * is no index, are checked as substrings of the hits.
  */
 function buildMessageSearch(
   query: string,
@@ -113,10 +113,14 @@ function buildMessageSearch(
   const { long, short } = messageSearchTokens(query);
   if (long.length === 0) return null;
   // Two-character CJK words are too short for trigrams.
-  const indexed = hasIndex && long.every((token) => Array.from(token).length >= 3);
+  const isIndexed = (token: string) => hasIndex && Array.from(token).length >= 3;
+  const indexed = long.filter(isIndexed);
   return {
-    match: indexed ? long.map((token) => `"${token.replaceAll('"', '""')}"`).join(" ") : null,
-    substrings: indexed ? short : [...long, ...short],
+    match:
+      indexed.length > 0
+        ? indexed.map((token) => `"${token.replaceAll('"', '""')}"`).join(" ")
+        : null,
+    substrings: [...long.filter((token) => !isIndexed(token)), ...short],
   };
 }
 
@@ -156,7 +160,7 @@ export function buildSearchSnippet(text: string, matchStart: number): string {
 
 // Hidden subagent threads must be filtered before the hit limit so visible matches aren't lost.
 // Word starts and ranking follow the title rules in JS.
-// Without FTS5 trigrams, or for two-character CJK words, scan the same eligible messages.
+// Without FTS5 trigrams, or with only two-character CJK words, scan the same eligible messages.
 // The scan folds ASCII case only, so accent variants and non-ASCII case variants may not match.
 export const messageHitsQuery = (
   sql: SqlClient.SqlClient,

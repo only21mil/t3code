@@ -599,6 +599,45 @@ it.layer(layerTest)("ThreadSearch filters before it ranks", (it) => {
 });
 
 it.layer(layerTest)("ThreadSearch across scripts and without the index", (it) => {
+  it.effect("finds an older message for a two-character Chinese word beside a longer word", () =>
+    Effect.gen(function* () {
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const search = yield* ThreadSearch.ThreadSearch;
+      const sql = yield* SqlClient.SqlClient;
+      const project = ProjectId.make("project:launch");
+      const launch = ThreadId.make("thread:launch");
+      const rolloutOnly = ThreadId.make("thread:rollout-only");
+      const busy = ThreadId.make("thread:launch-busy");
+      yield* createProject(project);
+      yield* Effect.forEach(
+        [
+          thread(launch, project),
+          message(launch, "launch", "user", "上线 the rollout on Friday"),
+          thread(rolloutOnly, project),
+          message(rolloutOnly, "rollout-only", "assistant", "the rollout is green"),
+          thread(busy, project),
+        ],
+        projections.apply,
+        { discard: true },
+      );
+      // More newer messages than a scan reads, so only the index reaches the older ones.
+      yield* sql`
+        WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 20000)
+        INSERT INTO orchestration_v2_projection_messages
+          (message_id, thread_id, role, streaming, created_at, updated_at, payload_json)
+        SELECT 'launch-busy-' || i, ${busy}, 'assistant', 0, ${DateTime.formatIso(at(5))},
+          ${DateTime.formatIso(at(5))}, json_object('text', 'unrelated chatter')
+        FROM n
+      `;
+      const threadIds = (query: string) =>
+        search.search({ query }).pipe(Effect.map(({ matches }) => matches.map((m) => m.threadId)));
+
+      assert.deepEqual(yield* threadIds("上线 rollout"), [launch]);
+      // The two-character word is still required.
+      assert.deepEqual(yield* threadIds("下线 rollout"), []);
+    }),
+  );
+
   it.effect(
     "matches Korean, Japanese, and two-character Chinese words, and whole short words",
     () =>
