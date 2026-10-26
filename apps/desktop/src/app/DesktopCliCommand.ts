@@ -192,6 +192,11 @@ export const make = Effect.gen(function* () {
         yield* fs
           .writeFileString(ownedPathMarker, `${binDirectory}\n`)
           .pipe(Effect.mapError(() => fail("Added t3 to your PATH but could not record it.")));
+      } else if (!(yield* exists(ownedPathMarker))) {
+        // An empty marker records the install without claiming the user's own PATH entry.
+        yield* fs
+          .writeFileString(ownedPathMarker, "")
+          .pipe(Effect.mapError(() => fail("Could not record that t3 is installed.")));
       }
       return yield* state;
     }
@@ -237,9 +242,15 @@ export const make = Effect.gen(function* () {
   const uninstall: DesktopCliCommand["Service"]["uninstall"] = Effect.gen(function* () {
     if (windows) {
       if (yield* exists(ownedPathMarker)) {
-        const entries = pathEntries(yield* readUserPath, ";");
-        const kept = entries.filter((entry) => !sameWindowsPath(entry, binDirectory));
-        if (kept.length !== entries.length) yield* writeUserPath(kept.join(";"));
+        const added = yield* fs.readFileString(ownedPathMarker).pipe(
+          Effect.map((content) => sameWindowsPath(content.trim(), binDirectory)),
+          Effect.orElseSucceed(() => false),
+        );
+        if (added) {
+          const entries = pathEntries(yield* readUserPath, ";");
+          const kept = entries.filter((entry) => !sameWindowsPath(entry, binDirectory));
+          if (kept.length !== entries.length) yield* writeUserPath(kept.join(";"));
+        }
         yield* fs.remove(ownedPathMarker).pipe(Effect.ignore);
       }
       return yield* state;

@@ -202,28 +202,31 @@ it.layer(NodeServices.layer)("DesktopCliCommand", (it) => {
       ).replace(/[\\/]t3\.cmd$/, "");
       yield* command.install;
       expect(registry.path).toBe(`${userPath};${launcherDir}`);
+      yield* command.install;
       yield* command.uninstall;
       expect(registry.path).toBe(userPath);
     }).pipe(Effect.scoped),
   );
 
-  it.effect("does not claim or remove a Windows PATH entry the user added", () =>
+  it.effect("installs onto a Windows PATH entry the user added but never removes it", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const home = yield* fs.makeTempDirectoryScoped();
-      const launcherDir = path.dirname(
-        DesktopCliShim.launcherPath(
-          environmentFor(path, { home, baseDir: path.join(home, ".t3"), platform: "win32" }),
-        ),
+      const launcher = DesktopCliShim.launcherPath(
+        environmentFor(path, { home, baseDir: path.join(home, ".t3"), platform: "win32" }),
       );
-      const userPath = `C:\\Tools;${launcherDir}`;
+      const userPath = `C:\\Tools;${path.dirname(launcher)}`;
       const { registry, spawner } = fakePowerShell(userPath);
       const command = yield* commandIn({ home, platform: "win32" }, spawner);
 
       expect((yield* command.state).installedPath).toBeNull();
       yield* command.uninstall;
       expect(registry.path).toBe(userPath);
+
+      expect(yield* command.install).toMatchObject({ installedPath: launcher, onPath: true });
+      expect((yield* command.uninstall).installedPath).toBeNull();
+      expect(registry).toMatchObject({ path: userPath, writes: 0 });
     }).pipe(Effect.scoped),
   );
 });
