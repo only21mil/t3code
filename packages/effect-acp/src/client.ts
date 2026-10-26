@@ -711,6 +711,11 @@ function normalizePermissionRequest(
               : context.requestId,
           title: request.title,
           kind: subject?.type === "command" ? ("execute" as const) : ("other" as const),
+          ...(subject?.type === "command" &&
+          "command" in subject &&
+          typeof subject.command === "string"
+            ? { rawInput: { command: subject.command, cwd: subject.cwd } }
+            : {}),
         };
   return {
     sessionId: request.sessionId,

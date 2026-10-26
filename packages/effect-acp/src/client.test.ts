@@ -1099,6 +1099,43 @@ it.layer(NodeServices.layer)("effect-acp client", (it) => {
     }),
   );
 
+  it.effect("passes the command and cwd of a v2 command permission request to the handler", () =>
+    Effect.gen(function* () {
+      const { stdio, input } = yield* makeInMemoryStdio();
+      const scope = yield* Scope.make();
+      const acp = yield* AcpClient.make(stdio).pipe(Effect.provideService(Scope.Scope, scope));
+      const received = yield* Deferred.make<AcpCompat.RequestPermissionRequest>();
+      yield* acp.handleRequestPermission((request) =>
+        Deferred.succeed(received, request).pipe(
+          Effect.as({ outcome: { outcome: "selected", optionId: "allow" } } as const),
+        ),
+      );
+      yield* Queue.offer(
+        input,
+        yield* encodeJsonl(PermissionRequest, {
+          jsonrpc: "2.0",
+          id: "permission-1",
+          method: "session/request_permission",
+          params: {
+            sessionId: "session-1",
+            title: "Run command",
+            subject: { type: "command", command: "touch sentinel", cwd: "/workspace" },
+            options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
+          },
+          headers: [],
+        }),
+      );
+
+      assert.deepEqual((yield* Deferred.await(received)).toolCall, {
+        toolCallId: "permission-1",
+        title: "Run command",
+        kind: "execute",
+        rawInput: { command: "touch sentinel", cwd: "/workspace" },
+      });
+      yield* Scope.close(scope, Exit.void);
+    }),
+  );
+
   it.effect("answers each request whose handler dies, and keeps reading", () =>
     Effect.gen(function* () {
       const errorLogs = yield* Queue.unbounded<string>();
