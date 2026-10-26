@@ -13,12 +13,14 @@ import {
   resolveDesktopBaseDir,
   resolveDesktopStateDir,
   type JoinPath,
+  type ResolvePath,
 } from "./DesktopStatePaths.ts";
 
 interface EarlyDesktopSettingsInput {
   readonly env: NodeJS.ProcessEnv;
   readonly homeDirectory: string;
   readonly joinPath: JoinPath;
+  readonly resolvePath: ResolvePath;
   readonly readFileString: (path: string) => string;
 }
 
@@ -53,11 +55,13 @@ function resolveEarlyDesktopSettingsPath(input: {
   readonly env: NodeJS.ProcessEnv;
   readonly homeDirectory: string;
   readonly joinPath: JoinPath;
+  readonly resolvePath: ResolvePath;
 }): string {
   const t3Home = Option.fromUndefinedOr(input.env.T3CODE_HOME);
   const baseDir = resolveDesktopBaseDir({
     homeDirectory: input.homeDirectory,
     joinPath: input.joinPath,
+    resolvePath: input.resolvePath,
     t3Home,
   });
   const stateDir = resolveDesktopStateDir({

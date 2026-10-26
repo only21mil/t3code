@@ -10,12 +10,14 @@ import {
 
 describe("DesktopEarlyElectronStartup", () => {
   const joinPath = NodePath.posix.join;
+  const resolvePath = NodePath.posix.resolve;
 
   it("reads the persisted linux password-store preference before Electron is ready", () => {
     const preference = resolveEarlyLinuxPasswordStorePreference({
       env: { T3CODE_HOME: "/home/user/.t3-test" },
       homeDirectory: "/home/user",
       joinPath,
+      resolvePath,
       readFileString: (path) => {
         assert.equal(path, "/home/user/.t3-test/userdata/desktop-settings.json");
         return JSON.stringify({ linuxPasswordStore: "kwallet6" });
@@ -25,11 +27,35 @@ describe("DesktopEarlyElectronStartup", () => {
     assert.equal(preference, "kwallet6");
   });
 
+  it.each([
+    { t3Home: " ~/.t3-test ", settingsPath: "/home/user/.t3-test/userdata/desktop-settings.json" },
+    { t3Home: "~", settingsPath: "/home/user/userdata/desktop-settings.json" },
+    {
+      t3Home: "state/t3",
+      settingsPath: NodePath.posix.join(process.cwd(), "state/t3/userdata/desktop-settings.json"),
+    },
+  ])("reads early settings from the server's T3 home for $t3Home", ({ t3Home, settingsPath }) => {
+    const paths: Array<string> = [];
+    resolveEarlyLinuxPasswordStorePreference({
+      env: { T3CODE_HOME: t3Home },
+      homeDirectory: "/home/user",
+      joinPath,
+      resolvePath,
+      readFileString: (path) => {
+        paths.push(path);
+        return "{}";
+      },
+    });
+
+    assert.deepEqual(paths, [settingsPath]);
+  });
+
   it("accepts JSONC in the early desktop settings file", () => {
     const preference = resolveEarlyLinuxPasswordStorePreference({
       env: { T3CODE_HOME: "/home/user/.t3-test" },
       homeDirectory: "/home/user",
       joinPath,
+      resolvePath,
       readFileString: () => `{
         // manually edited setting
         "linuxPasswordStore": "gnome-libsecret",
@@ -44,6 +70,7 @@ describe("DesktopEarlyElectronStartup", () => {
       env: {},
       homeDirectory: "/home/user",
       joinPath,
+      resolvePath,
       readFileString: () => {
         throw new Error("missing");
       },
@@ -136,6 +163,7 @@ describe("Linux device scale persistence failures", () => {
     env: { T3CODE_HOME: "/isolated" },
     homeDirectory: "/home/user",
     joinPath: NodePath.posix.join,
+    resolvePath: NodePath.posix.resolve,
   };
 
   it.each(["0", "Infinity", "garbage"])("ignores invalid persisted scale %j", (value) => {

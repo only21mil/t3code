@@ -533,6 +533,8 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
         ...backendChildEnvPatch(),
         ELECTRON_RUN_AS_NODE: "1",
         T3CODE_CLI_PATH: Option.getOrUndefined(input.cliPath),
+        // The server prefers an inherited T3CODE_HOME to bootstrap t3Home and resolves it from backendCwd.
+        ...(process.env.T3CODE_HOME?.trim() ? { T3CODE_HOME: environment.baseDir } : {}),
       },
       extendEnv: true,
       bootstrap,

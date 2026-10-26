@@ -268,6 +268,30 @@ describe("DesktopBackendConfiguration", () => {
     ),
   );
 
+  it.effect("resolvePrimary replaces an inherited T3CODE_HOME with the resolved home", () =>
+    withHarness(
+      Effect.gen(function* () {
+        const environment = yield* DesktopEnvironment.DesktopEnvironment;
+        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+        const previousT3Home = process.env.T3CODE_HOME;
+        try {
+          process.env.T3CODE_HOME = "relative/t3";
+          const configured = yield* configuration.resolvePrimary;
+          process.env.T3CODE_HOME = "  ";
+          const blank = yield* configuration.resolvePrimary;
+          delete process.env.T3CODE_HOME;
+          const unset = yield* configuration.resolvePrimary;
+
+          assert.equal(configured.env.T3CODE_HOME, environment.baseDir);
+          assert.isUndefined(blank.env.T3CODE_HOME);
+          assert.isUndefined(unset.env.T3CODE_HOME);
+        } finally {
+          restoreEnv("T3CODE_HOME", previousT3Home);
+        }
+      }),
+    ),
+  );
+
   it.effect("resolvePrimary starts from server.asar without materializing the WSL tree", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

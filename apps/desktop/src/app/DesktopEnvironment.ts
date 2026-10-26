@@ -160,6 +160,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
   const baseDir = resolveDesktopBaseDir({
     homeDirectory,
     joinPath: path.join,
+    resolvePath: path.resolve,
     t3Home: config.t3Home,
   });
   const rootDir = path.resolve(input.dirname, "../../..");

@@ -38,6 +38,7 @@ export const resolveEarlyLinuxElectronOptionsFromProcess = (
     env: process.env,
     homeDirectory,
     joinPath: NodePath.posix.join,
+    resolvePath: NodePath.posix.resolve,
     readFileString: (path) => NodeFS.readFileSync(path, "utf8"),
   });
 
@@ -66,6 +67,7 @@ export const make = Effect.gen(function* () {
         env: process.env,
         homeDirectory,
         joinPath: NodePath.posix.join,
+        resolvePath: NodePath.posix.resolve,
         commandLine: Electron.app.commandLine,
         readFileString: (path) => NodeFS.readFileSync(path, "utf8"),
         writeFileString: (path, value) => {
