@@ -323,15 +323,40 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
               }
 
               return handler(request).pipe(
-                Effect.matchEffect({
-                  onFailure: (error) =>
-                    respondError(
-                      request.id,
-                      CodexError.CodexAppServerRequestError.fromAppServerError(
-                        error,
-                        request.method,
+                Effect.matchCauseEffect({
+                  onFailure: (cause) => {
+                    const failure = Cause.findErrorOption(cause);
+                    if (Option.isSome(failure)) {
+                      return respondError(
+                        request.id,
+                        CodexError.CodexAppServerRequestError.fromAppServerError(
+                          failure.value,
+                          request.method,
+                        ),
+                      );
+                    }
+                    // An interrupted handler leaves the request to whoever interrupted it.
+                    if (Cause.hasInterruptsOnly(cause)) return Effect.void;
+                    return Effect.logError(
+                      `Codex App Server request handler failed for '${request.method}'`,
+                      cause,
+                    ).pipe(
+                      Effect.andThen(
+                        respondError(
+                          request.id,
+                          CodexError.CodexAppServerRequestError.internalError(
+                            `Codex App Server request handler failed for method '${request.method}'`,
+                            undefined,
+                            {
+                              method: request.method,
+                              operation: "handle-request",
+                              cause: Cause.squash(cause),
+                            },
+                          ),
+                        ),
                       ),
-                    ),
+                    );
+                  },
                   onSuccess: (result) => respond(request.id, result),
                 }),
                 Effect.ensuring(
@@ -403,6 +428,13 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
       );
     };
 
+    // Anything that ends the reader, including a defect in a callback it runs,
+    // terminates the connection so pending requests fail instead of hanging.
+    const terminateReader = (cause: Cause.Cause<unknown>) =>
+      handleTermination(() =>
+        Effect.succeed(normalizeIncomingError(Cause.squash(cause), "read-input-stream")),
+      );
+
     yield* options.stdio.stdin.pipe(
       Stream.interruptWhen(Deferred.await(terminationSignal)),
       Stream.decodeText(),
@@ -431,11 +463,8 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
           }
         }),
       ),
-      Effect.matchEffect({
-        onFailure: (error) =>
-          handleTermination(() =>
-            Effect.succeed(normalizeIncomingError(error, "read-input-stream")),
-          ),
+      Effect.matchCauseEffect({
+        onFailure: terminateReader,
         onSuccess: () =>
           Effect.sync(() => {
             const line = remainder.join("");
@@ -443,8 +472,8 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
             return line;
           }).pipe(
             Effect.flatMap(handleLine),
-            Effect.matchEffect({
-              onFailure: (error) => handleTermination(() => Effect.succeed(error)),
+            Effect.matchCauseEffect({
+              onFailure: terminateReader,
               onSuccess: () =>
                 handleTermination(() => {
                   const ended = new CodexError.CodexAppServerInputStreamEndedError({});

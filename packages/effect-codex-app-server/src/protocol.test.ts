@@ -418,6 +418,56 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
     }),
   );
 
+  it.effect("answers a request whose handler dies with an internal error", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
+        stdio,
+        onRequest: () => Effect.die(new Error("handler-defect-sentinel")),
+      });
+
+      yield* Queue.offer(
+        input,
+        encodeJsonl({ id: 7, method: "item/tool/requestUserInput", params: {} }),
+      );
+
+      assert.deepEqual(yield* decodeJson(yield* Queue.take(output)), {
+        id: 7,
+        error: {
+          code: -32603,
+          message:
+            "Codex App Server request handler failed for method 'item/tool/requestUserInput'",
+        },
+      });
+    }),
+  );
+
+  it.effect("fails pending requests when a notification handler dies", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const terminated = yield* Deferred.make<CodexError.CodexAppServerError>();
+      const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
+        stdio,
+        onNotification: () => Effect.die(new Error("notification-defect-sentinel")),
+        onTermination: (error) => Deferred.succeed(terminated, error).pipe(Effect.asVoid),
+      });
+      const pending = yield* transport.request("thread/read", {}).pipe(Effect.forkScoped);
+      yield* Queue.take(output);
+
+      yield* Queue.offer(input, encodeJsonl({ method: "item/agentMessage/delta", params: {} }));
+
+      const failure = yield* Deferred.await(terminated);
+      assert.instanceOf(failure, CodexError.CodexAppServerTransportError);
+      const pendingFailure = yield* Fiber.join(pending).pipe(
+        Effect.match({
+          onFailure: (error) => error,
+          onSuccess: () => assert.fail("Expected the pending request to fail"),
+        }),
+      );
+      assert.strictEqual(pendingFailure, failure);
+    }),
+  );
+
   it.effect("interrupts pending request handlers when the protocol terminates", () =>
     Effect.gen(function* () {
       const { stdio, input } = yield* makeInMemoryStdio();
