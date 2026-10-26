@@ -19,6 +19,7 @@ import {
   type OrchestrationV2ThreadShell,
 } from "@t3tools/contracts";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
@@ -887,4 +888,142 @@ it.effect("only the caller that prepared a pending upload can discard it", () =>
       ),
     ),
   ),
+);
+
+const childShell = (
+  id: string,
+  parent: ThreadId,
+  fields: Partial<OrchestrationV2ThreadShell> = {},
+): OrchestrationV2ThreadShell => ({
+  ...McpToolAccessTestkit.liveThreadShell(ThreadId.make(id)),
+  createdBy: "agent",
+  creationSource: "mcp",
+  lineage: { rootThreadId: parent, parentThreadId: parent, relationshipToParent: "subagent" },
+  ...fields,
+});
+
+const settleThroughOrganize = (
+  projectThreads: ReadonlyArray<OrchestrationV2ThreadShell>,
+  calls: ReadonlyArray<Record<string, unknown>>,
+) => {
+  const settled: Array<{ threadId: ThreadId; byOwnAgent: boolean }> = [];
+  return Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const results: Array<McpSchema.CallToolResult> = [];
+    for (const args of calls) {
+      results.push(
+        yield* server
+          .callTool({ name: "t3_thread_organize", arguments: args })
+          .pipe(
+            Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+            Effect.provideService(McpSchema.McpServerClient, client),
+          ),
+      );
+    }
+    return { results, settled };
+  }).pipe(
+    Effect.provide(
+      layerThreadToolkit.pipe(
+        Layer.provideMerge(McpServer.McpServer.layer),
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(
+          Layer.mock(ThreadManagement.ThreadManagementService)({
+            getThreadShell: (id) =>
+              Effect.succeed(
+                projectThreads.find((shell) => shell.id === id) ??
+                  McpToolAccessTestkit.liveThreadShell(id),
+              ),
+            getProjectThreadRecords: (input) =>
+              Effect.succeed(
+                McpToolAccessTestkit.idleThreadProjection(
+                  projectThreads.find((shell) => shell.id === input.threadId) ??
+                    McpToolAccessTestkit.liveThreadShell(input.threadId),
+                ),
+              ),
+            listProjectThreads: () => Effect.succeed(projectThreads),
+            settleThread: (input) =>
+              Effect.sync(() => {
+                settled.push({ threadId: input.threadId, byOwnAgent: input.byOwnAgent });
+                return { settlesWhenTurnEnds: true } as const;
+              }),
+          }),
+        ),
+      ),
+    ),
+  );
+};
+
+it.effect("settle without threadId is refused while this thread has unsettled children", () => {
+  const running = childShell("mcp-core-child-running", threadId);
+  const completed = childShell("mcp-core-child-completed", threadId, {
+    activeRunId: null,
+    status: "idle",
+  });
+  const settledChild = childShell("mcp-core-child-settled", threadId, {
+    activeRunId: null,
+    status: "idle",
+    settledOverride: "settled",
+    settledAt: DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"),
+  });
+  const projectThreads = [
+    McpToolAccessTestkit.liveThreadShell(threadId),
+    running,
+    completed,
+    settledChild,
+    childShell("mcp-core-other-child", ThreadId.make("mcp-core-other-parent")),
+  ];
+  return Effect.gen(function* () {
+    const { results, settled } = yield* settleThroughOrganize(projectThreads, [
+      { action: "settle" },
+      { action: "settle", threadId: completed.id },
+      { action: "settle", threadId },
+    ]);
+    const refusal = declaredFailure(results[0]!);
+    expect(refusal).toMatchObject({ code: "target_required" });
+    expect(refusal.message).toContain(running.id);
+    expect(refusal.message).toContain(completed.id);
+    expect(refusal.message).not.toContain(settledChild.id);
+    expect(results.slice(1).map((result) => result.isError)).toEqual([false, false]);
+    expect(settled).toEqual([
+      { threadId: completed.id, byOwnAgent: false },
+      { threadId, byOwnAgent: true },
+    ]);
+  });
+});
+
+it.effect.each([
+  { label: "no children", children: [] },
+  {
+    label: "only settled children",
+    children: [
+      childShell("mcp-core-child-settled", threadId, {
+        activeRunId: null,
+        status: "idle",
+        settledOverride: "settled",
+        settledAt: DateTime.makeUnsafe("2026-01-01T00:00:00.000Z"),
+      }),
+    ],
+  },
+  {
+    label: "only another thread's children",
+    children: [childShell("mcp-core-other-child", ThreadId.make("mcp-core-other-parent"))],
+  },
+  {
+    label: "only provider-native subagents",
+    children: [
+      childShell("mcp-core-native-subagent", threadId, {
+        createdBy: "agent",
+        creationSource: "provider",
+      }),
+    ],
+  },
+])("settle without threadId settles this thread with $label", ({ children }) =>
+  Effect.gen(function* () {
+    const { results, settled } = yield* settleThroughOrganize(
+      [McpToolAccessTestkit.liveThreadShell(threadId), ...children],
+      [{ action: "settle" }],
+    );
+    expect(results[0]?.isError).toBe(false);
+    expect(settled).toEqual([{ threadId, byOwnAgent: true }]);
+  }),
 );
