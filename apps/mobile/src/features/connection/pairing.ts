@@ -90,3 +90,75 @@ export function extractPairingUrlFromQrPayload(payload: string): string {
 
   return trimmed;
 }
+
+// Local Fold preview setup contains an endpoint only. Enrollment is always an
+// explicit exchange of a fresh server-issued one-time credential.
+export const DEFAULT_PAIRING_HOST = "https://framework-desktop.tail69757d.ts.net:33774";
+
+export function initialPairingFields(pairingUrl: string): { host: string; code: string } {
+  const fields = parsePairingUrl(pairingUrl);
+  return { ...fields, host: fields.host || DEFAULT_PAIRING_HOST };
+}
+
+export function buildManualPairingUrl(host: string, codeOrUrl: string): string {
+  const invalid = () => new Error("Invalid pairing link. Use a T3 pairing code or QR code.");
+  // A nonempty synthetic code takes the existing scheme-normalization path.
+  // Only this URL’s origin is used; the placeholder is never submitted.
+  const displayedHost = new URL(buildPairingUrl(host, "origin-validation"));
+  if (
+    !["https:", "http:"].includes(displayedHost.protocol) ||
+    displayedHost.username ||
+    displayedHost.password
+  ) {
+    throw invalid();
+  }
+  const input = codeOrUrl.trim();
+  if (!input) throw new Error("Enter a fresh pairing code or scan a pairing QR code.");
+  if (!input.includes("://")) return buildPairingUrl(host, input);
+
+  const link = new URL(input);
+  if (
+    !["https:", "http:"].includes(link.protocol) ||
+    link.username ||
+    link.password ||
+    !["/", "/pair"].includes(link.pathname)
+  ) {
+    throw invalid();
+  }
+  const hash = new URLSearchParams(link.hash.slice(1));
+  const tokens = [...link.searchParams.getAll("token"), ...hash.getAll("token")];
+  if (tokens.length === 0 || !tokens[0]?.trim()) {
+    throw new Error("This link has no pairing code. Get a fresh pairing link.");
+  }
+  if (tokens.length !== 1 || [...hash.keys()].some((key) => key !== "token")) throw invalid();
+
+  const hosts = link.searchParams.getAll("host");
+  let target = link;
+  if (hosts.length > 0) {
+    if (
+      hosts.length !== 1 ||
+      link.origin !== "https://app.t3.codes" ||
+      link.pathname !== "/pair" ||
+      [...link.searchParams.keys()].some((key) => !["host", "label", "token"].includes(key))
+    ) {
+      throw invalid();
+    }
+    target = new URL(hosts[0]!);
+    if (
+      target.username ||
+      target.password ||
+      target.search ||
+      target.hash ||
+      target.pathname !== "/"
+    )
+      throw invalid();
+  } else if ([...link.searchParams.keys()].some((key) => key !== "token")) {
+    throw invalid();
+  }
+  if (target.origin !== displayedHost.origin) {
+    throw new Error(
+      "This pairing link does not match the displayed host. Scan its QR code or update Host first.",
+    );
+  }
+  return buildPairingUrl(host, tokens[0]!);
+}

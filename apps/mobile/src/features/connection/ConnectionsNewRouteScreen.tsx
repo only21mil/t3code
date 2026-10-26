@@ -16,7 +16,13 @@ import { AppText as Text } from "../../components/AppText";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { ConnectionFormField } from "./ConnectionFormField";
 import { ConnectionSheetButton } from "./ConnectionSheetButton";
-import { buildPairingUrl, extractPairingUrlFromQrPayload, parsePairingUrl } from "./pairing";
+import {
+  buildManualPairingUrl,
+  extractPairingUrlFromQrPayload,
+  initialPairingFields,
+  parsePairingUrl,
+  DEFAULT_PAIRING_HOST,
+} from "./pairing";
 import { useRemoteConnections } from "../../state/use-remote-environment-registry";
 
 type ConnectionsNewRouteParams = {
@@ -45,20 +51,23 @@ export function ConnectionsNewRouteScreen({
     routePairingUrl.length > 0 &&
     (params.autoConnect === "1" || params.autoConnect === "true");
   const insets = useSafeAreaInsets();
-  const [hostInput, setHostInput] = useState("");
+  const [hostInput, setHostInput] = useState(DEFAULT_PAIRING_HOST);
   const [codeInput, setCodeInput] = useState("");
+  const [inputError, setInputError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showScanner, setShowScanner] = useState(params.mode === "scan_qr");
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [scannerLocked, setScannerLocked] = useState(false);
   const attemptedAutoConnectRef = useRef<string | null>(null);
+  const submittingRef = useRef(false);
 
   const headerIconColor = useUniwindTheme()["--color-icon"];
 
-  const connectDisabled = isSubmitting || hostInput.trim().length === 0;
+  const connectDisabled =
+    isSubmitting || hostInput.trim().length === 0 || codeInput.trim().length === 0;
 
   useEffect(() => {
-    const { host, code } = parsePairingUrl(connectionPairingUrl);
+    const { host, code } = initialPairingFields(connectionPairingUrl);
     setHostInput(host);
     setCodeInput(code);
   }, [connectionPairingUrl]);
@@ -80,10 +89,12 @@ export function ConnectionsNewRouteScreen({
   }, [pairingConnectionError]);
 
   const handleHostChange = useCallback((value: string) => {
+    setInputError(null);
     setHostInput(value);
   }, []);
 
   const handleCodeChange = useCallback((value: string) => {
+    setInputError(null);
     setCodeInput(value);
   }, []);
 
@@ -131,6 +142,7 @@ export function ConnectionsNewRouteScreen({
       }
 
       setScannerLocked(true);
+      setInputError(null);
 
       try {
         const pairingUrl = extractPairingUrlFromQrPayload(data);
@@ -155,6 +167,8 @@ export function ConnectionsNewRouteScreen({
 
   const connectAndClose = useCallback(
     async (pairingUrl: string, replaceWithHome: boolean) => {
+      if (submittingRef.current) return;
+      submittingRef.current = true;
       setIsSubmitting(true);
       onChangeConnectionPairingUrl(pairingUrl);
       try {
@@ -167,6 +181,7 @@ export function ConnectionsNewRouteScreen({
           }
         }
       } finally {
+        submittingRef.current = false;
         setIsSubmitting(false);
       }
     },
@@ -174,7 +189,15 @@ export function ConnectionsNewRouteScreen({
   );
 
   const handleSubmit = useCallback(async () => {
-    await connectAndClose(buildPairingUrl(hostInput, codeInput), false);
+    setInputError(null);
+    try {
+      await connectAndClose(buildManualPairingUrl(hostInput, codeInput), false);
+    } catch {
+      // A validation failure must not expose a pasted credential in an error.
+      setInputError(
+        "Check the pairing code or link and make sure it matches Host. Use a fresh code or scan the QR code.",
+      );
+    }
   }, [codeInput, connectAndClose, hostInput]);
 
   useEffect(() => {
@@ -243,6 +266,11 @@ export function ConnectionsNewRouteScreen({
             )
           ) : (
             <View collapsable={false} className="gap-4 rounded-[24px] bg-card p-4">
+              <Text className="text-sm leading-normal text-foreground-muted">
+                Framework is ready in Host. Keep Tailscale connected, then enter a fresh T3 pairing
+                code or paste its full link. You can also scan the pairing QR code. Pairing saves
+                this device’s own connection.
+              </Text>
               <ConnectionFormField
                 label="Host"
                 autoCapitalize="none"
@@ -254,7 +282,8 @@ export function ConnectionsNewRouteScreen({
               />
 
               <ConnectionFormField
-                label="Pairing code"
+                label="Pairing code or link"
+                secureTextEntry
                 autoCapitalize="none"
                 autoCorrect={false}
                 placeholder="abc-123-xyz"
@@ -262,12 +291,14 @@ export function ConnectionsNewRouteScreen({
                 onChangeText={handleCodeChange}
               />
 
-              {pairingConnectionError ? <ErrorBanner message={pairingConnectionError} /> : null}
+              {inputError || pairingConnectionError ? (
+                <ErrorBanner message={inputError ?? pairingConnectionError!} />
+              ) : null}
 
               <View className="android:flex-row android:justify-end">
                 <ConnectionSheetButton
                   icon="plus"
-                  label={isSubmitting ? "Pairing..." : "Add environment"}
+                  label={isSubmitting ? "Pairing..." : "Pair"}
                   disabled={connectDisabled}
                   tone="primary"
                   onPress={() => {

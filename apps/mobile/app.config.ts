@@ -274,6 +274,8 @@ const config: ExpoConfig = {
     },
   },
   android: {
+    // Retained Fold preview chain: 10302 was delivered on 2026-09-30.
+    ...(APP_VARIANT === "preview" ? { versionCode: 10304 } : {}),
     icon: variant.assets.appIcon,
     package: variant.androidPackage,
     ...(repoEnv.T3CODE_ANDROID_GOOGLE_SERVICES_FILE
@@ -422,6 +424,7 @@ const config: ExpoConfig = {
     "./plugins/withIosSceneLifecycle.cjs",
     "./plugins/withAndroidCleartextTraffic.cjs",
     "./plugins/withAndroidGradleHeap.cjs",
+    "./plugins/withAndroidFbjniCompat.cjs",
     "./plugins/withAndroidInputBackground.cjs",
     "./plugins/withAndroidModernPopupMenu.cjs",
     "./plugins/withAndroidModernAlertDialog.cjs",
