@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -265,6 +266,9 @@ function finalizeRunProcess<R>(
 
 const commandName = (command: string) => command.replace(/^.*[\\/]/, "");
 
+const isClosedPipeError = (error: PlatformError.PlatformError) =>
+  Predicate.hasProperty(error.cause, "code") && error.cause.code === "EPIPE";
+
 const runProcessCore = Effect.fn("processRunner.runProcessCore")(function* (
   spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
   input: ProcessRunInput,
@@ -318,6 +322,8 @@ const runProcessCore = Effect.fn("processRunner.runProcessCore")(function* (
     stdin === undefined
       ? Effect.void
       : Stream.run(Stream.encodeText(Stream.make(stdin)), child.stdin).pipe(
+          // EPIPE means the child closed stdin, often by exiting; its exit code and output describe the run.
+          Effect.catchIf(isClosedPipeError, () => Effect.void),
           Effect.mapError(
             (cause) =>
               new ProcessStdinError({

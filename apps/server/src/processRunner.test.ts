@@ -260,6 +260,55 @@ describe("runProcess", () => {
       expect(result.code).toBe(0);
     }),
   );
+
+  const stdinWriteFailure = (code: string) =>
+    Sink.fail(
+      PlatformError.systemError({
+        _tag: "Unknown",
+        module: "ChildProcess",
+        method: "fromWritable(stdin)",
+        cause: Object.assign(new Error(`write ${code}`), { code }),
+      }),
+    );
+
+  it.effect("returns the exit code and output of a child that closes stdin early", () =>
+    Effect.gen(function* () {
+      const spawner = makeSpawner(() =>
+        Effect.succeed(
+          makeHandle({
+            stderr: "fatal: Unable to create '.git/index.lock': File exists.",
+            code: 128,
+            stdin: stdinWriteFailure("EPIPE"),
+          }),
+        ),
+      );
+
+      const result = yield* runWith(spawner)({
+        command: "git",
+        args: ["add", "--pathspec-from-file=-"],
+        stdin: "a\0".repeat(64 * 1024),
+      });
+
+      expect(result.code).toBe(128);
+      expect(result.stderr).toBe("fatal: Unable to create '.git/index.lock': File exists.");
+    }),
+  );
+
+  it.effect("fails with a stdin error when stdin breaks for another reason", () =>
+    Effect.gen(function* () {
+      const spawner = makeSpawner(() =>
+        Effect.succeed(makeHandle({ stdin: stdinWriteFailure("EIO") })),
+      );
+
+      const error = yield* runWith(spawner)({
+        command: "fake",
+        args: [],
+        stdin: "payload",
+      }).pipe(Effect.flip);
+
+      expect(error._tag).toBe("ProcessStdinError");
+    }),
+  );
 });
 
 describe("isWindowsCommandNotFound", () => {
