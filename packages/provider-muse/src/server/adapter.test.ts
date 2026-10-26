@@ -1651,6 +1651,43 @@ describe("MuseAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
+  it.effect("shows Muse's model request retries in one notice that tracks the latest failure", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakeMuse();
+      const harness = yield* makeHarness(fake);
+      const { nativeId } = yield* startConversation(harness, fake);
+      const modelRetry = (attempt: number, httpStatus: number) =>
+        fake.emit("turn/modelRetryScheduled", {
+          turnId: nativeId,
+          attempt,
+          nextAttempt: attempt + 1,
+          maxAttempts: 10,
+          errorKind: "server",
+          httpStatus,
+          retryDelayMs: 1000,
+          system: "meta",
+        });
+      yield* modelRetry(1, 504);
+      yield* modelRetry(2, 503);
+      yield* fake.emit("turn/completed", { turnId: nativeId, terminal: "completed" });
+      yield* harness.takeEvent("turn.terminal");
+
+      const notices = harness.allEvents.flatMap((event) =>
+        event.type === "turn_item.updated" && event.turnItem.type === "system_notice"
+          ? [event.turnItem]
+          : [],
+      );
+      assert.deepStrictEqual(
+        notices.map((notice) => notice.message),
+        [
+          "Muse's model request failed (HTTP 504); retrying, attempt 2 of 10",
+          "Muse's model request failed (HTTP 503); retrying, attempt 3 of 10",
+        ],
+      );
+      assert.strictEqual(new Set(notices.map((notice) => notice.id)).size, 1);
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
   it.effect("opens a prompt-and-result child thread for a native subagent", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakeMuse();

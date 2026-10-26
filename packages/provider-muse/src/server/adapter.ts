@@ -48,6 +48,7 @@ import {
   MuseContextUsage,
   MuseDelta,
   MuseItemEvent,
+  MuseModelRetryScheduled,
   MuseSessionResult,
   MuseSubscriptionUsage,
   MuseTokenUsageEvent,
@@ -252,6 +253,7 @@ const INFORMATIONAL_NOTIFICATIONS = new Set([
   "session/contextUsage",
   "session/tokenUsage",
   "session/todoListChanged",
+  "turn/modelRetryScheduled",
   "turn/retryScheduled",
   "usage/changed",
 ]);
@@ -1617,6 +1619,28 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
                 title: "Muse retry",
                 completedAt: time,
                 message: `Muse is retrying this turn (attempt ${retry.nextAttempt} of ${retry.maxAttempts}): ${retry.reason}`,
+              },
+            });
+            break;
+          }
+          case "turn/modelRetryScheduled": {
+            // Attempts restart for each model request, so one row per turn shows the latest failure.
+            const retry = yield* decode(MuseModelRetryScheduled, params);
+            const failure =
+              retry.httpStatus === undefined
+                ? (retry.errorKind ?? "error")
+                : `HTTP ${retry.httpStatus}`;
+            const time = yield* DateTime.now;
+            yield* emit({
+              type: "turn_item.updated",
+              driver: MUSE_PROVIDER,
+              turnItem: {
+                ...baseItem(turn, "model-retry", time),
+                type: "system_notice",
+                status: "completed",
+                title: "Muse retry",
+                completedAt: time,
+                message: `Muse's model request failed (${failure}); retrying, attempt ${retry.nextAttempt} of ${retry.maxAttempts}`,
               },
             });
             break;

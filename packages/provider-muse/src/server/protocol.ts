@@ -188,6 +188,13 @@ export const MuseTurnRetryScheduled = Schema.Struct({
   reason: NonEmptyString,
   retryDelayMs: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
 });
+export const MuseModelRetryScheduled = Schema.Struct({
+  turnId: NonEmptyString,
+  nextAttempt: Schema.Int.check(Schema.isGreaterThan(0)),
+  maxAttempts: Schema.Int.check(Schema.isGreaterThan(0)),
+  errorKind: Schema.optional(Schema.String),
+  httpStatus: Schema.optional(Schema.Int),
+});
 export const MuseCompactResult = Schema.Struct({
   status: Schema.String,
   reason: Schema.optional(Schema.String),
