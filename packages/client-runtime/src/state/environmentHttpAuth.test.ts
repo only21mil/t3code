@@ -28,6 +28,7 @@ import {
 import * as ManagedRelay from "../relay/managedRelay.ts";
 import { type RemoteEnvironmentRequestError } from "../rpc/http.ts";
 import * as RpcHttp from "../rpc/http.ts";
+import { resolveDeviceHubAccess } from "./deviceHubAccess.ts";
 import * as PullRequestDiffLoader from "./pullRequestDiffHttp.ts";
 import { fetchEnvironmentSessionState } from "./session.ts";
 import { fetchEnvironmentShellSnapshot } from "./shellSnapshotHttp.ts";
@@ -601,6 +602,78 @@ describe("authenticated environment HTTP requests", () => {
         message: "No relay authorization service is available for the environment request.",
       });
       expect(harness.calls).toEqual([]);
+    }),
+  );
+});
+
+describe("media WebSocket tickets", () => {
+  const TICKET = { ticket: "media-ticket", expiresAt: "2026-01-01T00:00:00.000Z" };
+  const routeMissing = (url: string) =>
+    new URL(url).pathname === "/api/auth/websocket-ticket/media"
+      ? Response.json({ error: "not_found" }, { status: 404 })
+      : Response.json(TICKET);
+  const resolveMediaAccess = (
+    harness: ReturnType<typeof makeHarness>,
+    authorization: PreparedHttpAuthorization,
+  ) =>
+    resolveDeviceHubAccess({
+      prepared: { ...PREPARED, httpAuthorization: authorization },
+      hubBasePath: "/api/device-hub",
+    }).pipe(
+      Effect.provide(harness.httpLayer),
+      Effect.provideService(
+        RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization,
+        harness.remoteAuthorization,
+      ),
+      Effect.provideService(
+        ManagedRelay.ManagedRelayDpopSigner,
+        Option.getOrThrow(harness.input.signer),
+      ),
+    );
+
+  it.effect.each([
+    { name: "bearer", authorization: { _tag: "Bearer", token: "bearer-token" } },
+    { name: "DPoP", authorization: PREPARED.httpAuthorization! },
+  ] satisfies ReadonlyArray<{ name: string; authorization: PreparedHttpAuthorization }>)(
+    "uses the bare ticket route on an older $name host without the media route",
+    ({ authorization }) =>
+      Effect.gen(function* () {
+        const harness = makeHarness((requestNumber) =>
+          routeMissing(harness.calls[requestNumber - 1]!.url),
+        );
+        const access = yield* resolveMediaAccess(harness, authorization);
+
+        expect(access.query).toEqual({ wsTicket: "media-ticket" });
+        expect(harness.calls.map((call) => new URL(call.url).pathname)).toEqual([
+          "/api/auth/websocket-ticket/media",
+          "/api/auth/websocket-ticket",
+        ]);
+        if (authorization._tag === "Dpop") {
+          expect(harness.proofs.map((proof) => proof.url)).toEqual(
+            harness.calls.map((call) => call.url),
+          );
+          expect(harness.calls.map((call) => new Headers(call.init.headers).get("dpop"))).toEqual([
+            "proof-1",
+            "proof-2",
+          ]);
+        }
+      }),
+  );
+
+  it.effect.each([
+    { name: "a server error", reply: () => new Response("bad gateway", { status: 502 }) },
+    {
+      name: "a rejected credential",
+      reply: () => credentialRejectedResponse("missing_credential"),
+    },
+  ])("does not use the bare ticket route after $name", ({ reply }) =>
+    Effect.gen(function* () {
+      const harness = makeHarness(reply);
+      yield* resolveMediaAccess(harness, PREPARED.httpAuthorization!).pipe(Effect.flip);
+
+      expect(harness.calls.map((call) => new URL(call.url).pathname)).toEqual([
+        "/api/auth/websocket-ticket/media",
+      ]);
     }),
   );
 });
