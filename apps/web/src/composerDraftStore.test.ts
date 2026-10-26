@@ -2017,6 +2017,91 @@ describe("createDeferredStorage", () => {
   });
 });
 
+function createQuotaLocalStorage(maxChars: number): Storage {
+  const store = new Map<string, string>();
+  return {
+    getItem: (key) => store.get(key) ?? null,
+    setItem: (key, value) => {
+      const otherChars = [...store].reduce(
+        (total, [otherKey, otherValue]) => (otherKey === key ? total : total + otherValue.length),
+        0,
+      );
+      if (otherChars + value.length > maxChars) {
+        throw new DOMException("Setting the value exceeded the quota.", "QuotaExceededError");
+      }
+      store.set(key, value);
+    },
+    removeItem: (key) => {
+      store.delete(key);
+    },
+    clear: () => {
+      store.clear();
+    },
+    key: (index) => [...store.keys()][index] ?? null,
+    get length() {
+      return store.size;
+    },
+  };
+}
+
+describe("composerDraftStore storage quota", () => {
+  afterEach(() => {
+    vi.resetModules();
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps a later prompt by dropping the largest saved image when localStorage is full", async () => {
+    const unloadListeners: Array<() => void> = [];
+    const localStorage = createQuotaLocalStorage(3_600);
+    vi.stubGlobal("localStorage", localStorage);
+    vi.stubGlobal("window", {
+      localStorage,
+      addEventListener: (type: string, listener: () => void) => {
+        if (type === "beforeunload") unloadListeners.push(listener);
+      },
+    });
+    const load = async () => {
+      vi.resetModules();
+      return (await import("./composerDraftStore")).useComposerDraftStore;
+    };
+    let store = await load();
+    const saveImage = async (threadId: string, dataChars: number) => {
+      const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, ThreadId.make(threadId));
+      const image = makeImage({ id: threadId, previewUrl: `blob:${threadId}` });
+      store.getState().addImage(threadRef, image);
+      await store.getState().syncPersistedAttachments(threadRef, [
+        {
+          id: image.id,
+          name: image.name,
+          mimeType: image.mimeType,
+          sizeBytes: image.sizeBytes,
+          dataUrl: `data:image/png;base64,${"A".repeat(dataChars)}`,
+        },
+      ]);
+      return scopedThreadKey(threadRef);
+    };
+    const largeImageKey = await saveImage("quota-large-image", 2_000);
+    const smallImageKey = await saveImage("quota-small-image", 100);
+    expect(store.getState().draftsByThreadKey[largeImageKey]?.nonPersistedImageIds).toEqual([]);
+    expect(store.getState().draftsByThreadKey[smallImageKey]?.nonPersistedImageIds).toEqual([]);
+
+    const textThread = scopeThreadRef(TEST_ENVIRONMENT_ID, ThreadId.make("quota-text"));
+    const prompt = "Keep this prompt. ".repeat(50);
+    store.getState().setPrompt(textThread, prompt);
+    for (const listener of unloadListeners.splice(0)) listener();
+    expect(store.getState().draftsByThreadKey[largeImageKey]).toMatchObject({
+      persistedAttachments: [],
+      nonPersistedImageIds: ["quota-large-image"],
+    });
+
+    store = await load();
+    const drafts = store.getState().draftsByThreadKey;
+    expect(drafts[scopedThreadKey(textThread)]?.prompt).toBe(prompt);
+    expect(drafts[smallImageKey]?.images.map((image) => image.id)).toEqual(["quota-small-image"]);
+    expect(drafts[largeImageKey]).toBeUndefined();
+  });
+});
+
 describe("composerDraftStore inline context references", () => {
   const threadId = ThreadId.make("thread-inline-context");
   const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);

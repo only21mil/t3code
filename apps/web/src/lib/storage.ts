@@ -46,11 +46,24 @@ export function createDeferredStorage<TValue>(
   baseStorage: Partial<StateStorage> | null | undefined,
   serialize: (value: TValue) => string,
   debounceMs: number = 300,
+  // Called after each failed write, such as on a full quota. Returns a smaller value to
+  // retry, or undefined to give up; it must eventually return undefined.
+  recoverFailedWrite?: (value: TValue) => TValue | undefined,
 ): DeferredStorage<TValue> {
   const resolvedStorage = resolveStorage(baseStorage);
   const debouncedSetItem = new Debouncer(
     (name: string, value: TValue) => {
-      resolvedStorage.setItem(name, serialize(value));
+      let next = value;
+      for (;;) {
+        try {
+          resolvedStorage.setItem(name, serialize(next));
+          return;
+        } catch (error) {
+          const fallback = recoverFailedWrite?.(next);
+          if (fallback === undefined) throw error;
+          next = fallback;
+        }
+      }
     },
     { wait: debounceMs },
   );

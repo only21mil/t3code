@@ -126,6 +126,15 @@ const composerDebouncedStorage = createDeferredStorage<StorageValue<ComposerPers
       version: value.version,
     }),
   COMPOSER_PERSIST_DEBOUNCE_MS,
+  (value) => {
+    if (!("capturedState" in value.state)) return undefined;
+    const draftsByThreadKey = withoutLargestPersistedImage(
+      composerDraftStore.getState().draftsByThreadKey,
+    );
+    if (draftsByThreadKey === undefined) return undefined;
+    composerDraftStore.setState({ draftsByThreadKey });
+    return { ...value, state: { capturedState: composerDraftStore.getState() } };
+  },
 );
 
 const composerPersistStorage: PersistStorage<ComposerPersistState> = {
@@ -2189,6 +2198,41 @@ function readPersistedAttachmentIdsFromStorage(threadKey: string): string[] {
   } catch {
     return [];
   }
+}
+
+// Image data URLs are the bulk of the drafts key. When storage is full, dropping the largest
+// one lets prompts still save; that image gets the existing could-not-be-saved warning.
+function withoutLargestPersistedImage(
+  draftsByThreadKey: Record<string, ComposerThreadDraftState>,
+): Record<string, ComposerThreadDraftState> | undefined {
+  let largest: { threadKey: string; draft: ComposerThreadDraftState; id: string } | undefined;
+  let largestSize = -1;
+  for (const [threadKey, draft] of Object.entries(draftsByThreadKey)) {
+    for (const attachment of draft.persistedAttachments) {
+      if (attachment.dataUrl.length > largestSize) {
+        largest = { threadKey, draft, id: attachment.id };
+        largestSize = attachment.dataUrl.length;
+      }
+    }
+  }
+  if (largest === undefined) {
+    return undefined;
+  }
+  const { threadKey, draft, id } = largest;
+  const nextDraft: ComposerThreadDraftState = {
+    ...draft,
+    persistedAttachments: draft.persistedAttachments.filter((attachment) => attachment.id !== id),
+    nonPersistedImageIds: draft.images.some((image) => image.id === id)
+      ? [...draft.nonPersistedImageIds.filter((imageId) => imageId !== id), id]
+      : draft.nonPersistedImageIds,
+  };
+  const nextDraftsByThreadKey = { ...draftsByThreadKey };
+  if (shouldRemoveDraft(nextDraft)) {
+    delete nextDraftsByThreadKey[threadKey];
+  } else {
+    nextDraftsByThreadKey[threadKey] = nextDraft;
+  }
+  return nextDraftsByThreadKey;
 }
 
 function verifyPersistedAttachments(
