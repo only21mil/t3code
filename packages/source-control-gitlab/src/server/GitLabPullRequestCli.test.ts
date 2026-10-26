@@ -64,6 +64,19 @@ function notes(count: number, firstId: number): string {
   );
 }
 
+function commitPage(firstNumber: number, count = 100): string {
+  return JSON.stringify(
+    Array.from({ length: count }, (_, index) => {
+      const number = firstNumber + index;
+      return {
+        id: `commit-${number}`,
+        title: `Commit ${number}`,
+        created_at: "2026-07-01T00:00:00Z",
+      };
+    }),
+  );
+}
+
 const author = { id: 1, username: "bilal" };
 const reviewer = { id: 5, username: "octocat" };
 
@@ -741,6 +754,69 @@ layer("GitLabPullRequestCli.layer", (it) => {
       const error = yield* Effect.flip(cli.getViewerUsername({ cwd: "/w" }));
 
       assert.strictEqual(error._tag, "GitLabViewerUnavailableError");
+    }),
+  );
+
+  it.effect("walks commit pages in source order without a truncation cap", () =>
+    Effect.gen(function* () {
+      mockedExecute
+        .mockReturnValueOnce(Effect.succeed(output(commitPage(102))))
+        .mockReturnValueOnce(Effect.succeed(output(commitPage(2))))
+        .mockReturnValueOnce(Effect.succeed(output(commitPage(1, 1))));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      const commits = yield* cli.listCommits({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+      });
+
+      expect(commits.map((commit) => commit.oid)).toEqual(
+        Array.from({ length: 201 }, (_, index) => `commit-${index + 1}`),
+      );
+      assert.strictEqual(mockedExecute.mock.calls.length, 3);
+      for (const index of [0, 1, 2]) {
+        expect(argsOfCall(index)[1]).toBe(
+          `projects/acme%2Fweb/merge_requests/7/commits?per_page=100&with_stats=true&page=${index + 1}`,
+        );
+      }
+    }),
+  );
+
+  it.effect.each([{ count: 0 }, { count: 2 }])(
+    "stops commit pagination after a $count-commit first page",
+    ({ count }) =>
+      Effect.gen(function* () {
+        mockedExecute.mockReturnValueOnce(Effect.succeed(output(commitPage(1, count))));
+        const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+        const commits = yield* cli.listCommits({
+          cwd: "/w",
+          repository: "acme/web",
+          number: 7,
+        });
+
+        assert.strictEqual(commits.length, count);
+        assert.strictEqual(mockedExecute.mock.calls.length, 1);
+        expect(argsOfCall(0)[1]).toContain("per_page=100");
+        expect(argsOfCall(0)[1]).toContain("page=1");
+      }),
+  );
+
+  it.effect("fails the commit walk when a later page cannot be decoded", () =>
+    Effect.gen(function* () {
+      mockedExecute
+        .mockReturnValueOnce(Effect.succeed(output(commitPage(2))))
+        .mockReturnValueOnce(Effect.succeed(output("not json")));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      const error = yield* Effect.flip(
+        cli.listCommits({ cwd: "/w", repository: "acme/web", number: 7 }),
+      );
+
+      assert.strictEqual(error._tag, "GitLabMergeRequestReadError");
+      assert.strictEqual(error.operation, "listCommits");
+      assert.strictEqual(mockedExecute.mock.calls.length, 2);
     }),
   );
 
