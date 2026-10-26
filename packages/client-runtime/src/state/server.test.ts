@@ -23,6 +23,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as TestClock from "effect/testing/TestClock";
+import { AtomRegistry } from "effect/reactivity";
 import { RpcClientError } from "effect/rpc";
 import * as Socket from "effect/socket/Socket";
 
@@ -49,6 +50,7 @@ import {
   resolveServerWelcomeState,
   resolveServerUpdateProgressResult,
   serverUpdateStateForProgressEvent,
+  serverUpdateStateAtom,
   serverUpdateStateForServerVersion,
   validateServerUpdateReadyEvent,
   waitForNextEnvironmentReconnect,
@@ -576,6 +578,39 @@ describe("server state projection", () => {
     expect(serverUpdateStateForServerVersion(failed, "0.0.30")).toBe(failed);
     expect(serverUpdateStateForServerVersion(failed, null)).toBe(failed);
     expect(serverUpdateStateForServerVersion(failed, "0.0.31")).toEqual({ status: "idle" });
+  });
+
+  it("keeps update state for each environment after its screen unmounts", () => {
+    // The registry removes idle nodes in a scheduled task; the test runs those tasks itself.
+    const tasks: Array<() => void> = [];
+    const registry = AtomRegistry.make({
+      scheduleTask: (task) => {
+        tasks.push(task);
+        return () => {};
+      },
+    });
+    const settle = () => {
+      for (const task of tasks.splice(0)) task();
+    };
+    const updating = serverUpdateStateAtom(EnvironmentId.make("environment-updating"));
+    const failing = serverUpdateStateAtom(EnvironmentId.make("environment-failing"));
+    const running = {
+      status: "running" as const,
+      stage: "resuming" as const,
+      fromVersion: "0.0.30",
+      targetVersion: "0.0.31",
+    };
+    const failed = { ...running, status: "failed" as const, message: "Install failed." };
+
+    const unmount = registry.subscribe(updating, () => {});
+    registry.set(updating, running);
+    unmount();
+    settle();
+    registry.set(failing, failed);
+    settle();
+
+    expect(registry.get(updating)).toEqual(running);
+    expect(registry.get(failing)).toEqual(failed);
   });
 
   it.effect("correlates launcher outcomes and fails immediately after rollback", () =>

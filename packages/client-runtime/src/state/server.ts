@@ -91,6 +91,7 @@ const EMPTY_SERVER_UPDATE_STATE_ATOM = Atom.make<ServerUpdateState>(IDLE_SERVER_
 );
 export const serverUpdateStateAtom = Atom.family((environmentId: EnvironmentId) =>
   Atom.make<ServerUpdateState>(IDLE_SERVER_UPDATE_STATE).pipe(
+    Atom.keepAlive,
     Atom.withLabel(`environment-data:server:update-state:${environmentId}`),
   ),
 );
