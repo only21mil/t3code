@@ -162,8 +162,12 @@ export class StopNoticeDeliveryService extends Context.Reference<StopNoticeDeliv
   },
 ) {}
 
-/** Three notifier attempts with transport retries fit well inside this. */
-const NOTIFIER_TIMEOUT = Duration.seconds(120);
+/**
+ * Under the outbox's 30 second lease, so a slow notifier never lets a second
+ * worker claim the same row. The notifier records the stop before any
+ * transport, so a timed-out attempt is retried under the same key.
+ */
+const NOTIFIER_TIMEOUT = Duration.seconds(25);
 
 const make = Effect.gen(function* () {
   const config = yield* StopNoticeConfig;
