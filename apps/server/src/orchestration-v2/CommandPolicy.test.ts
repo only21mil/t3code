@@ -134,6 +134,40 @@ it.each(["preparing", "starting"] as const)(
 );
 
 it.each([
+  ["active steering", baseCapabilities],
+  [
+    "interrupt-restart steering",
+    capabilities((current) => ({
+      ...current,
+      turns: {
+        ...current.turns,
+        supportsActiveSteering: false,
+        supportsQueuedMessages: false,
+        supportsSteeringByInterruptRestart: true,
+      },
+    })),
+  ],
+])("queues only automatic delivery to a waiting run with %s", (_, sessionCapabilities) => {
+  const projection = dispatchProjection(sessionCapabilities);
+  const waiting = {
+    ...projection,
+    runs: projection.runs.map((run) => ({ ...run, status: "waiting" })),
+  } as unknown as OrchestrationV2ThreadProjection;
+  assert.deepEqual(
+    CommandPolicy.resolveMessageDispatchIntent(waiting, { type: "start_immediately" }, "auto"),
+    { type: "queue_after_active" },
+  );
+  assert.deepEqual(
+    CommandPolicy.resolveMessageDispatchIntent(waiting, { type: "start_immediately" }, "steer"),
+    { type: "steer_active", targetRunId: activeRunId },
+  );
+  assert.deepEqual(
+    CommandPolicy.resolveMessageDispatchIntent(waiting, { type: "start_immediately" }, "restart"),
+    { type: "restart_active", targetRunId: activeRunId },
+  );
+});
+
+it.each([
   ["has not started", []],
   ["is pending", [{ runAttemptId: activeAttemptId, status: "pending" }]],
   ["has completed", [{ runAttemptId: activeAttemptId, status: "completed" }]],

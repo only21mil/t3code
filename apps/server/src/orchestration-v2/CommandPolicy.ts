@@ -167,8 +167,7 @@ function resolveDeliveryIntent(
   // A run can be active before its provider turn starts or after it finishes.
   // Queue automatic input in those gaps so steering cannot reject the message.
   if (
-    activeRun.status === "preparing" ||
-    activeRun.status === "starting" ||
+    activeRun.status !== "running" ||
     !projection.providerTurns.some(
       (turn) => turn.runAttemptId === activeRun.activeAttemptId && turn.status === "running",
     )
