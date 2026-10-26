@@ -690,6 +690,21 @@ export const layer: Layer.Layer<
         });
         return undefined;
       });
+      const readTurnStartHistory = Effect.fn("ProviderTurnStartService.readTurnStartHistory")(
+        function* (runIds?: ReadonlyArray<RunId>) {
+          const history = yield* Effect.result(
+            projectionStore.getTurnStartHistory(input.threadId, runIds),
+          );
+          if (history._tag === "Success") return history.success;
+          if (input.willRetry === true) return yield* history.failure;
+          yield* settleStartFailure({
+            signal: "turn-start-history-read-failure",
+            title: "Thread history failed to load",
+            error: history.failure,
+          });
+          return undefined;
+        },
+      );
       let effectiveHandoffs = handoffs;
       let resumeFellBack = false;
       const loadedProviderThread = yield* Effect.gen(function* () {
@@ -791,6 +806,8 @@ export const layer: Layer.Layer<
           }),
         );
         if (replacement === undefined) return undefined;
+        const history = yield* readTurnStartHistory();
+        if (history === undefined) return undefined;
         const transferId = yield* idAllocator.allocate.contextTransfer({
           sourceThreadId: projection.thread.id,
           targetThreadId: projection.thread.id,
@@ -808,7 +825,7 @@ export const layer: Layer.Layer<
           coveredRunOrdinals: { from: 1, to: Math.max(1, run.ordinal - 1) },
           strategy: "full_thread_summary",
           runs: projection.runs,
-          items: (yield* projectionStore.getTurnStartHistory(input.threadId)).filter(
+          items: history.filter(
             (item) =>
               item.runId === null ||
               projection.runs.some(
@@ -868,6 +885,23 @@ export const layer: Layer.Layer<
         return replacement;
       });
       if (loadedProviderThread === undefined) return;
+      const deliveredAttemptIds = new Set(
+        projection.providerTurns.map((turn) => turn.runAttemptId),
+      );
+      // The resume fallback summary already covers every earlier run in order. A
+      // retry copy after it would rank older missed requests as the newest history.
+      const missedRuns = projection.runs.filter(
+        (source) =>
+          !resumeFellBack &&
+          source.ordinal < run.ordinal &&
+          source.providerThreadId === providerThread.id &&
+          (source.status === "failed" || source.status === "interrupted") &&
+          !deliveredAttemptIds.has(source.activeAttemptId),
+      );
+      const missedRunIds = new Set(missedRuns.map((source) => source.id));
+      const missedHistory =
+        missedRunIds.size === 0 ? [] : yield* readTurnStartHistory([...missedRunIds]);
+      if (missedHistory === undefined) return;
       if (!(yield* isCurrentAttemptInStatus("starting"))) {
         return;
       }
@@ -1078,9 +1112,6 @@ export const layer: Layer.Layer<
         ...deliveredItemIds,
         ...settledHandoffs.flatMap((handoff) => handoff.delivery?.omittedItemIds ?? []),
       ]);
-      const deliveredAttemptIds = new Set(
-        projection.providerTurns.map((turn) => turn.runAttemptId),
-      );
       const acceptedAttempts = projection.attempts.filter(
         (source) =>
           source.providerThreadId === providerThread.id && deliveredAttemptIds.has(source.id),
@@ -1152,27 +1183,13 @@ export const layer: Layer.Layer<
         ...runningProviderThread,
         contextUsage: handoffUsage,
       };
-      // The resume fallback summary already covers every earlier run in order. A
-      // retry copy after it would rank older missed requests as the newest history.
-      const missedRuns = projection.runs.filter(
-        (source) =>
-          !resumeFellBack &&
-          source.ordinal < run.ordinal &&
-          source.providerThreadId === providerThread.id &&
-          (source.status === "failed" || source.status === "interrupted") &&
-          !deliveredAttemptIds.has(source.activeAttemptId),
+      const missedItems = missedHistory.filter(
+        (item) =>
+          item.runId !== null &&
+          missedRunIds.has(item.runId) &&
+          !coveredItemIds.has(item.id) &&
+          historicalMessage(item) !== null,
       );
-      const missedRunIds = new Set(missedRuns.map((source) => source.id));
-      const missedItems =
-        missedRunIds.size === 0
-          ? []
-          : (yield* projectionStore.getTurnStartHistory(input.threadId, [...missedRunIds])).filter(
-              (item) =>
-                item.runId !== null &&
-                missedRunIds.has(item.runId) &&
-                !coveredItemIds.has(item.id) &&
-                historicalMessage(item) !== null,
-            );
       const startWithHandoffs = Effect.fn("ProviderTurnStartService.startWithHandoffs")(
         function* (turnInput: Parameters<typeof session.startTurn>[0], compact = false) {
           const retryHandoff =
