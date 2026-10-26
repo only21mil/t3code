@@ -630,62 +630,76 @@ it.effect.each(["confirmed", "unconfirmed", "failed"] as const)(
     }),
 );
 
-it.effect.each(["mailbox read", "mailbox acceptance", "provider steer"] as const)(
-  "a delegated result reaches the provider once when its %s fails",
-  (failingStep) =>
+it.effect.each([
+  ["mailbox read", 1],
+  ["mailbox acceptance", 1],
+  ["provider steer", 1],
+  ["mailbox acceptance", 5],
+] as const)(
+  "a delegated result reaches the provider once when its %s fails %i time(s)",
+  ([failingStep, failureCount]) =>
     Effect.gen(function* () {
       const timestamp = DateTime.formatIso(yield* DateTime.now);
       const workerId = "worker-steer-bookkeeping";
       const messageId = MessageId.make("message:effect-worker-steer");
       const pending = yield* Ref.make(true);
       const attempts = yield* Ref.make(0);
-      const failed = yield* Ref.make(false);
+      const failuresLeft = yield* Ref.make<number>(failureCount);
       const delivered = yield* Ref.make(0);
       const accepted = yield* Ref.make(0);
-      const failOnce = (step: typeof failingStep) =>
+      const terminallyFailed = yield* Ref.make(false);
+      const request = yield* Ref.make<EffectOutbox.OrchestrationEffectRequestV2>({
+        type: "provider-turn.steer",
+        providerSessionId: oldSessionId,
+        providerThreadId,
+        providerTurnId,
+        messageId,
+      });
+      const fails = (step: typeof failingStep) =>
         step === failingStep
-          ? Ref.getAndSet(failed, true).pipe(Effect.map((done) => !done))
+          ? Ref.modify(failuresLeft, (left) => [left > 0, Math.max(0, left - 1)] as const)
           : Effect.succeed(false);
-      const steerEffect = (attemptCount: number): EffectOutbox.OrchestrationEffectV2 => ({
-        id: "effect:steer-bookkeeping",
-        commandId: CommandId.make("command:steer-bookkeeping"),
-        threadId,
-        request: {
-          type: "provider-turn.steer",
-          providerSessionId: oldSessionId,
-          providerThreadId,
-          providerTurnId,
-          messageId,
-        },
-        status: "running",
-        attemptCount,
-        availableAt: timestamp,
-        leaseOwner: workerId,
-        leaseExpiresAt: timestamp,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-        completedAt: null,
-        lastError: null,
+      const steerEffect = Effect.gen(function* () {
+        return {
+          id: "effect:steer-bookkeeping",
+          commandId: CommandId.make("command:steer-bookkeeping"),
+          threadId,
+          request: yield* Ref.get(request),
+          status: "running",
+          attemptCount: yield* Ref.get(attempts),
+          availableAt: timestamp,
+          leaseOwner: workerId,
+          leaseExpiresAt: timestamp,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          completedAt: null,
+          lastError: null,
+        } satisfies EffectOutbox.OrchestrationEffectV2;
       });
       const layerOutbox = Layer.mock(EffectOutbox.EffectOutboxV2)({
         claimNext: () =>
           Effect.gen(function* () {
             if (!(yield* Ref.getAndSet(pending, false))) return Option.none();
-            return Option.some(
-              steerEffect(yield* Ref.updateAndGet(attempts, (count) => count + 1)),
-            );
+            yield* Ref.update(attempts, (count) => count + 1);
+            return Option.some(yield* steerEffect);
           }),
-        get: () => Ref.get(attempts).pipe(Effect.map((count) => Option.some(steerEffect(count)))),
+        get: () => steerEffect.pipe(Effect.asSome),
         awaitCancellation: () => Effect.never,
         clearCancellation: () => Effect.void,
         succeed: () => Effect.succeed(true),
-        retry: () => Ref.set(pending, true).pipe(Effect.as(true)),
+        retry: (input) =>
+          Effect.gen(function* () {
+            if (input.request !== undefined) yield* Ref.set(request, input.request);
+            yield* Ref.set(pending, true);
+            return true;
+          }),
+        fail: () => Ref.set(terminallyFailed, true).pipe(Effect.as(true)),
       });
       const layerExecutor = layerExecutorFor({
         events: yield* Ref.make<ReadonlyArray<string>>([]),
         steer: () =>
           Effect.gen(function* () {
-            if (yield* failOnce("provider steer")) {
+            if (yield* fails("provider steer")) {
               return yield* new ProviderTurnControlService.ProviderTurnControlError({
                 threadId,
                 operation: "steer",
@@ -698,7 +712,7 @@ it.effect.each(["mailbox read", "mailbox acceptance", "provider steer"] as const
         threads: {
           getThreadRecords: () =>
             Effect.gen(function* () {
-              if (yield* failOnce("mailbox read")) {
+              if (yield* fails("mailbox read")) {
                 return yield* new OrchestratorProjectionError({ threadId });
               }
               return {
@@ -713,7 +727,7 @@ it.effect.each(["mailbox read", "mailbox acceptance", "provider steer"] as const
           dispatch: (command) =>
             Effect.gen(function* () {
               assert.equal(command.type, "notification.delivery.accept");
-              if (yield* failOnce("mailbox acceptance")) {
+              if (yield* fails("mailbox acceptance")) {
                 return yield* new OrchestratorDispatchError({
                   commandId: command.commandId,
                   commandType: command.type,
@@ -725,7 +739,7 @@ it.effect.each(["mailbox read", "mailbox acceptance", "provider steer"] as const
             }),
         },
       });
-      const layerWorker = EffectWorker.layerWithOptions({ workerId }).pipe(
+      const layerWorker = EffectWorker.layerWithOptions({ workerId, maxAttempts: 5 }).pipe(
         Layer.provide(Layer.merge(layerOutbox, layerExecutor)),
       );
 
@@ -735,8 +749,9 @@ it.effect.each(["mailbox read", "mailbox acceptance", "provider steer"] as const
       );
 
       assert.equal(yield* Ref.get(delivered), 1);
-      assert.equal(yield* Ref.get(attempts), failingStep === "mailbox acceptance" ? 1 : 2);
-      // An unaccepted delegated result stays reserved for durable mailbox recovery.
-      assert.equal(yield* Ref.get(accepted), failingStep === "mailbox acceptance" ? 0 : 1);
+      const exhausted = failureCount >= 5;
+      assert.equal(yield* Ref.get(attempts), exhausted ? 5 : 2);
+      assert.equal(yield* Ref.get(accepted), exhausted ? 0 : 1);
+      assert.equal(yield* Ref.get(terminallyFailed), exhausted);
     }),
 );

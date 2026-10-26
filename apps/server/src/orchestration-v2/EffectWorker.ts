@@ -35,8 +35,11 @@ export class OrchestrationEffectExecutionError extends Schema.TaggedError<Orches
     effectId: Schema.String,
     effectType: Schema.String,
     cause: Schema.optional(Schema.Defect()),
+    retryRequest: Schema.optional(EffectOutbox.OrchestrationEffectRequestV2),
   },
 ) {}
+
+const isOrchestrationEffectExecutionError = Schema.is(OrchestrationEffectExecutionError);
 
 /**
  * Do not apply this to `provider-turn.restart`: that compound effect also runs
@@ -224,13 +227,15 @@ export const layerExecutor: Layer.Layer<
                 Effect.flatMap((projection) =>
                   Effect.gen(function* () {
                     const message = projection.messages.find((row) => row.id === request.messageId);
-                    yield* providerTurnControl.steer({
-                      threadId: effect.threadId,
-                      providerSessionId: request.providerSessionId,
-                      providerThreadId: request.providerThreadId,
-                      providerTurnId: request.providerTurnId,
-                      messageId: request.messageId,
-                    });
+                    if (request.sentToProvider !== true) {
+                      yield* providerTurnControl.steer({
+                        threadId: effect.threadId,
+                        providerSessionId: request.providerSessionId,
+                        providerThreadId: request.providerThreadId,
+                        providerTurnId: request.providerTurnId,
+                        messageId: request.messageId,
+                      });
+                    }
                     if (message?.delegatedCompletion === undefined) return;
                     yield* threads
                       .dispatch({
@@ -240,17 +245,15 @@ export const layerExecutor: Layer.Layer<
                         messageId: message.id,
                       })
                       .pipe(
-                        // Providers do not deduplicate steers, so retrying this effect would send
-                        // it again. Mailbox recovery re-offers a result that was never accepted.
-                        Effect.catch((cause) =>
-                          Effect.logWarning(
-                            "orchestration-v2.effect-worker.steer-acceptance-failed",
-                            {
+                        // Providers do not deduplicate steers, so a retry only repeats the accept.
+                        Effect.mapError(
+                          (cause) =>
+                            new OrchestrationEffectExecutionError({
                               effectId: effect.id,
-                              messageId: message.id,
+                              effectType: request.type,
                               cause,
-                            },
-                          ),
+                              retryRequest: { ...request, sentToProvider: true },
+                            }),
                         ),
                       );
                   }),
@@ -324,13 +327,14 @@ export const layerExecutor: Layer.Layer<
                       );
                   }),
                 ),
-                Effect.mapError(
-                  (cause) =>
-                    new OrchestrationEffectExecutionError({
-                      effectId: effect.id,
-                      effectType: effect.request.type,
-                      cause,
-                    }),
+                Effect.mapError((cause) =>
+                  isOrchestrationEffectExecutionError(cause)
+                    ? cause
+                    : new OrchestrationEffectExecutionError({
+                        effectId: effect.id,
+                        effectType: effect.request.type,
+                        cause,
+                      }),
                 ),
               );
           }
@@ -781,6 +785,9 @@ export const layerWithOptions = (
           }
 
           const error = Cause.pretty(exit.cause);
+          const retryRequest = Option.getOrUndefined(
+            Cause.findErrorOption(exit.cause),
+          )?.retryRequest;
           const nonRetryable = isNonRetryableProviderTurnControlFailure(effect.request.type, error);
           yield* Effect.logWarning("Orchestration effect execution failed", {
             effectId: effect.id,
@@ -803,6 +810,7 @@ export const layerWithOptions = (
                     workerId,
                     error,
                     delayMs: Math.min(30_000, 100 * 2 ** Math.max(0, effect.attemptCount - 1)),
+                    ...(retryRequest === undefined ? {} : { request: retryRequest }),
                   })
                   .pipe(Effect.onError((cause) => requeueClaim(effect, cause)));
           if (!updated) {

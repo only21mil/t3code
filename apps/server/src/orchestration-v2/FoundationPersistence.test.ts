@@ -21,6 +21,7 @@ import {
   ProviderInstanceId,
   ProviderSessionId,
   ProviderThreadId,
+  ProviderTurnId,
   RunAttemptId,
   RunId,
   ThreadId,
@@ -2408,6 +2409,45 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
       assert.equal(Option.getOrUndefined(unblocked)?.id, "effect:foundation-retry-order:a-start");
       yield* outbox.succeed({ effectId: "effect:foundation-retry-order:a-start", workerId });
       yield* outbox.succeed({ effectId: "effect:foundation-retry-order:b-title", workerId });
+    }).pipe(Effect.provide(Layer.fresh(layerEffectOutboxProvided))),
+  );
+
+  it.effect("keeps a retry's replacement request for every later attempt", () =>
+    Effect.gen(function* () {
+      const outbox = yield* EffectOutbox.EffectOutboxV2;
+      const workerId = "retry-request-worker";
+      const request = {
+        type: "provider-turn.steer",
+        providerSessionId: ProviderSessionId.make("provider-session:foundation-retry-request"),
+        providerThreadId: ProviderThreadId.make("provider-thread:foundation-retry-request"),
+        providerTurnId: ProviderTurnId.make("provider-turn:foundation-retry-request"),
+        messageId: MessageId.make("message:foundation-retry-request"),
+      } as const;
+      yield* outbox.enqueue([
+        {
+          id: "effect:foundation-retry-request",
+          commandId: CommandId.make("command:foundation-retry-request"),
+          threadId: ThreadId.make("thread:foundation-retry-request"),
+          request,
+        },
+      ]);
+      const claimAndRetry = (replacement?: EffectOutbox.OrchestrationEffectRequestV2) =>
+        Effect.gen(function* () {
+          const claimed = yield* outbox.claimNext({ workerId, leaseDurationMs: 30_000 });
+          yield* outbox.retry({
+            effectId: "effect:foundation-retry-request",
+            workerId,
+            error: "accept failed",
+            delayMs: 0,
+            ...(replacement === undefined ? {} : { request: replacement }),
+          });
+          return Option.getOrThrow(claimed).request;
+        });
+
+      assert.deepEqual(yield* claimAndRetry({ ...request, sentToProvider: true }), request);
+      assert.deepEqual(yield* claimAndRetry(), { ...request, sentToProvider: true });
+      const third = yield* outbox.claimNext({ workerId, leaseDurationMs: 30_000 });
+      assert.deepEqual(Option.getOrThrow(third).request, { ...request, sentToProvider: true });
     }).pipe(Effect.provide(Layer.fresh(layerEffectOutboxProvided))),
   );
 

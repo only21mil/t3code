@@ -57,6 +57,8 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
     providerThreadId: ProviderThreadId,
     providerTurnId: ProviderTurnId,
     messageId: MessageId,
+    /** Set on retry once the provider took the steer, so the retry only repeats the mailbox accept. */
+    sentToProvider: Schema.optional(Schema.Boolean),
   }),
   Schema.Struct({
     type: Schema.Literal("provider-turn.restart"),
@@ -237,6 +239,8 @@ export interface EffectOutboxV2Shape {
     readonly workerId: string;
     readonly error: string;
     readonly delayMs: number;
+    /** Replaces the stored request for later attempts. */
+    readonly request?: OrchestrationEffectRequestV2;
   }) => Effect.Effect<boolean, EffectOutboxError>;
   readonly fail: (input: {
     readonly effectId: string;
@@ -615,7 +619,7 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
           ),
       ),
       retry: Effect.fn("EffectOutbox.retry")(
-        function* ({ effectId, workerId, error, delayMs }) {
+        function* ({ effectId, workerId, error, delayMs, request }) {
           const now = yield* DateTime.now;
           const nowIso = DateTime.formatIso(now);
           const availableAt = DateTime.formatIso(
@@ -625,6 +629,7 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
             UPDATE orchestration_v2_effect_outbox
             SET
               status = 'pending',
+              payload_json = COALESCE(${request === undefined ? null : encodeRequest(request)}, payload_json),
               available_at = ${availableAt},
               lease_owner = NULL,
               lease_expires_at = NULL,
