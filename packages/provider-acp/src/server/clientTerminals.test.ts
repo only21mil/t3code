@@ -51,6 +51,33 @@ describe("AcpClientTerminals", () => {
     ),
   );
 
+  it.live("reports the exit while a background child keeps the output pipes open", () =>
+    Effect.gen(function* () {
+      const terminals = yield* makeAcpClientTerminals({ defaultCwd: process.cwd() });
+      yield* Effect.addFinalizer(() => terminals.disposeAll);
+      const terminal = yield* terminals.create({
+        sessionId: "session",
+        command: process.execPath,
+        args: [
+          "-e",
+          "const child = require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'inherit' }); child.unref(); console.log(child.pid);",
+        ],
+      });
+      const request = { sessionId: "session", ...terminal };
+
+      const exit = yield* terminals.waitForExit(request);
+      const output = yield* terminals.output(request);
+      const backgroundPid = Number(output.output.trim());
+      yield* Effect.addFinalizer(() =>
+        Effect.try(() => process.kill(backgroundPid)).pipe(Effect.ignore),
+      );
+
+      expect(exit).toEqual({ exitCode: 0, signal: null });
+      expect(output.exitStatus).toEqual({ exitCode: 0, signal: null });
+      expect(Number.isInteger(backgroundPid)).toBe(true);
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
   it.live("resolves terminal environment from the requesting ACP session", () =>
     Effect.gen(function* () {
       const terminals = yield* makeAcpClientTerminals({

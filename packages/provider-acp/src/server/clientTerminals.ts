@@ -18,6 +18,7 @@ const MAX_RETAINED_TERMINALS = 32;
 const MAX_RETAINED_OUTPUT_BYTES = 16 * 1024 * 1024;
 const DEFAULT_OUTPUT_BYTE_LIMIT = 4 * 1024 * 1024;
 const MAX_OUTPUT_BYTE_LIMIT = 8 * 1024 * 1024;
+const EXIT_OUTPUT_DRAIN = "250 millis";
 
 const terminalRequestError = (message: string, cause?: unknown) =>
   EffectAcpErrors.AcpRequestError.internalError(
@@ -293,17 +294,17 @@ export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(functi
                 onFailure: (error) => ({ exitCode: null, signal: terminalExitSignal(error) }),
                 onSuccess: (code) => ({ exitCode: Number(code), signal: null }),
               }),
-              Effect.flatMap((status) =>
+              // A background descendant can hold the pipes open after the command
+              // exits, so only wait briefly for output written before the exit.
+              Effect.tap(() =>
                 Effect.all([Fiber.join(stdoutPump), Fiber.join(stderrPump)], {
                   discard: true,
-                }).pipe(
-                  Effect.andThen(
-                    Effect.sync(() => {
-                      record.exitStatus = status;
-                    }),
-                  ),
-                  Effect.andThen(Deferred.succeed(record.exit, status)),
-                ),
+                }).pipe(Effect.timeoutOption(EXIT_OUTPUT_DRAIN)),
+              ),
+              Effect.flatMap((status) =>
+                Effect.sync(() => {
+                  record.exitStatus = status;
+                }).pipe(Effect.andThen(Deferred.succeed(record.exit, status))),
               ),
             ),
           );
