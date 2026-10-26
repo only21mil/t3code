@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
+  AuthOrchestrationReadScope,
   AuthSessionId,
   EnvironmentId,
   ProjectId,
@@ -10,6 +11,7 @@ import {
   WS_METHODS,
   WsServerRefreshProvidersRpc,
   WsSubscribeServerConfigRpc,
+  WsRpcGroup,
   type OrchestrationV2StoredEvent,
   type OrchestrationV2ThreadShell,
   type OrchestrationProjectShell,
@@ -20,6 +22,8 @@ import {
 import * as Deferred from "effect/Deferred";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Scope from "effect/Scope";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
@@ -38,6 +42,7 @@ import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as AntigravityInstallation from "./provider/AntigravityInstallation.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
+import * as HostPowerMonitor from "./background/HostPowerMonitor.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as CommandOutputHub from "./orchestration-v2/CommandOutputHub.ts";
 import * as CodexInstallation from "./provider/CodexInstallation.ts";
@@ -45,6 +50,7 @@ import * as DeviceService from "./device/DeviceService.ts";
 import * as DocumentText from "./provider/DocumentText.ts";
 import * as DirectEndpoints from "./environment/DirectEndpoints.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import * as RpcAuthorization from "./auth/RpcAuthorization.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
@@ -405,7 +411,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(AgentSessionScanner.AgentSessionScanner)({}),
   Layer.mock(AnalyticsService.AnalyticsService)({}),
   Layer.mock(AntigravityInstallation.AntigravityInstallation)({ managedDirectory: "/unused" }),
-  Layer.mock(BackgroundPolicy.BackgroundPolicy)({}),
+  Layer.mock(BackgroundPolicy.BackgroundPolicy)({ removeRpcClient: () => Effect.void }),
   Layer.mock(CheckpointDiffQuery.CheckpointDiffQuery)({}),
   Layer.mock(CommandOutputHub.CommandOutputHub)({}),
   Layer.mock(CodexInstallation.CodexInstallation)({ managedDirectory: "/unused" }),
@@ -572,6 +578,7 @@ it.effect(
             {},
             yield* PreviewAutomationBroker.PreviewAutomationBroker,
             yield* ServerBrowser.ServerBrowser,
+            yield* Effect.scope,
           ).pipe(Layer.provide(configRpcServices)),
         ),
       );
@@ -740,6 +747,7 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
           {},
           yield* PreviewAutomationBroker.PreviewAutomationBroker,
           yield* ServerBrowser.ServerBrowser,
+          yield* Effect.scope,
         ).pipe(Layer.provide(configRpcServices)),
       ),
     );
@@ -792,6 +800,113 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
         Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
         Layer.mock(ServerBrowser.ServerBrowser)({}),
       ),
+    ),
+    Effect.scoped,
+  ),
+);
+
+it.effect("closing one socket keeps another socket's activity lease on the same session", () =>
+  Effect.gen(function* () {
+    const policy = yield* BackgroundPolicy.BackgroundPolicy;
+    const services = Layer.mergeAll(
+      layerUnusedConfigRpcServices,
+      Layer.mock(ExternalLauncher.ExternalLauncher)({}),
+      Layer.mock(ProviderRegistry.ProviderRegistry)({}),
+      Layer.mock(UsageLimitSources.UsageLimitSources)({}),
+      Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
+      Layer.mock(DirectEndpoints.DirectEndpoints)({}),
+      Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
+      Layer.mock(ServerEnvironment.ServerEnvironment)({}),
+      Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
+      Layer.succeed(BackgroundPolicy.BackgroundPolicy, policy),
+    );
+    // Like the /ws route, each socket gets its own layer and RPC server. Both tabs
+    // share the browser's stored reporter clientId.
+    const connect = Effect.fn(function* (visible: boolean) {
+      const socketScope = yield* Scope.make();
+      const exits = yield* Queue.unbounded<string>();
+      const server = yield* RpcServer.makeNoSerialization(WsRpcGroup, {
+        ...WS_RPC_SERVER_OPTIONS,
+        onFromServer: (response) =>
+          response._tag === "Exit" ? Queue.offer(exits, response.exit._tag) : Effect.void,
+      }).pipe(
+        Effect.provide(
+          Layer.merge(
+            layerWsRpc(
+              {
+                sessionId: AuthSessionId.make("shared-session"),
+                subject: "browser",
+                method: "browser-session-cookie",
+                scopes: [AuthOrchestrationReadScope],
+              },
+              {},
+              {},
+              yield* PreviewAutomationBroker.PreviewAutomationBroker,
+              yield* ServerBrowser.ServerBrowser,
+              socketScope,
+            ).pipe(Layer.provide(services)),
+            RpcAuthorization.layer([AuthOrchestrationReadScope]),
+          ),
+        ),
+        Scope.provide(socketScope),
+      );
+      yield* server.write(0, {
+        _tag: "Request",
+        id: RpcMessage.RequestId("report"),
+        tag: WS_METHODS.serverReportClientActivity,
+        payload: {
+          clientId: "browser-client",
+          clientKind: "web",
+          visible,
+          focused: visible,
+          recentlyInteracted: visible,
+          scopes: [{ type: "vcs-status", cwd: "/repo" }],
+          observedAt: DateTime.makeUnsafe("2026-10-25T00:00:00.000Z"),
+        },
+        headers: Headers.empty,
+      });
+      assert.equal(yield* Queue.take(exits), "Success");
+      return socketScope;
+    });
+
+    const focusedTab = yield* connect(true);
+    const hiddenTab = yield* connect(false);
+    const visibleLeases = Effect.map(policy.snapshot, (snapshot) =>
+      snapshot.leases.map((lease) => lease.visible),
+    );
+    assert.deepEqual(yield* visibleLeases, [true, false]);
+
+    yield* Scope.close(hiddenTab, Exit.void);
+    assert.deepEqual(yield* visibleLeases, [true]);
+    assert.equal((yield* policy.snapshot).activeForegroundLeaseCount, 1);
+
+    yield* Scope.close(focusedTab, Exit.void);
+    assert.deepEqual(yield* visibleLeases, []);
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        BackgroundPolicy.layer.pipe(
+          Layer.provide(
+            Layer.mock(HostPowerMonitor.HostPowerMonitor)({
+              snapshot: Effect.succeed({
+                source: "unknown",
+                idle: "unknown",
+                idleSeconds: null,
+                locked: "unknown",
+                suspended: false,
+                onBattery: "unknown",
+                lowPowerMode: "unknown",
+                thermalState: "unknown",
+                stale: true,
+                updatedAt: DateTime.makeUnsafe("2026-10-25T00:00:00.000Z"),
+              }),
+              streamChanges: Stream.never,
+            }),
+          ),
+        ),
+        Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
+        Layer.mock(ServerBrowser.ServerBrowser)({}),
+      ).pipe(Layer.provideMerge(Layer.fresh(layerConfigSources))),
     ),
     Effect.scoped,
   ),
