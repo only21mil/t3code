@@ -505,6 +505,81 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
     }),
   );
 
+  it.effect("routes responses while an extension handler waits for the user", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const answer = yield* Deferred.make<{ readonly ok: boolean }>();
+      const transport = yield* AcpProtocol.makeAcpPatchedProtocol({
+        stdio,
+        serverRequestMethods: new Set(),
+        onExtRequest: () => Deferred.await(answer),
+      });
+
+      const request = yield* transport
+        .request("x/test", { hello: "world" })
+        .pipe(Effect.forkScoped);
+      yield* Queue.take(output);
+      yield* Queue.offer(
+        input,
+        yield* encodeJsonl(ExtRequest, {
+          jsonrpc: "2.0",
+          id: 9,
+          method: "x/test",
+          params: { hello: "question" },
+          headers: [],
+        }),
+      );
+      yield* Queue.offer(
+        input,
+        yield* encodeJsonl(ExtResponse, { jsonrpc: "2.0", id: 1, result: { ok: true } }),
+      );
+      assert.deepEqual(yield* Fiber.join(request), { ok: true });
+
+      yield* Deferred.succeed(answer, { ok: false });
+      assert.deepEqual(
+        yield* Schema.decodeEffect(Schema.fromJsonString(ExtResponse))(yield* Queue.take(output)),
+        { jsonrpc: "2.0", id: 9, result: { ok: false } },
+      );
+    }),
+  );
+
+  it.effect("ends the connection while an extension handler waits, then interrupts it", () =>
+    Effect.gen(function* () {
+      const { stdio, input } = yield* makeInMemoryStdio();
+      const protocolScope = yield* Scope.make();
+      const started = yield* Deferred.make<void>();
+      const interrupted = yield* Deferred.make<void>();
+      const terminated = yield* Deferred.make<AcpError.AcpError>();
+      yield* AcpProtocol.makeAcpPatchedProtocol({
+        stdio,
+        serverRequestMethods: new Set(),
+        onExtRequest: () =>
+          Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Effect.never),
+            Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
+          ),
+        onTermination: (error) => Deferred.succeed(terminated, error).pipe(Effect.asVoid),
+      }).pipe(Effect.provideService(Scope.Scope, protocolScope));
+
+      yield* Queue.offer(
+        input,
+        yield* encodeJsonl(ExtRequest, {
+          jsonrpc: "2.0",
+          id: 9,
+          method: "x/test",
+          params: { hello: "question" },
+          headers: [],
+        }),
+      );
+      yield* Deferred.await(started);
+      yield* Queue.end(input);
+      assert.instanceOf(yield* Deferred.await(terminated), AcpError.AcpInputStreamEndedError);
+
+      yield* Scope.close(protocolScope, Exit.void);
+      yield* Deferred.await(interrupted);
+    }),
+  );
+
   it.effect("preserves zero-valued ids for inbound core client requests", () =>
     Effect.gen(function* () {
       const { stdio, input, output } = yield* makeInMemoryStdio();

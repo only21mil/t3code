@@ -3,6 +3,7 @@ import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
+import * as FiberSet from "effect/FiberSet";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
@@ -255,6 +256,7 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
   const terminationHandled = yield* Ref.make(false);
   const terminationFailure = yield* Deferred.make<never, AcpError.AcpError>();
   const extPending = yield* Ref.make(new Map<string, AcpPendingRequest>());
+  const extRequestHandlers = yield* FiberSet.make();
 
   const ensureActive = Ref.get(terminationHandled).pipe(
     Effect.flatMap((terminated) => (terminated ? Deferred.await(terminationFailure) : Effect.void)),
@@ -456,6 +458,18 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
       ] as const;
     }).pipe(Effect.flatten);
 
+  const terminateWithCause = (cause: Cause.Cause<unknown>) => {
+    const failure = Cause.findErrorOption(cause);
+    const error = Option.isSome(failure) ? failure.value : Cause.squash(cause);
+    const normalized: AcpError.AcpError = isAcpError(error)
+      ? error
+      : new AcpError.AcpTransportError({
+          operation: "read-input-stream",
+          cause: error,
+        });
+    return handleTermination(() => Effect.succeed(normalized));
+  };
+
   const respondWithSuccess = (requestId: AcpError.AcpRequestId, value: unknown) =>
     offerOutgoing({
       _tag: "Exit",
@@ -591,29 +605,36 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
       options.onIncomingRequest?.(acpRequestIdentity(message.id), message.tag, message.payload) ??
       Effect.void;
 
+    // Extension handlers can wait on the user or on a request of their own, so they
+    // run beside the reader, as typed requests do. Failures still end the connection.
     if (!options.serverRequestMethods.has(message.tag)) {
       return observeIncoming.pipe(
-        Effect.andThen(handleExtRequest(message)),
-        Effect.catchTags({
-          AcpProtocolParseError: (error) =>
-            Effect.logWarning(error).pipe(
-              Effect.annotateLogs({
-                method: message.tag,
-                requestId: message.id,
-                operation: error.operation,
-              }),
-              Effect.andThen(
-                respondWithError(
-                  message.id,
-                  AcpError.AcpRequestError.fromExtensionResponseEncodingError(
-                    message.tag,
-                    message.id,
-                    error,
+        Effect.andThen(
+          handleExtRequest(message).pipe(
+            Effect.catchTags({
+              AcpProtocolParseError: (error) =>
+                Effect.logWarning(error).pipe(
+                  Effect.annotateLogs({
+                    method: message.tag,
+                    requestId: message.id,
+                    operation: error.operation,
+                  }),
+                  Effect.andThen(
+                    respondWithError(
+                      message.id,
+                      AcpError.AcpRequestError.fromExtensionResponseEncodingError(
+                        message.tag,
+                        message.id,
+                        error,
+                      ),
+                    ),
                   ),
                 ),
-              ),
-            ),
-        }),
+            }),
+            Effect.catchCause(terminateWithCause),
+            FiberSet.run(extRequestHandlers),
+          ),
+        ),
         Effect.asVoid,
       );
     }
@@ -744,17 +765,7 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
     // Anything that ends the reader, including a defect in a callback it runs,
     // terminates the connection so pending requests fail instead of hanging.
     Effect.matchCauseEffect({
-      onFailure: (cause) => {
-        const failure = Cause.findErrorOption(cause);
-        const error = Option.isSome(failure) ? failure.value : Cause.squash(cause);
-        const normalized: AcpError.AcpError = isAcpError(error)
-          ? error
-          : new AcpError.AcpTransportError({
-              operation: "read-input-stream",
-              cause: error,
-            });
-        return handleTermination(() => Effect.succeed(normalized));
-      },
+      onFailure: terminateWithCause,
       onSuccess: () =>
         handleTermination(
           () =>
