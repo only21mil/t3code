@@ -359,6 +359,10 @@
       "types": "./src/usageLimits.ts",
       "import": "./src/usageLimits.ts"
     },
+    "./threadRelay": {
+      "types": "./src/threadRelay.ts",
+      "import": "./src/threadRelay.ts"
+    },
     "./desktopAppControl": {
       "types": "./src/desktopAppControl.ts",
       "import": "./src/desktopAppControl.ts"

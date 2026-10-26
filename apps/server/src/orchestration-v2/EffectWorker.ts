@@ -24,6 +24,7 @@ import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ProviderTurnControlService from "./ProviderTurnControlService.ts";
 import * as ProviderTurnStartService from "./ProviderTurnStartService.ts";
 import * as RuntimeRequestService from "./RuntimeRequestService.ts";
+import * as StopNoticeDelivery from "./StopNoticeDelivery.ts";
 import * as ThreadTitleRegenerationService from "./ThreadTitleRegenerationService.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -104,6 +105,7 @@ export const layerExecutor: Layer.Layer<
       yield* ThreadTitleRegenerationService.ThreadTitleRegenerationService;
     const threads = yield* ThreadManagementService.ThreadManagementService;
     const settings = yield* ServerSettings.ServerSettingsService;
+    const stopNotices = yield* StopNoticeDelivery.StopNoticeDeliveryService;
     return OrchestrationEffectExecutorV2.of({
       execute: (effect, options) => {
         const willRetry = options?.willRetry ?? false;
@@ -503,6 +505,38 @@ export const layerExecutor: Layer.Layer<
                     }),
                 ),
               );
+          case "stop-notice.deliver": {
+            const delivery = effect.request;
+            return Effect.gen(function* () {
+              const receipt = yield* stopNotices.notify({
+                delivery,
+                final: !willRetry,
+              });
+              // A lost record leaves this row to retry; the notifier replays its
+              // frozen event under the same key instead of sending another.
+              yield* threads.dispatch({
+                type: "thread.stop-notice.record",
+                commandId: CommandId.make(
+                  `command:stop-notice.record:${effect.id}:${effect.attemptCount}`,
+                ),
+                threadId: effect.threadId,
+                attempt: Math.max(1, effect.attemptCount),
+                receipt,
+              });
+              if (receipt.outcome === "retry" && willRetry) {
+                return yield* Effect.fail(receipt.error ?? "The stop notifier asked for a retry.");
+              }
+            }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationEffectExecutionError({
+                    effectId: effect.id,
+                    effectType: delivery.type,
+                    cause,
+                  }),
+              ),
+            );
+          }
           case "delegated-tasks.stop":
             return threads
               .stopDelegatedTasks({

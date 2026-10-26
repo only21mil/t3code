@@ -12,6 +12,8 @@ import {
   ProviderTurnId,
   RunId,
   RuntimeRequestId,
+  StopNotifierResumeRequest,
+  StopNotifierStopRequest,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -117,6 +119,23 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
     type: Schema.Literal("delegated-tasks.stop"),
     reason: Schema.optional(Schema.String),
   }),
+  /**
+   * Hands an episode's recorded stop or resume request to the stop notifier.
+   * Its id derives from the thread and episode, so every route that asks for
+   * the same stop shares one row and one notifier key.
+   */
+  Schema.Struct({
+    type: Schema.Literal("stop-notice.deliver"),
+    operation: Schema.Literal("stop"),
+    episodeId: Schema.String,
+    request: StopNotifierStopRequest,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("stop-notice.deliver"),
+    operation: Schema.Literal("resume"),
+    episodeId: Schema.String,
+    request: StopNotifierResumeRequest,
+  }),
 ]);
 export type OrchestrationEffectRequestV2 = typeof OrchestrationEffectRequestV2.Type;
 
@@ -130,6 +149,7 @@ export const REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS = [
   "attachment.cleanup",
   "thread-title.generate",
   "delegated-tasks.stop",
+  "stop-notice.deliver",
 ] as const satisfies ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
 
 export const PROCESS_BOUND_EFFECT_TYPES = [
@@ -138,6 +158,12 @@ export const PROCESS_BOUND_EFFECT_TYPES = [
   "provider-turn.steer",
   "provider-turn.restart",
   "runtime-request.respond",
+] as const satisfies ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
+
+/** Effect types that run in their own per-thread lane, apart from provider lifecycle work. */
+const SIDE_LANE_EFFECT_TYPES = [
+  "thread-title.generate",
+  "stop-notice.deliver",
 ] as const satisfies ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
 
 export const OrchestrationEffectStatusV2 = Schema.Literals([
@@ -316,8 +342,9 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
     // effect waiting out a retry backoff still blocks later ones, so a turn
     // cannot start while a failed rollback is about to restore files. A claim
     // that skips restart continuations is not blocked by them either.
-    // Title generation is correlated metadata work, so it has its own
-    // per-thread lane and cannot delay provider lifecycle effects.
+    // Title generation and stop-notice delivery are correlated metadata work,
+    // so each has its own per-thread lane and cannot delay provider lifecycle
+    // effects, nor be delayed by them.
     const claimableCandidatePredicate = (
       availableBefore?: string,
       excludeRestartContinuations = false,
@@ -347,13 +374,13 @@ export const layer: Layer.Layer<EffectOutboxV2, never, SqlClient.SqlClient> = La
             )
             AND (
               (
-                candidate.effect_type = 'thread-title.generate'
-                AND active.effect_type = 'thread-title.generate'
+                candidate.effect_type IN ${sql.in(SIDE_LANE_EFFECT_TYPES)}
+                AND active.effect_type = candidate.effect_type
               )
               OR
               (
-                candidate.effect_type != 'thread-title.generate'
-                AND active.effect_type != 'thread-title.generate'
+                candidate.effect_type NOT IN ${sql.in(SIDE_LANE_EFFECT_TYPES)}
+                AND active.effect_type NOT IN ${sql.in(SIDE_LANE_EFFECT_TYPES)}
               )
             )
         )

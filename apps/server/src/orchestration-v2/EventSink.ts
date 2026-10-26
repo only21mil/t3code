@@ -32,6 +32,8 @@ import * as EventStore from "./EventStore.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
+import { StopNoticeConfig } from "./StopNoticeConfig.ts";
+import { deriveStopNotices } from "./StopNoticeDerivation.ts";
 
 /**
  * ERRORS
@@ -211,6 +213,7 @@ const layerBase: Layer.Layer<
     const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
     const projectStore = yield* ProjectStore.ProjectStoreV2;
     const turnItemPositions = yield* TurnItemPositionStore.TurnItemPositionStoreV2;
+    const stopNoticeConfig = yield* StopNoticeConfig;
     const liveEvents = yield* PubSub.unbounded<OrchestrationV2StoredEvent>();
     const liveEventsByType = new Map<
       OrchestrationV2DomainEvent["type"],
@@ -359,6 +362,48 @@ const layerBase: Layer.Layer<
         }
       });
 
+    /**
+     * Appends the stop-notice record and delivery rows these committed events
+     * imply, in the same transaction. A derivation failure is logged and the
+     * write still commits, so stop reporting can never block a run's lifecycle.
+     */
+    const appendStopNotices = (input: {
+      readonly commandId?: CommandId | undefined;
+      readonly storedEvents: ReadonlyArray<OrchestrationV2StoredEvent>;
+      readonly effects: ReadonlyArray<EffectOutbox.PendingOrchestrationEffectV2>;
+    }) =>
+      Effect.gen(function* () {
+        const unchanged = { storedEvents: input.storedEvents, effects: input.effects };
+        const lastSequence = input.storedEvents.at(-1)?.sequence;
+        if (stopNoticeConfig.command === null || lastSequence === undefined) return unchanged;
+        const derived = yield* deriveStopNotices({
+          projectionStore,
+          effectOutbox,
+          defaultOwner: stopNoticeConfig.defaultOwner,
+          events: input.storedEvents.map((stored) => stored.event),
+          plannedEffects: input.effects,
+          eventKey: String(lastSequence),
+        }).pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("Stop notice derivation failed; the write commits without it", {
+              cause,
+            }).pipe(Effect.as(null)),
+          ),
+        );
+        if (derived === null || derived.events.length === 0) return unchanged;
+        const normalized = yield* normalizeEvents(derived.events);
+        const storedEvents = yield* eventStore.append({
+          ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
+          events: normalized,
+        });
+        yield* applyStoredEvents(storedEvents);
+        yield* effectOutbox.enqueue(derived.effects);
+        return {
+          storedEvents: [...input.storedEvents, ...storedEvents],
+          effects: [...input.effects, ...derived.effects],
+        };
+      });
+
     const writeEffect = Effect.fn("orchestrationV2.EventSink.write")(function* (
       input: Parameters<EventSinkV2Shape["writeWithEffects"]>[0],
     ) {
@@ -381,16 +426,20 @@ const layerBase: Layer.Layer<
           });
           yield* applyStoredEvents(committed);
           yield* effectOutbox.enqueue(input.effects);
-          return committed;
+          return yield* appendStopNotices({
+            commandId: input.commandId,
+            storedEvents: committed,
+            effects: input.effects,
+          });
         }),
-        (storedEvents) =>
+        (result) =>
           Effect.gen(function* () {
-            if (input.effects.length > 0) {
-              yield* effectOutbox.notifyAvailable(input.effects.length);
+            if (result.effects.length > 0) {
+              yield* effectOutbox.notifyAvailable(result.effects.length);
             }
-            yield* publishStoredEvents(storedEvents);
+            yield* publishStoredEvents(result.storedEvents);
           }),
-      );
+      ).pipe(Effect.map((result) => result.storedEvents));
     });
 
     const writeIfRunCurrentEffect = Effect.fn("orchestrationV2.EventSink.writeIfRunCurrent")(
@@ -425,6 +474,7 @@ const layerBase: Layer.Layer<
               return {
                 committed: false as const,
                 storedEvents: [] as ReadonlyArray<OrchestrationV2StoredEvent>,
+                effectCount: 0,
               };
             }
 
@@ -433,22 +483,32 @@ const layerBase: Layer.Layer<
                 ? yield* guardUserInputCancellations(input.events)
                 : input.events,
             );
-            const storedEvents = yield* eventStore.append({
+            const appended = yield* eventStore.append({
               ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
               events: normalized,
             });
-            yield* applyStoredEvents(storedEvents);
+            yield* applyStoredEvents(appended);
             yield* effectOutbox.enqueue(input.effects ?? []);
-            return { committed: true as const, storedEvents };
+            const { storedEvents, effects } = yield* appendStopNotices({
+              commandId: input.commandId,
+              storedEvents: appended,
+              effects: input.effects ?? [],
+            });
+            return { committed: true as const, storedEvents, effectCount: effects.length };
           }),
           (result) =>
             Effect.gen(function* () {
               if (!result.committed) return;
-              if (input.effects !== undefined && input.effects.length > 0) {
-                yield* effectOutbox.notifyAvailable(input.effects.length);
+              if (result.effectCount > 0) {
+                yield* effectOutbox.notifyAvailable(result.effectCount);
               }
               yield* publishStoredEvents(result.storedEvents);
             }),
+        ).pipe(
+          Effect.map((result) => ({
+            committed: result.committed,
+            storedEvents: result.storedEvents,
+          })),
         );
       },
     );
@@ -490,6 +550,7 @@ const layerBase: Layer.Layer<
             return {
               committed: false as const,
               storedEvents: [] as ReadonlyArray<OrchestrationV2StoredEvent>,
+              effectCount: 0,
             };
           }
 
@@ -498,14 +559,29 @@ const layerBase: Layer.Layer<
               ? yield* guardUserInputCancellations(input.events)
               : input.events,
           );
-          const storedEvents = yield* eventStore.append({
+          const appended = yield* eventStore.append({
             ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
             events: normalized,
           });
-          yield* applyStoredEvents(storedEvents);
-          return { committed: true as const, storedEvents };
+          yield* applyStoredEvents(appended);
+          const { storedEvents, effects } = yield* appendStopNotices({
+            commandId: input.commandId,
+            storedEvents: appended,
+            effects: [],
+          });
+          return { committed: true as const, storedEvents, effectCount: effects.length };
         }),
-        (result) => (result.committed ? publishStoredEvents(result.storedEvents) : Effect.void),
+        (result) =>
+          Effect.gen(function* () {
+            if (!result.committed) return;
+            if (result.effectCount > 0) yield* effectOutbox.notifyAvailable(result.effectCount);
+            yield* publishStoredEvents(result.storedEvents);
+          }),
+      ).pipe(
+        Effect.map((result) => ({
+          committed: result.committed,
+          storedEvents: result.storedEvents,
+        })),
       );
     });
 
@@ -540,22 +616,32 @@ const layerBase: Layer.Layer<
           });
           if (!reserved) {
             const existing = yield* existingCommandResult(input.commandId);
-            return { ...existing, committed: false as const, cancelledEffectIds: [] };
+            return {
+              ...existing,
+              committed: false as const,
+              cancelledEffectIds: [],
+              effectCount: 0,
+            };
           }
 
           const normalized = yield* normalizeEvents(input.events);
-          const storedEvents = yield* eventStore.append({
+          const appended = yield* eventStore.append({
             commandId: input.commandId,
             events: normalized,
           });
-          const sequence = storedEvents.at(-1)?.sequence;
-          if (sequence === undefined) {
+          if (appended.length === 0) {
             return yield* Effect.die(
               new Error(`Command ${input.commandId} produced no orchestration events.`),
             );
           }
-          yield* applyStoredEvents(storedEvents);
+          yield* applyStoredEvents(appended);
           yield* effectOutbox.enqueue(input.effects);
+          const { storedEvents, effects } = yield* appendStopNotices({
+            commandId: input.commandId,
+            storedEvents: appended,
+            effects: input.effects,
+          });
+          const sequence = storedEvents.at(-1)?.sequence ?? 0;
           const receipt: CommandReceiptStore.CommandReceiptV2 = {
             commandId: input.commandId,
             threadId: input.threadId,
@@ -573,13 +659,19 @@ const layerBase: Layer.Layer<
                   threadId: input.threadId,
                   ...input.cancelUnsettledEffects,
                 });
-          return { receipt, storedEvents, committed: true as const, cancelledEffectIds };
+          return {
+            receipt,
+            storedEvents,
+            committed: true as const,
+            cancelledEffectIds,
+            effectCount: effects.length,
+          };
         }),
         (result) =>
           Effect.gen(function* () {
             yield* effectOutbox.signalCancellations(result.cancelledEffectIds);
-            if (result.committed && input.effects.length > 0) {
-              yield* effectOutbox.notifyAvailable(input.effects.length);
+            if (result.committed && result.effectCount > 0) {
+              yield* effectOutbox.notifyAvailable(result.effectCount);
             }
             if (result.committed) yield* publishStoredEvents(result.storedEvents);
           }),

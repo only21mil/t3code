@@ -226,6 +226,7 @@ export const layer: Layer.Layer<
       "thread.model-selection-updated",
       "thread.provider-switched",
       "thread.visited",
+      "thread.stop-notice-updated",
       "thread.marked-unread",
     ];
 

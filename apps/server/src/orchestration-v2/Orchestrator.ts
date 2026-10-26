@@ -131,6 +131,9 @@ import {
   ThreadForkServiceV2,
 } from "./ThreadForkService.ts";
 import { planThreadDeletion } from "./ThreadDeletion.ts";
+import { applyStopNotifierReceipt } from "./StopNoticePlanner.ts";
+import { planThreadStopNotice } from "./StopNoticeDerivation.ts";
+import { StopNoticeConfig } from "./StopNoticeConfig.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ServerSettings from "../serverSettings.ts";
 
@@ -448,6 +451,8 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.pin.reorder":
     case "thread.active.reorder":
     case "thread.visit":
+    case "thread.stop-notice.declare":
+    case "thread.stop-notice.record":
     case "thread.mark-unread":
     case "thread.metadata.update":
     case "thread.pull-request.link":
@@ -812,6 +817,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
   const projects = yield* ProjectStore.ProjectStoreV2;
   const projectionStore = yield* ProjectionStoreV2;
   const effectOutbox = yield* EffectOutbox.EffectOutboxV2;
+  const stopNoticeConfig = yield* StopNoticeConfig;
   const nextTurnItemOrdinal = (
     projection: Pick<OrchestrationV2ThreadProjection, "thread"> &
       Partial<Pick<OrchestrationV2ThreadProjection, "turnItems">>,
@@ -1682,6 +1688,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...(queuedMessage.senderThreadId === undefined
             ? {}
             : { senderThreadId: queuedMessage.senderThreadId }),
+          ...(queuedMessage.relay === undefined ? {} : { relay: queuedMessage.relay }),
         }),
         inputIntent: "queued_turn",
         startedAt: now,
@@ -2346,6 +2353,106 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       payload: movesForward ? { ...thread, lastVisitedAt: visitedAt.value } : thread,
     });
   });
+
+  const dispatchStopNoticeDeclare = Effect.fn("orchestrationV2.dispatch.stopNoticeDeclare")(
+    function* (
+      command: Extract<
+        OrchestrationV2ServerCommand,
+        { readonly type: "thread.stop-notice.declare" }
+      >,
+      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+      effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+    ) {
+      if (stopNoticeConfig.command === null) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: "This environment has no stop notifier configured.",
+        });
+      }
+      const thread = yield* projectionStore
+        .getThread(command.threadId)
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+          ),
+        );
+      const stop = thread.stopNotice?.stop;
+      if (stop != null) {
+        // The episode already stopped. The same report again is a replay; a
+        // different one needs accepted input, which opens the next episode.
+        if (stop.disposition === command.declaration.disposition) return;
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Episode ${thread.stopNotice?.episodeId} already stopped as ${stop.disposition}.`,
+        });
+      }
+      const planned = yield* planThreadStopNotice({
+        projectionStore,
+        effectOutbox,
+        defaultOwner: stopNoticeConfig.defaultOwner,
+        threadId: command.threadId,
+        triggers: {
+          terminalRuns: [],
+          pendingRequests: [],
+          resolvedRequestIds: new Set(),
+          subagentEnded: false,
+          objectiveMessages: [],
+          declaration: command.declaration,
+        },
+        plannedEffects: [],
+      }).pipe(mapDispatchError(command));
+      if (planned === null) return;
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "thread.stop-notice-updated",
+        threadId: command.threadId,
+        providerInstanceId: planned.thread.providerInstanceId,
+        occurredAt: planned.occurredAt,
+        payload: planned.thread,
+      });
+      yield* Ref.update(effects, (existing) => [...existing, ...planned.effects]);
+    },
+  );
+
+  const dispatchStopNoticeRecord = Effect.fn("orchestrationV2.dispatch.stopNoticeRecord")(
+    function* (
+      command: Extract<
+        OrchestrationV2ServerCommand,
+        { readonly type: "thread.stop-notice.record" }
+      >,
+      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    ) {
+      const thread = yield* projectionStore
+        .getThread(command.threadId)
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+          ),
+        );
+      const now = yield* DateTime.now;
+      const notice = applyStopNotifierReceipt({
+        notice: thread.stopNotice,
+        receipt: command.receipt,
+        attempt: command.attempt,
+        now: DateTime.formatIso(now),
+      });
+      if (notice === null) return;
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "thread.stop-notice-updated",
+        threadId: command.threadId,
+        providerInstanceId: thread.providerInstanceId,
+        occurredAt: now,
+        payload: { ...thread, stopNotice: notice },
+      });
+    },
+  );
 
   // Checked under the thread lock: the watch or the thread can change while the host is read.
   // The watch is recorded first so the wake's own thread events carry it.
@@ -3807,6 +3914,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly creationSource: OrchestrationV2ConversationMessage["creationSource"];
     readonly scheduledTaskId?: OrchestrationV2ConversationMessage["scheduledTaskId"];
     readonly senderThreadId?: OrchestrationV2ConversationMessage["senderThreadId"];
+    readonly relay?: OrchestrationV2ConversationMessage["relay"];
     readonly delegatedCompletion?: OrchestrationV2ConversationMessage["delegatedCompletion"];
     readonly forceRestart: boolean;
   }) =>
@@ -3961,6 +4069,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               ? {}
               : { scheduledTaskId: input.scheduledTaskId }),
             ...(input.senderThreadId === undefined ? {} : { senderThreadId: input.senderThreadId }),
+            ...(input.relay === undefined ? {} : { relay: input.relay }),
             id: input.messageId,
             threadId: input.command.threadId,
             runId: messageInput.runId,
@@ -4896,6 +5005,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...(command.senderThreadId === undefined
             ? {}
             : { senderThreadId: command.senderThreadId }),
+          ...(command.relay === undefined ? {} : { relay: command.relay }),
           forceRestart: dispatchMode.type === "restart_active",
         });
         return;
@@ -5095,6 +5205,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...(command.senderThreadId === undefined
             ? {}
             : { senderThreadId: command.senderThreadId }),
+          ...(command.relay === undefined ? {} : { relay: command.relay }),
           id: command.messageId,
           threadId: command.threadId,
           runId,
@@ -5439,6 +5550,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ...(command.senderThreadId === undefined
             ? {}
             : { senderThreadId: command.senderThreadId }),
+          ...(command.relay === undefined ? {} : { relay: command.relay }),
           id: command.messageId,
           threadId: command.threadId,
           runId,
@@ -6131,6 +6243,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ? {}
           : { scheduledTaskId: command.scheduledTaskId }),
         ...(command.senderThreadId === undefined ? {} : { senderThreadId: command.senderThreadId }),
+        ...(command.relay === undefined ? {} : { relay: command.relay }),
         id: command.messageId,
         threadId: command.threadId,
         runId,
@@ -7699,6 +7812,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(queuedMessage.senderThreadId === undefined
           ? {}
           : { senderThreadId: queuedMessage.senderThreadId }),
+        ...(queuedMessage.relay === undefined ? {} : { relay: queuedMessage.relay }),
         forceRestart: false,
       });
     });
@@ -10618,6 +10732,12 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.visit":
         yield* dispatchThreadVisit(command, events);
         break;
+      case "thread.stop-notice.declare":
+        yield* dispatchStopNoticeDeclare(command, events, effects);
+        break;
+      case "thread.stop-notice.record":
+        yield* dispatchStopNoticeRecord(command, events);
+        break;
       case "thread.auto-settle": {
         // Automatic settlement (#8600): the sweep evaluated a shell snapshot,
         // so re-check against the live thread before settling. Any change
@@ -10969,7 +11089,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         planned.events.length > 0 ||
         command.type === "thread.background-work.settle" ||
         command.type === "thread.stop" ||
-        command.type === "subagent.stop"
+        command.type === "subagent.stop" ||
+        command.type === "thread.stop-notice.declare" ||
+        command.type === "thread.stop-notice.record"
           ? Effect.succeed(planned)
           : Effect.fail(
               new OrchestratorDispatchError({

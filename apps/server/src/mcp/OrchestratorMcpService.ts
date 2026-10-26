@@ -45,6 +45,13 @@ import {
   type OrchestratorMcpThreadRun,
   type OrchestratorMcpThreadSendInput,
   type OrchestratorMcpThreadSendResult,
+  type OrchestratorMcpRelayReceiptInput,
+  type OrchestratorMcpStopReportInput,
+  type OrchestratorMcpStopReportResult,
+  type ThreadRelayHop,
+  type ThreadRelayReceipt,
+  type ThreadRelayTarget,
+  type EnvironmentId,
   type OrchestratorMcpThreadTimelineItem,
   type OrchestratorMcpThreadWaitInput,
   type OrchestratorMcpThreadWaitResult,
@@ -58,6 +65,12 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { runRanAfter } from "@t3tools/shared/orchestrationV2ThreadError";
+import {
+  evaluateThreadRelayReceipt,
+  threadRelayContentSha256,
+  threadRelayMessageId,
+  type ThreadRelayHopObservation,
+} from "@t3tools/shared/threadRelay";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -81,6 +94,7 @@ import {
   type DispatchModeRefusal,
 } from "../orchestration-v2/DispatchModeLimit.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import { LocalEnvironmentId } from "../environment/LocalEnvironmentId.ts";
 import { isSnoozed } from "../orchestration-v2/ThreadSettlementService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
@@ -178,6 +192,16 @@ export interface OrchestratorMcpServiceShape {
     scope: McpInvocationScope,
     input: OrchestratorMcpThreadSendInput,
   ) => Effect.Effect<OrchestratorMcpThreadSendResult, OrchestratorMcpFailure>;
+  /** Reads a relay's receipt from this environment's own records of its hops. */
+  readonly relayReceipt: (
+    scope: McpInvocationScope,
+    input: OrchestratorMcpRelayReceiptInput,
+  ) => Effect.Effect<ThreadRelayReceipt, OrchestratorMcpFailure>;
+  /** Records the calling thread's stop report for its current work episode. */
+  readonly reportStop: (
+    scope: McpInvocationScope,
+    input: OrchestratorMcpStopReportInput,
+  ) => Effect.Effect<OrchestratorMcpStopReportResult, OrchestratorMcpFailure>;
   readonly waitForThread: (
     scope: McpInvocationScope,
     input: OrchestratorMcpThreadWaitInput,
@@ -770,6 +794,9 @@ function threadDetail(
     ...threadSettlement(projection.thread),
     // From the shell, like the list, so read and list agree on snooze state.
     ...threadSnooze(shell, nowMs),
+    ...(projection.thread.stopNotice === undefined
+      ? {}
+      : { stopNotice: projection.thread.stopNotice }),
     createdAt: DateTime.formatIso(projection.thread.createdAt),
     updatedAt: DateTime.formatIso(projection.thread.updatedAt),
   };
@@ -905,6 +932,7 @@ const make = Effect.gen(function* () {
   const scheduledTasks = yield* ScheduledTaskService.ScheduledTaskService;
   const projects = yield* ProjectService.ProjectService;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
+  const localEnvironment = yield* LocalEnvironmentId;
 
   /** A caller-named project, which must exist before anything is recorded against it. */
   const requireProject = (projectId: ProjectId) =>
@@ -1119,6 +1147,219 @@ const make = Effect.gen(function* () {
         ])
         .pipe(Effect.mapError(threadManagementFailure));
       return { parent, target, shell } as const;
+    });
+
+  const requireLocalEnvironment = localEnvironment.get.pipe(
+    Effect.flatMap((environmentId) =>
+      environmentId === null
+        ? Effect.fail(
+            failure("orchestration_error", "This server has no environment identity for relays."),
+          )
+        : Effect.succeed(environmentId),
+    ),
+  );
+
+  /** The relay hop a thread in this environment holds, read from its own messages. */
+  const observeRelayHop = (threadId: ThreadId, messageId: MessageId) =>
+    Effect.gen(function* () {
+      const records = yield* Effect.option(
+        threadManagement.getThreadRecords(threadId, ["runs", "messages"], {
+          messageIds: [messageId],
+        }),
+      );
+      if (Option.isNone(records)) {
+        return {
+          observation: {
+            threadId,
+            messageId,
+            message: undefined,
+            inTranscript: false,
+            run: undefined,
+          },
+          runs: [] as ReadonlyArray<OrchestrationV2Run>,
+        } as const;
+      }
+      const message = records.value.messages.find((candidate) => candidate.id === messageId);
+      const run =
+        message?.runId == null
+          ? undefined
+          : records.value.runs.find((candidate) => candidate.id === message.runId);
+      // A queued message has no user turn yet; it reaches the transcript when its turn starts.
+      const turnItems =
+        message?.runId == null
+          ? []
+          : (yield* threadManagement
+              .getThreadRecords(threadId, ["turnItems"], {
+                turnItemTypes: ["user_message"],
+                turnItemRunIds: [message.runId],
+              })
+              .pipe(Effect.mapError(threadManagementFailure))).turnItems;
+      const observation: ThreadRelayHopObservation = {
+        threadId,
+        messageId,
+        message:
+          message === undefined
+            ? undefined
+            : {
+                text: message.text,
+                ...(message.relay === undefined ? {} : { relay: message.relay }),
+              },
+        inTranscript: turnItems.some(
+          (item) =>
+            item.type === "user_message" &&
+            item.messageId === messageId &&
+            item.status !== "failed",
+        ),
+        run,
+      };
+      return { observation, runs: records.value.runs } as const;
+    });
+
+  const relayReceiptFor = (input: {
+    readonly relayId: string;
+    readonly environmentId: EnvironmentId;
+    readonly finalTarget: ThreadRelayTarget;
+    readonly viaThreadId?: ThreadId | undefined;
+  }) =>
+    Effect.gen(function* () {
+      const hopId = (threadId: ThreadId) =>
+        MessageId.make(
+          threadRelayMessageId({
+            relayId: input.relayId,
+            environmentId: input.environmentId,
+            threadId,
+          }),
+        );
+      const via =
+        input.viaThreadId === undefined || input.viaThreadId === input.finalTarget.threadId
+          ? undefined
+          : yield* observeRelayHop(input.viaThreadId, hopId(input.viaThreadId)).pipe(
+              Effect.map(({ observation, runs }) => {
+                const hopRun = observation.run;
+                const latest = runs.toSorted((left, right) => right.ordinal - left.ordinal)[0];
+                const forwarderActive = runs.some(
+                  (run) =>
+                    !ThreadManagementService.isTerminalRunStatus(run.status) &&
+                    (hopRun === undefined ||
+                      run.ordinal >=
+                        (runs.find((candidate) => candidate.id === hopRun.id)?.ordinal ?? 0)),
+                );
+                return {
+                  ...observation,
+                  forwarderActive,
+                  forwarderRunStatus: latest?.status ?? null,
+                };
+              }),
+            );
+      const final =
+        input.finalTarget.environmentId === input.environmentId
+          ? (yield* observeRelayHop(input.finalTarget.threadId, hopId(input.finalTarget.threadId)))
+              .observation
+          : undefined;
+      return evaluateThreadRelayReceipt({
+        relayId: input.relayId,
+        environmentId: input.environmentId,
+        finalTarget: input.finalTarget,
+        via,
+        final,
+      });
+    });
+
+  /**
+   * The hop a relay send records. A caller that holds a hop of the same relay
+   * forwards it: the final target and content hash stay the ones the first hop
+   * fixed. Otherwise this send starts the relay in this environment.
+   */
+  const resolveRelayHop = (
+    parent: Pick<OrchestrationV2ThreadProjection, "thread"> | undefined,
+    input: OrchestratorMcpThreadSendInput & {
+      readonly relay: NonNullable<OrchestratorMcpThreadSendInput["relay"]>;
+    },
+  ) =>
+    Effect.gen(function* () {
+      const environmentId = yield* requireLocalEnvironment;
+      const { relay } = input;
+      const callerHopId =
+        parent === undefined
+          ? undefined
+          : MessageId.make(
+              threadRelayMessageId({
+                relayId: relay.relayId,
+                environmentId,
+                threadId: parent.thread.id,
+              }),
+            );
+      const callerHop =
+        parent === undefined || callerHopId === undefined
+          ? undefined
+          : (yield* observeRelayHop(parent.thread.id, callerHopId)).observation.message?.relay;
+      const declaredTarget: ThreadRelayTarget = {
+        environmentId: relay.finalTarget?.environmentId ?? environmentId,
+        threadId: relay.finalTarget?.threadId ?? input.threadId,
+      };
+      let hop: ThreadRelayHop;
+      if (callerHop !== undefined && parent !== undefined && callerHopId !== undefined) {
+        if (
+          relay.finalTarget !== undefined &&
+          (declaredTarget.environmentId !== callerHop.finalTarget.environmentId ||
+            declaredTarget.threadId !== callerHop.finalTarget.threadId)
+        ) {
+          return yield* failure(
+            "invalid_request",
+            `Relay ${relay.relayId} ends at thread ${callerHop.finalTarget.threadId} in environment ${callerHop.finalTarget.environmentId}; a forward cannot change it.`,
+          );
+        }
+        if (
+          relay.contentSha256 !== undefined &&
+          callerHop.contentSha256 !== null &&
+          relay.contentSha256 !== callerHop.contentSha256
+        ) {
+          return yield* failure(
+            "invalid_request",
+            `Relay ${relay.relayId} already declares content ${callerHop.contentSha256}.`,
+          );
+        }
+        hop = {
+          relayId: relay.relayId,
+          finalTarget: callerHop.finalTarget,
+          hop: callerHop.hop + 1,
+          previous: { environmentId, threadId: parent.thread.id, messageId: callerHopId },
+          previousVerified: true,
+          contentSha256: callerHop.contentSha256 ?? relay.contentSha256 ?? null,
+        };
+      } else {
+        hop = {
+          relayId: relay.relayId,
+          finalTarget: declaredTarget,
+          hop: relay.previous === undefined ? 1 : 2,
+          previous: relay.previous ?? null,
+          previousVerified: false,
+          contentSha256: relay.contentSha256 ?? null,
+        };
+      }
+      if (
+        hop.finalTarget.threadId === input.threadId &&
+        hop.finalTarget.environmentId !== environmentId
+      ) {
+        return yield* failure(
+          "invalid_request",
+          `Thread ${input.threadId} is the final target in environment ${hop.finalTarget.environmentId}. T3 does not forward across environments: send this hop through that environment's authenticated T3 route with the same relay.`,
+        );
+      }
+      if (
+        hop.finalTarget.threadId === input.threadId &&
+        hop.contentSha256 !== null &&
+        threadRelayContentSha256(input.message) !== hop.contentSha256
+      ) {
+        return yield* failure(
+          "invalid_request",
+          `The final hop of relay ${relay.relayId} must carry the declared text exactly (sha256 ${hop.contentSha256}).`,
+        );
+      }
+      const messageId = MessageId.make(
+        threadRelayMessageId({ relayId: relay.relayId, environmentId, threadId: input.threadId }),
+      );
+      return { environmentId, hop, messageId } as const;
     });
 
   const loadProviders = providerRegistry.getProviders;
@@ -2538,6 +2779,14 @@ const make = Effect.gen(function* () {
       }),
     sendToThread: (scope, input) =>
       Effect.gen(function* () {
+        // Checked first: a final target in another environment is not a local thread,
+        // and the caller needs that answer, not "thread not found".
+        const relayParent =
+          input.relay === undefined ? undefined : (yield* loadCaller(scope)).parent;
+        const relay =
+          input.relay === undefined
+            ? undefined
+            : yield* resolveRelayHop(relayParent, { ...input, relay: input.relay });
         const { parent, limits, target } = yield* loadScopedThread(scope, input.threadId);
         yield* assertLiveCallerForOtherThread(scope, parent, target);
         yield* resolveRuntimeMode(limits.runtimeMode, target.thread.runtimeMode);
@@ -2545,21 +2794,29 @@ const make = Effect.gen(function* () {
 
         const mode = input.mode ?? "auto";
         const key = yield* requestKey(input.clientRequestId);
-        const messageId = stableOperationMessageId({
-          scope,
-          requestKey: key,
-          operation: "thread-send",
-        });
+        // A relay hop's ids come from the relay itself, so every retry or
+        // duplicate forward of the hop replays one message.
+        const messageId =
+          relay?.messageId ??
+          stableOperationMessageId({
+            scope,
+            requestKey: key,
+            operation: "thread-send",
+          });
         const result = yield* threadManagement
           .sendToThread({
             projectId: target.thread.projectId,
-            commandId: stableCommandId({
-              scope,
-              requestKey: key,
-              operation: "thread-send",
-            }),
+            commandId:
+              relay === undefined
+                ? stableCommandId({
+                    scope,
+                    requestKey: key,
+                    operation: "thread-send",
+                  })
+                : CommandId.make(`command:thread-send:${relay.messageId}`),
             threadId: input.threadId,
             ...(parent === undefined ? {} : { senderThreadId: parent.thread.id }),
+            ...(relay === undefined ? {} : { relay: relay.hop }),
             messageId,
             text: input.message,
             attachments: [],
@@ -2586,7 +2843,89 @@ const make = Effect.gen(function* () {
             : { taskId: result.run.delegatedTaskId }),
           status: result.run.status,
           delivery: result.delivery,
+          ...(relay === undefined
+            ? {}
+            : {
+                relay: yield* relayReceiptFor({
+                  relayId: relay.hop.relayId,
+                  environmentId: relay.environmentId,
+                  finalTarget: relay.hop.finalTarget,
+                  viaThreadId: input.threadId,
+                }),
+              }),
         } satisfies OrchestratorMcpThreadSendResult;
+      }),
+    relayReceipt: (scope, input) =>
+      Effect.gen(function* () {
+        const environmentId = yield* requireLocalEnvironment;
+        const finalTarget: ThreadRelayTarget = {
+          environmentId: input.finalTarget.environmentId ?? environmentId,
+          threadId: input.finalTarget.threadId,
+        };
+        // Reading a receipt reveals the final message, so it needs the same
+        // read access as reading those threads.
+        for (const threadId of [
+          ...(finalTarget.environmentId === environmentId ? [finalTarget.threadId] : []),
+          ...(input.viaThreadId === undefined ? [] : [input.viaThreadId]),
+        ]) {
+          yield* loadReadableThread(scope, threadId).pipe(
+            Effect.catchIf(
+              (error) => error.code === "thread_not_found",
+              () => Effect.void,
+            ),
+          );
+        }
+        return yield* relayReceiptFor({
+          relayId: input.relayId,
+          environmentId,
+          finalTarget,
+          viaThreadId: input.viaThreadId,
+        });
+      }),
+    reportStop: (scope, input) =>
+      Effect.gen(function* () {
+        const caller = yield* loadCaller(scope);
+        const parent = caller.parent;
+        if (parent === undefined) {
+          return yield* failure(
+            "invalid_request",
+            "Only an agent running in a T3 thread can report that thread's stop.",
+          );
+        }
+        const activeRun = ThreadManagementService.latestActiveRun(parent);
+        const key = yield* requestKey(undefined);
+        yield* threadManagement
+          .dispatch({
+            type: "thread.stop-notice.declare",
+            commandId: stableCommandId({ scope, requestKey: key, operation: "stop-report" }),
+            threadId: parent.thread.id,
+            declaration: {
+              disposition: input.disposition,
+              owner: input.owner ?? null,
+              resultPath: input.resultPath ?? null,
+              requiredAction: input.requiredAction ?? null,
+              runId: activeRun?.id ?? null,
+              declaredAt: DateTime.formatIso(yield* DateTime.now),
+            },
+          })
+          .pipe(
+            Effect.mapError((error) =>
+              failure(
+                "invalid_request",
+                `Unable to record the stop report: ${errorMessage(error)}`,
+              ),
+            ),
+          );
+        const thread = yield* threadManagement
+          .getThreadShell(parent.thread.id)
+          .pipe(Effect.mapError(threadManagementFailure));
+        const records = yield* threadManagement
+          .getThreadRecords(parent.thread.id, [])
+          .pipe(Effect.mapError(threadManagementFailure));
+        return {
+          threadId: parent.thread.id,
+          stopNotice: thread === null ? null : (records.thread.stopNotice ?? null),
+        } satisfies OrchestratorMcpStopReportResult;
       }),
     waitForThread: (scope, input) =>
       Effect.gen(function* () {

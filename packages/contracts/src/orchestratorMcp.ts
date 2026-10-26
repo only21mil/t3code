@@ -4,6 +4,7 @@ import * as SchemaTransformation from "effect/SchemaTransformation";
 
 import {
   ContextTransferId,
+  EnvironmentId,
   IsoDateTime,
   MessageId,
   NodeId,
@@ -37,6 +38,13 @@ import {
   ProviderOptionSelectionValue,
 } from "./model.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
+import { StopDisposition, StopNotice } from "./stopNotice.ts";
+import {
+  ThreadRelayContentSha256,
+  ThreadRelayHopRef,
+  ThreadRelayId,
+  ThreadRelayReceipt,
+} from "./threadRelay.ts";
 
 const OrchestratorMcpPrompt = TrimmedNonEmptyString.check(Schema.isMaxLength(120_000)).annotate({
   description: "Complete task or message text for the target agent.",
@@ -377,6 +385,12 @@ export const OrchestratorMcpThreadDetail = Schema.Struct({
   snoozed: Schema.Boolean,
   /** When a snoozed thread wakes; null when it is not snoozed. */
   snoozedUntil: Schema.NullOr(IsoDateTime),
+  /**
+   * The current work episode's stop event and its delivery evidence. Separate
+   * from `settled`: a reported HOLD stays unsettled. Absent when the
+   * environment has no stop notifier.
+   */
+  stopNotice: Schema.optional(Schema.NullOr(StopNotice)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -423,11 +437,34 @@ export const OrchestratorMcpThreadReadResult = Schema.Struct({
 });
 export type OrchestratorMcpThreadReadResult = typeof OrchestratorMcpThreadReadResult.Type;
 
+/**
+ * Declares this send one hop of a relay. The relay id stays the same on every
+ * hop and retry; the final target is fixed by the first hop this environment
+ * records. A hop into another environment goes through that environment's own
+ * authenticated T3 route, never through this one.
+ */
+export const OrchestratorMcpThreadRelayInput = Schema.Struct({
+  relayId: ThreadRelayId,
+  /** Where the relay must end. Defaults to this send's thread in this environment. */
+  finalTarget: Schema.optional(
+    Schema.Struct({
+      environmentId: Schema.optional(EnvironmentId),
+      threadId: ThreadId,
+    }),
+  ),
+  /** The hop this send forwards, when it was recorded in another environment. */
+  previous: Schema.optional(ThreadRelayHopRef),
+  /** sha256 of the exact text the final target must receive. */
+  contentSha256: Schema.optional(ThreadRelayContentSha256),
+});
+export type OrchestratorMcpThreadRelayInput = typeof OrchestratorMcpThreadRelayInput.Type;
+
 export const OrchestratorMcpThreadSendInput = Schema.Struct({
   threadId: ThreadId,
   message: OrchestratorMcpPrompt,
   mode: Schema.optional(Schema.Literals(["auto", "queue", "steer", "restart"])),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
+  relay: Schema.optional(OrchestratorMcpThreadRelayInput),
 });
 export type OrchestratorMcpThreadSendInput = typeof OrchestratorMcpThreadSendInput.Type;
 
@@ -438,9 +475,41 @@ export const OrchestratorMcpThreadSendResult = Schema.Struct({
   /** Fresh task for a follow-up to an app-owned child; the previous task stays terminal. */
   taskId: Schema.optional(NodeId),
   status: OrchestrationV2RunStatus,
+  /** What happened to this hop at send time. Never proof that a relay reached its final target. */
   delivery: Schema.Literals(["started", "queued", "steered", "restarted"]),
+  /** For a relay send: the receipt this environment can give right after the send. */
+  relay: Schema.optional(ThreadRelayReceipt),
 });
 export type OrchestratorMcpThreadSendResult = typeof OrchestratorMcpThreadSendResult.Type;
+
+export const OrchestratorMcpRelayReceiptInput = Schema.Struct({
+  relayId: ThreadRelayId,
+  finalTarget: Schema.Struct({
+    /** Defaults to this environment. */
+    environmentId: Schema.optional(EnvironmentId),
+    threadId: ThreadId,
+  }),
+  /** A thread in this environment that should have forwarded the relay. */
+  viaThreadId: Schema.optional(ThreadId),
+});
+export type OrchestratorMcpRelayReceiptInput = typeof OrchestratorMcpRelayReceiptInput.Type;
+
+export const OrchestratorMcpStopReportInput = Schema.Struct({
+  disposition: StopDisposition.annotate({
+    description:
+      "Why this episode stops, in upper case, such as DONE, BLOCKED, HOLD, HOLD-DRAFT, NEEDS-VICTOR or WAITING_DEPENDENCY.",
+  }),
+  owner: Schema.optional(TrimmedNonEmptyString),
+  resultPath: Schema.optional(TrimmedNonEmptyString),
+  requiredAction: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(1000))),
+});
+export type OrchestratorMcpStopReportInput = typeof OrchestratorMcpStopReportInput.Type;
+
+export const OrchestratorMcpStopReportResult = Schema.Struct({
+  threadId: ThreadId,
+  stopNotice: Schema.NullOr(StopNotice),
+});
+export type OrchestratorMcpStopReportResult = typeof OrchestratorMcpStopReportResult.Type;
 
 export const OrchestratorMcpThreadWaitInput = Schema.Struct({
   threadId: ThreadId,

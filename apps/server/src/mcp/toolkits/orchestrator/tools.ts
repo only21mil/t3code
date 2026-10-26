@@ -28,6 +28,10 @@ import {
   OrchestratorMcpThreadSendResult,
   OrchestratorMcpThreadWaitInput,
   OrchestratorMcpThreadWaitResult,
+  OrchestratorMcpRelayReceiptInput,
+  OrchestratorMcpStopReportInput,
+  OrchestratorMcpStopReportResult,
+  ThreadRelayReceipt,
   ThreadMetadataMcpUpdateInput,
   ThreadMetadataMcpUpdateResult,
 } from "@t3tools/contracts";
@@ -65,7 +69,7 @@ const OrchestratorCapabilitiesTool = Tool.make("orchestrator_capabilities", {
 
 export const DelegateTaskTool = Tool.make("delegate_task", {
   description:
-    "Needs an agent running inside a T3 thread. Delegate one task to a T3-owned child agent/subagent of THIS thread and run it with only the supplied task prompt, without copying parent conversation history. Choose providers and models from orchestrator_capabilities, which uses the same live catalog as the composer. Prefer native subagent tools for same-provider work only when they support the chosen model. Use this for any model missing from the native tool, including same-provider work, for cross-provider work, or for explicitly T3-owned child tasks. For every T3 delegated review round, call delegate_task again with the original brief, prior findings, responses, and unresolved objections in the task prompt. Track each round by its own taskId and use a distinct clientRequestId per round, stable across retries of that round. The childThreadId is backing storage, not the target for starting another delegated review round through t3_thread_send. Provider, model, model options (see orchestrator_capabilities), runtime mode, and interaction mode inherit unless target overrides them. A requested runtimeMode must be one the target provider lists in orchestrator_capabilities runtimeModes; an inherited one steps down to the broadest mode it offers. Prefer mode='async' for long work; mode='wait' blocks until completion or timeout. timeoutMs on mode=wait is only the parent's wait budget and does not cancel the child. waitTimedOut on that wait call means the timeout fired; keep that taskId and read status on later task_status. An async child's completion wakes this thread through a notification, steered into active turns where supported or queued otherwise, so end the turn instead of polling or spawning watchers; use task_status only when the result is needed mid-turn.",
+    "Needs an agent running inside a T3 thread. Delegate one task to a T3-owned child agent/subagent of THIS thread and run it with only the supplied task prompt, without copying parent conversation history. Choose providers and models from orchestrator_capabilities, which uses the same live catalog as the composer. Prefer native subagent tools for same-provider work only when they support the chosen model. Use this for any model missing from the native tool, including same-provider work, for cross-provider work, or for explicitly T3-owned child tasks. Capacity permits admission; it does not create assignments: delegate exactly the bounded task supplied, and for an audit name its finite source questions and one checker pass. Call delegate_task again only for an intentionally independent review. A repair check continues the same logical reviewer: send the repair diff, open finding IDs and its ledger to that reviewer's childThreadId with t3_thread_send, which starts a fresh task there without keeping the finished provider running. If that thread cannot take a follow-up, delegate a replacement for the same seat carrying the complete ledger and prior decisions. Track each round by its taskId and use a distinct clientRequestId per round, stable across retries of that round. Provider, model, model options (see orchestrator_capabilities), runtime mode, and interaction mode inherit unless target overrides them. A requested runtimeMode must be one the target provider lists in orchestrator_capabilities runtimeModes; an inherited one steps down to the broadest mode it offers. Prefer mode='async' for long work; mode='wait' blocks until completion or timeout. timeoutMs on mode=wait is only the parent's wait budget and does not cancel the child. waitTimedOut on that wait call means the timeout fired; keep that taskId and read status on later task_status. An async child's completion wakes this thread through a notification, steered into active turns where supported or queued otherwise, so end the turn instead of polling or spawning watchers; use task_status only when the result is needed mid-turn.",
   parameters: OrchestratorMcpDelegateTaskInput,
   success: OrchestratorMcpDelegateTaskResult,
   failure: OrchestratorMcpFailure,
@@ -235,7 +239,7 @@ export const ThreadUpdateTool = Tool.make("t3_thread_update", {
 
 const ThreadSendTool = Tool.make("t3_thread_send", {
   description:
-    "Send a message to any T3 thread in this environment. The target cannot have broader permission modes than the caller. Use delegate_task with the full review context and a new clientRequestId for independent review rounds. For a follow-up that needs the same child's conversation, send to its childThreadId. After the original task completes, a requested follow-up creates a fresh task in that child thread and returns taskId; its completion notifies the parent, and the original result stays unchanged. mode='auto' starts an idle thread, steers a fully active turn, or queues behind a turn that is not yet steerable. Use queue for a separate follow-up turn, steer for an in-flight update, or restart to interrupt-and-restart the active turn. clientRequestId makes retries idempotent.",
+    "Send a message to any T3 thread in this environment. The target cannot have broader permission modes than the caller. Use delegate_task only for an intentionally independent review; a repair check for an existing reviewer goes to its childThreadId with the repair diff, open finding IDs and its ledger. For a follow-up that needs the same child's conversation, send to its childThreadId. After the original task completes, a requested follow-up creates a fresh task in that child thread and returns taskId; its completion notifies the parent, and the original result stays unchanged. mode='auto' starts an idle thread, steers a fully active turn, or queues behind a turn that is not yet steerable. Use queue for a separate follow-up turn, steer for an in-flight update, or restart to interrupt-and-restart the active turn. clientRequestId makes retries idempotent. delivery describes only this hop: started, queued or steered is not proof that a relayed message reached its final target. To relay toward a final thread, pass relay with the same relayId and finalTarget on every hop; a hop's message id comes from the relay, so a retried forward replays it. A final target in another environment is reached only through that environment's own authenticated T3 route; this tool never forwards across environments and refuses a final hop aimed at one.",
   parameters: OrchestratorMcpThreadSendInput,
   success: OrchestratorMcpThreadSendResult,
   failure: OrchestratorMcpFailure,
@@ -272,6 +276,33 @@ const ThreadInterruptTool = Tool.make("t3_thread_interrupt", {
   .annotate(Tool.Title, "Interrupt a T3 thread")
   .annotate(Tool.Destructive, true);
 
+const RelayReceiptTool = Tool.make("t3_relay_receipt", {
+  description:
+    "Read a relay's delivery receipt from this environment's own records. state=delivered only when the final target's own transcript holds the relay's message, which is read back with its sha256. pending means the final hop is queued or the forwarding thread (viaThreadId) is still working. delivery_error names why it did not arrive: final_target_message_absent, final_target_dropped, final_target_content_mismatch, or forwarder_ended when the forwarding thread stopped without sending the final hop. unverified means the final target is in another environment: read the receipt there, through that environment's authenticated T3 route. An intermediate hop never proves final delivery.",
+  parameters: OrchestratorMcpRelayReceiptInput,
+  success: ThreadRelayReceipt,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies,
+})
+  .annotate(Tool.Title, "Read a relay receipt")
+  .annotate(Tool.Readonly, true)
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true);
+
+const StopReportTool = Tool.make("t3_stop_report", {
+  description:
+    "Needs an agent running inside a T3 thread, in an environment with a stop notifier. Report why this thread's current work episode stops, once, when nothing it owns still carries the work: DONE, BLOCKED, HOLD, HOLD-DRAFT, NEEDS-VICTOR, WAITING_DEPENDENCY or another upper-case disposition, with the accountable owner, absolute result path and required action. T3 delivers it when the turn ends, through the same event it would send by itself, so never send another report for this stop. Every thread reports its own stop, including one another thread launched or messaged; only a delegate_task child hands its stop back to its parent through its task result. The result shows the stop and its delivery state, which is separate from settlement; a reported HOLD stays unsettled. Fails when this environment has no stop notifier.",
+  parameters: OrchestratorMcpStopReportInput,
+  success: OrchestratorMcpStopReportResult,
+  failure: OrchestratorMcpFailure,
+  failureMode: "return",
+  dependencies,
+})
+  .annotate(Tool.Title, "Report this thread's stop")
+  .annotate(Tool.Destructive, false)
+  .annotate(Tool.Idempotent, true);
+
 export const OrchestratorToolkit = Toolkit.make(
   OrchestratorCapabilitiesTool,
   DelegateTaskTool,
@@ -290,4 +321,6 @@ export const OrchestratorToolkit = Toolkit.make(
   ThreadSendTool,
   ThreadWaitTool,
   ThreadInterruptTool,
+  RelayReceiptTool,
+  StopReportTool,
 );

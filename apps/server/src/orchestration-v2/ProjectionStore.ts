@@ -744,6 +744,7 @@ export function applyToProjection(
     // Visited tracking is read state, not activity: skip the updatedAt bump so
     // viewing a thread does not surface it as recently active.
     case "thread.visited":
+    case "thread.stop-notice-updated":
     case "thread.marked-unread":
       return {
         ...projection,
@@ -1837,6 +1838,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           case "thread.pin-reordered":
           case "thread.active-reordered":
           case "thread.visited":
+          case "thread.stop-notice-updated":
           case "thread.marked-unread":
           case "thread.metadata-updated":
           case "thread.pull-request-synced":
@@ -2668,6 +2670,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           event.type !== "thread.unpinned" &&
           event.type !== "thread.pin-reordered" &&
           event.type !== "thread.visited" &&
+          event.type !== "thread.stop-notice-updated" &&
           event.type !== "thread.marked-unread" &&
           event.type !== "thread.metadata-updated" &&
           event.type !== "thread.runtime-mode-updated" &&

@@ -72,6 +72,8 @@ import {
   ToolActivitySource,
 } from "./providerRuntime.ts";
 import { ThreadTokenUsageSnapshot } from "./providerRuntime.ts";
+import { StopNotice, StopNoticeDeclaration, StopNotifierReceipt } from "./stopNotice.ts";
+import { ThreadRelayHop } from "./threadRelay.ts";
 
 export const OrchestrationV2Actor = Schema.Literals(["user", "agent", "system"]);
 export type OrchestrationV2Actor = typeof OrchestrationV2Actor.Type;
@@ -437,6 +439,11 @@ export const OrchestrationV2AppThread = Schema.Struct({
       }),
     ),
   ),
+  /**
+   * The current work episode's stop event and its delivery, apart from
+   * settlement. Absent unless the environment configures a stop notifier.
+   */
+  stopNotice: Schema.optional(Schema.NullOr(StopNotice)),
   deletedAt: Schema.NullOr(Schema.DateTimeUtc),
 });
 export type OrchestrationV2AppThread = typeof OrchestrationV2AppThread.Type;
@@ -1207,6 +1214,8 @@ export const OrchestrationV2ConversationMessage = Schema.Struct({
   scheduledTaskId: Schema.optional(ScheduledTaskId),
   // The sending agent's thread in this environment, separate from the receiving thread.
   senderThreadId: Schema.optional(ThreadId),
+  /** This message is one hop of a relay toward a declared final thread. */
+  relay: Schema.optional(ThreadRelayHop),
   id: MessageId,
   threadId: ThreadId,
   runId: Schema.NullOr(RunId),
@@ -1755,6 +1764,7 @@ export const OrchestrationV2DomainEvent = Schema.Union([
       "thread.pin-reordered",
       "thread.active-reordered",
       "thread.visited",
+      "thread.stop-notice-updated",
       "thread.marked-unread",
       "thread.metadata-updated",
       "thread.pull-request-synced",
@@ -2575,6 +2585,7 @@ export const OrchestrationV2DomainEventJson = Schema.Union([
       "thread.pin-reordered",
       "thread.active-reordered",
       "thread.visited",
+      "thread.stop-notice-updated",
       "thread.marked-unread",
       "thread.pull-request-synced",
       "thread.metadata-updated",
@@ -2932,6 +2943,7 @@ export const OrchestrationV2Command = Schema.Union([
     ...OrchestrationV2CreationFields,
     scheduledTaskId: Schema.optional(ScheduledTaskId),
     senderThreadId: Schema.optional(ThreadId),
+    relay: Schema.optional(ThreadRelayHop),
     commandId: CommandId,
     threadId: ThreadId,
     messageId: MessageId,
@@ -3160,6 +3172,25 @@ export type OrchestrationV2Command = typeof OrchestrationV2Command.Type;
  * send them.
  */
 const OrchestrationV2InternalCommand = Schema.Union([
+  /**
+   * The agent's own stop report for its current episode. It is delivered by
+   * the same native finalization that would otherwise report the stop, so an
+   * explicit report and an automatic one are one event.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.stop-notice.declare"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    declaration: StopNoticeDeclaration,
+  }),
+  /** Records one notifier attempt for the episode's stop or resume request. */
+  Schema.Struct({
+    type: Schema.Literal("thread.stop-notice.record"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    attempt: PositiveInt,
+    receipt: StopNotifierReceipt,
+  }),
   /**
    * Records what a pull request watch saw, and wakes the agent in the same transaction when
    * `wake` is set. Rejected once the watch started at `startedAt` has ended, and a wake is
