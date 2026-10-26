@@ -1,3 +1,6 @@
+import * as NodeFs from "node:fs";
+import * as NodeOs from "node:os";
+import * as NodePath from "node:path";
 import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import { DEFAULT_SIGNAL_EXPORT } from "@t3tools/shared/observability";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -289,7 +292,16 @@ export function layerWithRegistry<Error>(
       : RuntimePolicy.layerWithOverride(scenario.runtimePolicyOverride).pipe(
           Layer.provide(RuntimePolicy.layer),
         );
-  const layerDatabase = options.databaseLayer ?? SqlitePersistence.layerMemory;
+  const layerDatabase =
+    options.databaseLayer ??
+    Layer.unwrap(
+      Effect.sync(() => {
+        const dir = NodeFs.mkdtempSync(NodePath.join(NodeOs.tmpdir(), "order-repro-"));
+        return SqlitePersistence.layerFromPath(NodePath.join(dir, "state.sqlite")).pipe(
+          Layer.provide(NodeServices.layer),
+        );
+      }),
+    );
   // One queue shared by the adapters, the orchestrator, and the worker, like
   // runtimeLayer.ts; layer memoization keeps it a single instance.
   const layerContinuationRequests =
