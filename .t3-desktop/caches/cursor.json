@@ -1,0 +1,27 @@
+{
+  "displayName": "Cursor",
+  "supportsConversationRollback": false,
+  "showInteractionModeToggle": true,
+  "enabled": false,
+  "installed": false,
+  "version": null,
+  "status": "disabled",
+  "auth": {
+    "status": "unknown",
+    "canLogout": true
+  },
+  "setup": {
+    "canAuthenticate": true,
+    "canInstall": false
+  },
+  "checkedAt": "2026-10-24T22:07:58.432Z",
+  "message": "Cursor is disabled in T3 Code settings.",
+  "models": [],
+  "slashCommands": [],
+  "skills": [],
+  "instanceId": "cursor",
+  "driver": "cursor",
+  "continuation": {
+    "groupKey": "cursor:instance:cursor"
+  }
+}

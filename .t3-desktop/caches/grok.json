@@ -1,0 +1,40 @@
+{
+  "displayName": "Grok",
+  "supportsConversationRollback": false,
+  "showInteractionModeToggle": false,
+  "supportedRuntimeModes": [
+    "approval-required",
+    "auto",
+    "full-access"
+  ],
+  "enabled": false,
+  "installed": false,
+  "version": null,
+  "status": "disabled",
+  "auth": {
+    "status": "unknown"
+  },
+  "setup": {
+    "canAuthenticate": false,
+    "canInstall": false
+  },
+  "checkedAt": "2026-10-24T22:07:58.429Z",
+  "message": "Grok is disabled in T3 Code settings.",
+  "models": [
+    {
+      "slug": "grok-build",
+      "name": "Grok Build",
+      "isCustom": false,
+      "capabilities": {
+        "optionDescriptors": []
+      }
+    }
+  ],
+  "slashCommands": [],
+  "skills": [],
+  "instanceId": "grok",
+  "driver": "grok",
+  "continuation": {
+    "groupKey": "grok:instance:grok"
+  }
+}

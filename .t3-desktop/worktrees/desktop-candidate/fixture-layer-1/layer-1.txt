@@ -1,0 +1,9 @@
+Layer 1 placeholder text.
+Stale-head step: base merge
+Stale-head step: base rebase
+Stale-head step: candidate merge
+Stale-head step: candidate rebase
+Stale-head step: desktop base merge
+Stale-head step: desktop base rebase
+Stale-head step: desktop candidate merge
+Stale-head step: desktop candidate rebase

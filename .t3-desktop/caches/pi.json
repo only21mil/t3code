@@ -1,0 +1,41 @@
+{
+  "displayName": "Pi",
+  "showInteractionModeToggle": false,
+  "reportsContextWindow": true,
+  "supportedRuntimeModes": [
+    "approval-required",
+    "auto-accept-edits",
+    "full-access"
+  ],
+  "requiresNewThreadForModelChange": false,
+  "enabled": false,
+  "installed": false,
+  "version": null,
+  "status": "disabled",
+  "auth": {
+    "status": "unknown"
+  },
+  "setup": {
+    "canAuthenticate": false,
+    "canInstall": false
+  },
+  "checkedAt": "2026-10-24T22:07:58.439Z",
+  "message": "Pi is disabled in T3 Code settings.",
+  "models": [
+    {
+      "slug": "default",
+      "name": "Pi default",
+      "isCustom": false,
+      "capabilities": {
+        "optionDescriptors": []
+      }
+    }
+  ],
+  "slashCommands": [],
+  "skills": [],
+  "instanceId": "pi",
+  "driver": "pi",
+  "continuation": {
+    "groupKey": "pi:instance:pi"
+  }
+}

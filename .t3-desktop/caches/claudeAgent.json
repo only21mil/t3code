@@ -1,0 +1,1592 @@
+{
+  "displayName": "Claude",
+  "showInteractionModeToggle": true,
+  "reportsContextWindow": true,
+  "enabled": true,
+  "installed": true,
+  "version": "2.1.310",
+  "status": "ready",
+  "auth": {
+    "status": "authenticated",
+    "workspaceId": "aa1b7911-d106-4ec6-8505-a4773d629484",
+    "type": "customEndpoint",
+    "label": "Custom API endpoint"
+  },
+  "setup": {
+    "canAuthenticate": false,
+    "canInstall": false
+  },
+  "checkedAt": "2026-10-24T22:07:58.397Z",
+  "models": [
+    {
+      "slug": "claude-opus-5-5",
+      "name": "Claude Opus 5.5",
+      "aliases": [
+        "opus",
+        "opus-5.5",
+        "claude-opus-5.5"
+      ],
+      "isCustom": false,
+      "capabilities": {
+        "optionDescriptors": [
+          {
+            "id": "effort",
+            "label": "Reasoning",
+            "type": "select",
+            "options": [
+              {
+                "id": "low",
+                "label": "Low"
+              },
+              {
+                "id": "medium",
+                "label": "Medium",
+                "isDefault": true
+              },
+              {
+                "id": "high",
+                "label": "High"
+              },
+              {
+                "id": "xhigh",
+                "label": "Extra High"
+              },
+              {
+                "id": "max",
+                "label": "Max"
+              },
+              {
+                "id": "ultracode",
+                "label": "Ultracode",
+                "description": "xhigh effort plus multi-agent workflow orchestration"
+              },
+              {
+                "id": "ultrathink",
+                "label": "Ultrathink"
+              }
+            ],
+            "promptInjectedValues": [
+              "ultrathink"
+            ]
+          },
+          {
+            "id": "fastMode",
+            "label": "Fast Mode",
+            "type": "boolean"
+          }
+        ]
+      }
+    },
+    {
+      "slug": "claude-sonnet-5-5",
+      "name": "Claude Sonnet 5.5",
+      "aliases": [
+        "sonnet",
+        "sonnet-5.5",
+        "claude-sonnet-5.5"
+      ],
+      "isCustom": false,
+      "capabilities": {
+        "optionDescriptors": [
+          {
+            "id": "effort",
+            "label": "Reasoning",
+            "type": "select",
+            "options": [
+              {
+                "id": "low",
+                "label": "Low"
+              },
+              {
+                "id": "medium",
+                "label": "Medium"
+              },
+              {
+                "id": "high",
+                "label": "High",
+                "isDefault": true
+              },
+              {
+                "id": "xhigh",
+                "label": "Extra High"
+              },
+              {
+                "id": "max",
+                "label": "Max"
+              },
+              {
+                "id": "ultrathink",
+                "label": "Ultrathink"
+              }
+            ],
+            "promptInjectedValues": [
+              "ultrathink"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "slug": "claude-fable-5-1",
+      "name": "Claude Fable 5.1",
+      "aliases": [
+        "fable",
+        "fable-5.1",
+        "claude-fable-5.1"
+      ],
+      "isCustom": false,
+      "isDefault": true,
+      "capabilities": {
+        "optionDescriptors": [
+          {
+            "id": "effort",
+            "label": "Reasoning",
+            "type": "select",
+            "options": [
+              {
+                "id": "low",
+                "label": "Low"
+              },
+              {
+                "id": "medium",
+                "label": "Medium",
+                "isDefault": true
+              },
+              {
+                "id": "high",
+                "label": "High"
+              },
+              {
+                "id": "xhigh",
+                "label": "Extra High"
+              },
+              {
+                "id": "max",
+                "label": "Max"
+              },
+              {
+                "id": "ultracode",
+                "label": "Ultracode",
+                "description": "xhigh effort plus multi-agent workflow orchestration"
+              },
+              {
+                "id": "ultrathink",
+                "label": "Ultrathink"
+              }
+            ],
+            "promptInjectedValues": [
+              "ultrathink"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "slug": "claude-fable-5",
+      "name": "Claude Fable 5",
+      "isCustom": false,
+      "isLegacy": true,
+      "capabilities": {
+        "optionDescriptors": [
+          {
+            "id": "effort",
+            "label": "Reasoning",
+            "type": "select",
+            "options": [
+              {
+                "id": "low",
+                "label": "Low"
+              },
+              {
+                "id": "medium",
+                "label": "Medium",
+                "isDefault": true
+              },
+              {
+                "id": "high",
+                "label": "High"
+              },
+              {
+                "id": "xhigh",
+                "label": "Extra High"
+              },
+              {
+                "id": "max",
+                "label": "Max"
+              },
+              {
+                "id": "ultracode",
+                "label": "Ultracode",
+                "description": "xhigh effort plus multi-agent workflow orchestration"
+              },
+              {
+                "id": "ultrathink",
+                "label": "Ultrathink"
+              }
+            ],
+            "promptInjectedValues": [
+              "ultrathink"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "slug": "claude-opus-5",
+      "name": "Claude Opus 5",
+      "aliases": [
+        "opus-5",
+        "claude-opus-5.0",
+        "claude-opus-5-0"
+      ],
+      "isCustom": false,
+      "isLegacy": true,
+      "capabilities": {
+        "optionDescriptors": [
+          {
+            "id": "effort",
+            "label": "Reasoning",
+            "type": "select",
+            "options": [
+              {
+                "id": "low",
+                "label": "Low"
+              },
+              {
+                "id": "medium",
+                "label": "Medium"
+              },
+              {
+                "id": "high",
+                "label": "High",
+                "isDefault": true
+              },
+              {
+                "id": "xhigh",
+                "label": "Extra High"
+              },
+              {
+                "id": "max",
+                "label": "Max"
+              },
+              {
+                "id": "ultracode",
+                "label": "Ultracode",
+                "description": "xhigh effort plus multi-agent workflow orchestration"
+              },
+              {
+                "id": "ultrathink",
+                "label": "Ultrathink"
+              }
+            ],
+            "promptInjectedValues": [
+              "ultrathink"
+            ]
+          },
+          {
+            "id": "fastMode",
+            "label": "Fast Mode",
+            "type": "boolean"
+          }
+        ]
+      }
+    },
+    {
+      "slug": "claude-opus-4-8",
+      "name": "Claude Opus 4.8",
+      "aliases": [
+        "opus-4.8",
+        "claude-opus-4.8"
+      ],
+      "isCustom": false,
+      "isLegacy": true,
+      "capabilities": {
+        "optionDescriptors": [
+          {
+            "id": "effort",
+            "label": "Reasoning",
+            "type": "select",
+            "options": [
+              {
+                "id": "low",
+                "label": "Low"
+              },
+              {
+                "id": "medium",
+                "label": "Medium"
+              },
+              {
+                "id": "high",
+                "label": "High",
+                "isDefault": true
+              },
+              {
+                "id": "xhigh",
+                "label": "Extra High"
+              },
+              {
+                "id": "max",
+                "label": "Max"
+              },
+              {
+                "id": "ultracode",
+                "label": "Ultracode",
+                "description": "xhigh effort plus multi-agent workflow orchestration"
+              },
+              {
+                "id": "ultrathink",
+                "label": "Ultrathink"
+              }
+            ],
+            "promptInjectedValues": [
+              "ultrathink"
+            ]
+          },
+          {
+            "id": "fastMode",
+            "label": "Fast Mode",
+            "type": "boolean"
+          }
+        ]
+      }
+    },
+    {
+      "slug": "claude-opus-4-7",
+      "name": "Claude Opus 4.7",
+      "aliases": [
+        "opus-4.7",
+        "claude-opus-4.7"
+      ],
+      "isCustom": false,
+      "isLegacy": true,
+      "capabilities": {
+        "optionDescriptors": [
+          {
+            "id": "effort",
+            "label": "Reasoning",
+            "type": "select",
+            "options": [
+              {
+                "id": "low",
+                "label": "Low"
+              },
+              {
+                "id": "medium",
+                "label": "Medium"
+              },
+              {
+                "id": "high",
+                "label": "High"
+              },
+              {
+                "id": "xhigh",
+                "label": "Extra High",
+                "isDefault": true
+              },
+              {
+                "id": "max",
+                "label": "Max"
+              },
+              {
+                "id": "ultrathink",
+                "label": "Ultrathink"
+              }
+            ],
+            "promptInjectedValues": [
+              "ultrathink"
+            ]
+          },
+          {
+            "id": "fastMode",
+            "label": "Fast Mode",
+            "type": "boolean"
+          }
+        ]
+      }
+    },
+    {
+      "slug": "claude-opus-4-6",
+      "name": "Claude Opus 4.6",
+      "aliases": [
+        "opus-4.6",
+        "claude-opus-4.6",
+        "claude-opus-4-6-20251117"
+      ],
+      "isCustom": false,
+      "isLegacy": true,
+      "capabilities": {
+        "optionDescriptors": [
+          {
+            "id": "effort",
+            "label": "Reasoning",
+            "type": "select",
+            "options": [
+              {
+                "id": "low",
+                "label": "Low"
+              },
+              {
+                "id": "medium",
+                "label": "Medium"
+              },
+              {
+                "id": "high",
+                "label": "High",
+                "isDefault": true
+              },
+              {
+                "id": "max",
+                "label": "Max"
+              },
+              {
+                "id": "ultrathink",
+                "label": "Ultrathink"
+              }
+            ],
+            "promptInjectedValues": [
+              "ultrathink"
+            ]
+          },
+          {
+            "id": "fastMode",
+            "label": "Fast Mode",
+            "type": "boolean"
+          },
+          {
+            "id": "contextWindow",
+            "label": "Context Window",
+            "type": "select",
+            "options": [
+              {
+                "id": "200k",
+                "label": "200k"
+              },
+              {
+                "id": "1m",
+                "label": "1M",
+                "isDefault": true
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "slug": "claude-opus-4-5",
+      "name": "Claude Opus 4.5",
+      "isCustom": false,
+      "isLegacy": true,
+      "capabilities": {
+        "optionDescriptors": [
+          {
+            "id": "effort",
+            "label": "Reasoning",
+            "type": "select",
+            "options": [
+              {
+                "id": "low",
+                "label": "Low"
+              },
+              {
+                "id": "medium",
+                "label": "Medium"
+              },
+              {
+                "id": "high",
+                "label": "High",
+                "isDefault": true
+              },
+              {
+                "id": "max",
+                "label": "Max"
+              }
+            ]
+          },
+          {
+            "id": "fastMode",
+            "label": "Fast Mode",
+            "type": "boolean"
+          }
+        ]
+      }
+    },
+    {
+      "slug": "claude-sonnet-5",
+      "name": "Claude Sonnet 5",
+      "aliases": [
+        "sonnet-5",
+        "claude-sonnet-5.0",
+        "claude-sonnet-5-0"
+      ],
+      "isCustom": false,
+      "isLegacy": true,
+      "capabilities": {
+        "optionDescriptors": [
+          {
+            "id": "effort",
+            "label": "Reasoning",
+            "type": "select",
+            "options": [
+              {
+                "id": "low",
+                "label": "Low"
+              },
+              {
+                "id": "medium",
+                "label": "Medium"
+              },
+              {
+                "id": "high",
+                "label": "High",
+                "isDefault": true
+              },
+              {
+                "id": "xhigh",
+                "label": "Extra High"
+              },
+              {
+                "id": "max",
+                "label": "Max"
+              },
+              {
+                "id": "ultrathink",
+                "label": "Ultrathink"
+              }
+            ],
+            "promptInjectedValues": [
+              "ultrathink"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "slug": "claude-sonnet-4-6",
+      "name": "Claude Sonnet 4.6",
+      "aliases": [
+        "sonnet-4.6",
+        "claude-sonnet-4.6",
+        "claude-sonnet-4-6-20251117"
+      ],
+      "isCustom": false,
+      "isLegacy": true,
+      "capabilities": {
+        "optionDescriptors": [
+          {
+            "id": "effort",
+            "label": "Reasoning",
+            "type": "select",
+            "options": [
+              {
+                "id": "low",
+                "label": "Low"
+              },
+              {
+                "id": "medium",
+                "label": "Medium"
+              },
+              {
+                "id": "high",
+                "label": "High",
+                "isDefault": true
+              },
+              {
+                "id": "max",
+                "label": "Max"
+              },
+              {
+                "id": "ultrathink",
+                "label": "Ultrathink"
+              }
+            ],
+            "promptInjectedValues": [
+              "ultrathink"
+            ]
+          },
+          {
+            "id": "contextWindow",
+            "label": "Context Window",
+            "type": "select",
+            "options": [
+              {
+                "id": "200k",
+                "label": "200k",
+                "isDefault": true
+              },
+              {
+                "id": "1m",
+                "label": "1M"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "slug": "claude-haiku-5-5",
+      "name": "Claude Haiku 5.5",
+      "aliases": [
+        "haiku",
+        "haiku-5.5",
+        "claude-haiku-5.5"
+      ],
+      "badge": "new",
+      "isCustom": false,
+      "capabilities": {
+        "optionDescriptors": [
+          {
+            "id": "effort",
+            "label": "Reasoning",
+            "type": "select",
+            "options": [
+              {
+                "id": "low",
+                "label": "Low"
+              },
+              {
+                "id": "medium",
+                "label": "Medium",
+                "isDefault": true
+              },
+              {
+                "id": "high",
+                "label": "High"
+              },
+              {
+                "id": "xhigh",
+                "label": "Extra High"
+              },
+              {
+                "id": "max",
+                "label": "Max"
+              },
+              {
+                "id": "ultrathink",
+                "label": "Ultrathink"
+              }
+            ],
+            "promptInjectedValues": [
+              "ultrathink"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "slug": "claude-haiku-4-5",
+      "name": "Claude Haiku 4.5",
+      "aliases": [
+        "haiku-4.5",
+        "claude-haiku-4.5",
+        "claude-haiku-4-5-20251001"
+      ],
+      "isCustom": false,
+      "isLegacy": true,
+      "capabilities": {
+        "optionDescriptors": [
+          {
+            "id": "thinking",
+            "label": "Thinking",
+            "type": "boolean",
+            "currentValue": true
+          }
+        ]
+      }
+    }
+  ],
+  "slashCommands": [
+    {
+      "name": "compact",
+      "description": "Summarize the conversation and reduce context usage",
+      "input": {
+        "hint": "<optional custom summarization instructions>"
+      }
+    },
+    {
+      "name": "asc-app-create-ui",
+      "description": "Create App Store Connect app records through the browser New App form. (user)"
+    },
+    {
+      "name": "asc-build-lifecycle",
+      "description": "Find builds, track processing, and manage build retention with asc; include in upload flows. (user)"
+    },
+    {
+      "name": "asc-cli-usage",
+      "description": "Foundation for all App Store Connect CLI work: discover, design, and run asc commands — auth, output conventions, id-first resolution, pagination, and the non-interactive rules every asc-* skill composes on. (user)"
+    },
+    {
+      "name": "asc-crash-triage",
+      "description": "Triage TestFlight crashes, beta feedback, hangs, disk writes, launch diagnostics, and build or app performance summaries with asc. (user)"
+    },
+    {
+      "name": "asc-id-resolver",
+      "description": "Resolve App Store Connect IDs for apps, builds, app or digital-goods versions, groups, and testers from names. (user)"
+    },
+    {
+      "name": "asc-metadata-sync",
+      "description": "Sync, validate, or update App Store metadata, localizations, and keywords; migrate legacy fastlane metadata. (user)"
+    },
+    {
+      "name": "asc-notarization",
+      "description": "Archive, export, and notarize macOS apps for distribution outside the App Store with Developer ID signing. (user)"
+    },
+    {
+      "name": "asc-release-flow",
+      "description": "Prepare or execute App Store releases: staging, build/upload, publication, review submission, and Game Center items. Route readiness failures, stuck reviews, cancellation, and retries to asc-submission-health. (user)"
+    },
+    {
+      "name": "asc-screenshot-resize",
+      "description": "Resize and validate App Store submission screenshots with asc size data and macOS sips. (user)"
+    },
+    {
+      "name": "asc-shots-pipeline",
+      "description": "Automate iOS screenshot capture, AXe simulator flows, Koubou framing, and screenshot uploads with asc. (user)"
+    },
+    {
+      "name": "asc-signing-setup",
+      "description": "Set up or rotate bundle IDs, capabilities, signing certificates, profiles, and encrypted team signing sync with asc. (user)"
+    },
+    {
+      "name": "asc-submission-health",
+      "description": "Validate App Store readiness; diagnose blockers, invalid states, stuck or failed reviews; cancel and retry. Route staging, upload, publication, and submission execution to asc-release-flow. (user)"
+    },
+    {
+      "name": "asc-testflight-orchestration",
+      "description": "Roll out TestFlight betas; manage distribution, groups, testers, and What to Test notes with asc. (user)"
+    },
+    {
+      "name": "asc-whats-new-writer",
+      "description": "Write localized App Store release notes from git history, bullets, or free text, with optional promotional text. (user)"
+    },
+    {
+      "name": "asc-workflow",
+      "description": "Define, validate, run, resume, and audit repo-local asc workflow automations and step outputs for release or TestFlight. (user)"
+    },
+    {
+      "name": "asc-xcode-build",
+      "description": "Build, archive, export IPA/PKG, upload, generate export options, and manage Xcode version/build numbers with asc. (user)"
+    },
+    {
+      "name": "ask-matt",
+      "description": "Ask which skill or flow fits your situation. A router over the skills in this repo. (user)"
+    },
+    {
+      "name": "code-review",
+      "description": "Standards and spec audit of the diff since a fixed point, run only when the user asks for code-review by name. It does not accept or block a change; review-and-babysit reviews changes for acceptance. (user)"
+    },
+    {
+      "name": "codebase-design",
+      "description": "Shared vocabulary for designing deep modules. Use when the user wants to design or improve a module's interface, find deepening opportunities, decide where a seam goes, make code more testable or AI-navigable, or when another skill needs the deep-module vocabulary. (user)"
+    },
+    {
+      "name": "cua-driver",
+      "description": "Drive a native GUI app (macOS, Windows, Linux) via the cua-driver CLI (default) or MCP server; snapshot its accessibility tree, act through snapshot-bound element tokens, native menu paths, exact window geometry, or pixel coordinates, and verify from fresh state. Use when the user asks you to operate, drive, automate, or perform a GUI task in a real application on the host, or to continue, resume, or recall recent Cua activity. (user)"
+    },
+    {
+      "name": "diagnosing-bugs",
+      "description": "Diagnosis loop for hard bugs and performance regressions. Use when the user says \"diagnose\"/\"debug this\", or reports something broken/throwing/failing/slow. (user)"
+    },
+    {
+      "name": "domain-modeling",
+      "description": "Build and sharpen a project's domain model. Use when discussing codebase terminology, writing or editing a CONTEXT.md, or recording or editing an ADR. (user)"
+    },
+    {
+      "name": "frontend-design",
+      "description": "Guidance for distinctive, intentional visual design when building new UI or reshaping an existing one. Helps with aesthetic direction, typography, and making choices that don't read as templated defaults. (user)"
+    },
+    {
+      "name": "graphify",
+      "description": "Search Victor/Sats canon and Obsidian memory efficiently with a refreshed text index and Graphify link graph; also query or build repository graphs when relevant. (user)"
+    },
+    {
+      "name": "grill-me",
+      "description": "A relentless interview to sharpen a plan or design. (user)"
+    },
+    {
+      "name": "grill-with-docs",
+      "description": "A relentless interview to sharpen a plan or design, which also creates docs (ADR's and glossary) as we go. (user)"
+    },
+    {
+      "name": "grilling",
+      "description": "Grill the user relentlessly about a plan, decision, or idea. Use when the user wants to stress-test their thinking, or uses any 'grill' trigger phrases. (user)"
+    },
+    {
+      "name": "handoff",
+      "description": "Compact the current conversation into a handoff document for another agent to pick up. (user)",
+      "input": {
+        "hint": "What will the next session be used for?"
+      }
+    },
+    {
+      "name": "html_report",
+      "description": "Use when Victor asks for an HTML report or annotated results page. Builds one verified self-contained HTML file in his canonical warm-paper design (v1.2.0), presented via sandbox:// link. Not for chat summaries, artifacts, or unprompted HTML. (user)"
+    },
+    {
+      "name": "implement",
+      "description": "Implement a piece of work based on a spec or set of tickets. (user)"
+    },
+    {
+      "name": "improve-codebase-architecture",
+      "description": "Scan a codebase for deepening opportunities, present them as a visual HTML report, then grill through whichever one you pick. (user)"
+    },
+    {
+      "name": "last30days",
+      "description": "Research what people actually say about any topic in the last 30 days. Pulls posts and engagement from Reddit, X, YouTube, TikTok, Hacker News, Polymarket, GitHub, and the web. Includes a doctor health check to diagnose broken or missing sources. (user)",
+      "input": {
+        "hint": "last30days nvidia earnings reaction | last30days AI video tools | last30days what users want in react"
+      }
+    },
+    {
+      "name": "omarchy-config",
+      "description": "Change Omarchy or Hyprland config on Victor's hosts (f13pro, fd, yoga) through the omarchy-dotfiles repo, ending at a dryrun and an apply command for Victor. Use for \"change my Omarchy config\", Hyprland settings, keybindings, monitors, gaps, input, autostart, the bar (shell.json), terminal configs. On these hosts it takes precedence over the `omarchy` skill. (user)"
+    },
+    {
+      "name": "prototype",
+      "description": "Build a throwaway prototype to answer a design question. Use when the user wants to sanity-check whether a state model or logic feels right, or explore what a UI should look like. (user)"
+    },
+    {
+      "name": "research",
+      "description": "Investigate a question against high-trust primary sources and capture the findings as a Markdown file in the repo. Use when the user wants a topic researched, docs or API facts gathered, or reading legwork delegated to a background agent. (user)"
+    },
+    {
+      "name": "resolving-merge-conflicts",
+      "description": "Use when you need to resolve an in-progress git merge/rebase conflict. (user)"
+    },
+    {
+      "name": "reverse-engineer-anything",
+      "description": "Reverse engineer native, managed, Electron/JavaScript, packaged, firmware, and browser targets with REA. Use shipped-artifact or requested runtime evidence to explain features, compare versions, decompile code, or guide a reconstruction. Skip REA for ordinary source-repository architecture analysis. (user)"
+    },
+    {
+      "name": "review-and-babysit",
+      "description": "The only Sats review process on every machine and harness. Decide whether a change needs review; use fresh voting reviewers chosen by producer under § Who reviews; settle findings by severity; babysit open PRs until ready for merge. (user)"
+    },
+    {
+      "name": "setup-matt-pocock-skills",
+      "description": "Configure this repo for the engineering skills: set up its issue tracker, triage label vocabulary, and domain doc layout. Run once before first use of the other engineering skills. (user)"
+    },
+    {
+      "name": "t3-orchestrator-prompt",
+      "description": "Use when a bot (Grok Bot seat, Muse, Claude Code, Codex) starts a project build, repo code or long multi-phase work: launch or prompt ONE T3 Code Nightly thread that follows the canonical all-harness T3 rules, then only monitor it. (user)"
+    },
+    {
+      "name": "tdd",
+      "description": "Test-driven development. Use when the user wants to build features or fix bugs test-first, mentions \"red-green-refactor\", or wants integration tests. (user)"
+    },
+    {
+      "name": "teach",
+      "description": "Teach the user a new skill or concept, within this workspace. (user)",
+      "input": {
+        "hint": "What would you like to learn about?"
+      }
+    },
+    {
+      "name": "to-questionnaire",
+      "description": "Turn a decision you can't fully answer into a questionnaire for someone else to fill in. (user)"
+    },
+    {
+      "name": "to-spec",
+      "description": "Turn the current conversation into a spec and publish it to the project issue tracker: no interview, just synthesis of what you've already discussed. (user)"
+    },
+    {
+      "name": "to-tickets",
+      "description": "Break a plan, spec, or the current conversation into a set of tracer-bullet tickets, each declaring its blocking edges, published to the configured tracker (edges as text in one file per ticket locally, or native blocking links on a real tracker). (user)"
+    },
+    {
+      "name": "triage",
+      "description": "Move issues and external PRs through a state machine of triage roles, categorise, verify, grill if needed, and write agent-ready briefs. (user)"
+    },
+    {
+      "name": "unslop",
+      "description": "Cut AI tells from any writing. Must always apply. (user)"
+    },
+    {
+      "name": "wait-what",
+      "description": "Stop. That last message did not land: re-pitch it. (user)"
+    },
+    {
+      "name": "wayfinder",
+      "description": "Plan a huge chunk of work (more than one agent session can hold) as a shared map of decision tickets on your issue tracker, and resolve them one at a time until the way to the destination is clear. (user)"
+    },
+    {
+      "name": "wizard",
+      "description": "Generate an interactive bash wizard that walks a human through steps only they can perform. Use when provisioning infrastructure, setting up credentials or CI secrets, walking an unfamiliar third-party dashboard, or running a one-off migration or cutover. Don't invoke this for steps the agent can perform itself. (user)"
+    },
+    {
+      "name": "writing-for-agents",
+      "description": "Writing documents for agents. Use when creating or editing skills, or modifying AGENTS.md or CLAUDE.md. (user)"
+    },
+    {
+      "name": "contribution-triage",
+      "description": "Enforce T3 Code's PR contribution policy by closing ineligible submissions and triggering Macroscope review for eligible work within authorized scope. Supports explicit dry runs. Use for contribution moderation, not installation diagnostics or a full code review. (project)"
+    },
+    {
+      "name": "test-t3-app",
+      "description": "Test T3 Code's web and desktop UI through its built-in Browser panel against isolated development state. Use for browser verification, browser pairing recovery, and test fixtures. Use test-t3-mobile for native mobile verification. (project)"
+    },
+    {
+      "name": "test-t3-mobile",
+      "description": "Test T3 Code's native iOS and Android app through its Device panel and returned AgentDevice command. Use for mobile verification, native-client builds, Metro launch, and mobile pairing against isolated development state. (project)"
+    },
+    {
+      "name": "deep-research",
+      "description": "Deep research harness — fan-out web searches, fetch sources, adversarially verify claims, synthesize a cited report. (dynamic workflow)"
+    },
+    {
+      "name": "design",
+      "description": "Grant or revoke Claude agent access to your Design projects",
+      "input": {
+        "hint": "consent | revoke"
+      }
+    },
+    {
+      "name": "design-sync",
+      "description": "Push a React design system to claude.ai/design. This runs a converter that bundles the real component code (from Storybook or a bare package) and uploads it. Use when the user runs /design-sync or says \"sync my design system to Claude Design\".",
+      "input": {
+        "hint": "[<project hint, e.g. \"Acme DS\">]"
+      }
+    },
+    {
+      "name": "dataviz",
+      "description": "Use this skill whenever you are about to create ANY chart, graph, plot, dashboard, or data visualization, in ANY output medium — an HTML or React artifact, inline SVG, plotting code in any library (matplotlib, plotly, d3, Recharts, …), an image/PNG you will render and upload, or a chart shared into Slack. Read it BEFORE writing the first line of chart code, choosing chart colors, building a stat tile / meter / KPI row, or laying out a dashboard. When the destination is a first-party document connector (host-designated, never self-described) that renders live charts, hand it the rows (inline, or as an uploaded data file the chart cites) rather than a rendered PNG/SVG — a picture of a chart loses hover, data inspection and per-value comments. Produces visualizations that read as one system — elegant, accessible, consistent in light and dark — using a brand-neutral placeholder palette you swap for your own. Teaches a design-system-agnostic method: a form heuristic, a color formula with a runnable validator, mark specs, and interaction rules. A validated default palette is documented in `references/palette.md` — swap that file's values for your brand's. Triggers on: \"chart\", \"graph\", \"plot\", \"data viz\", \"visualization\", \"dashboard\", \"analytics\", \"visualize data\", \"categorical colors\", \"sequential / diverging palette\", \"stat tile\", \"sparkline\", \"heatmap\", \"legend\", \"axis\", \"tooltip\", \"chart colors\", \"color by series\"."
+    },
+    {
+      "name": "update-config",
+      "description": "Use this skill to configure the Claude Code harness via settings.json. Automated behaviors (\"from now on when X\", \"each time X\", \"whenever X\", \"before/after X\") require hooks configured in settings.json - the harness executes these, not Claude, so memory/preferences cannot fulfill them. Also use for: permissions (\"allow X\", \"add permission\", \"move permission to\"), env vars (\"set X=Y\"), hook troubleshooting, or any changes to settings.json/settings.local.json files. Examples: \"allow npm commands\", \"add bq permission to global settings\", \"move permission to user settings\", \"set DEBUG=true\", \"when claude stops show X\". For simple settings like theme/model, suggest the /config command."
+    },
+    {
+      "name": "verify",
+      "description": "Verify that a code change actually does what it's supposed to by exercising it end-to-end and observing behavior — drive the affected flow, not just tests or typecheck. Run before committing nontrivial changes; bootstraps this repo's project verify skill if none exists yet. Don't invoke it on a diff that only touches tests, docs, or other code with no runtime surface to drive (a change to product source always has one) — there's nothing to observe."
+    },
+    {
+      "name": "debug",
+      "description": "Enable debug logging for this session and help diagnose issues",
+      "input": {
+        "hint": "[issue description]"
+      }
+    },
+    {
+      "name": "simplify",
+      "description": "Review the changed code for reuse, simplification, efficiency, and altitude cleanups, then apply the fixes. Quality only — it does not hunt for bugs; use /code-review for that.",
+      "input": {
+        "hint": "[<target>]"
+      }
+    },
+    {
+      "name": "batch",
+      "description": "Research and plan a large-scale change, then execute it in parallel across 5–30 isolated worktree agents that each open a PR.",
+      "input": {
+        "hint": "<instruction>"
+      }
+    },
+    {
+      "name": "fewer-permission-prompts",
+      "description": "Scan your transcripts for common read-only Bash and MCP tool calls, then add a prioritized allowlist to project .claude/settings.json to reduce permission prompts."
+    },
+    {
+      "name": "doctor",
+      "description": "Health-check the user's Claude Code setup and fix issues: diagnose installation health — what the `claude doctor` terminal diagnostics cover — from local data (duplicate or leftover installs, PATH, unparseable settings files, broken or colliding agent definitions, skills whose frontmatter fails to parse); find unused skills, MCP servers, and plugins versus their context cost and disable dead weight; deduplicate local CLAUDE.md files against checked-in ones; trim checked-in CLAUDE.md files by cutting content a session could derive from the codebase (directory layouts, tech-stack lists, architecture overviews) while keeping gotchas, rationale, and non-standard conventions; migrate always-loaded CLAUDE.md guidance into lazy skills and nested CLAUDE.md files; flag slow hooks and context-heavy extensions; check the installed version is current; make auto mode the default permission mode; and pre-approve frequently denied read-only commands. Use when the user asks for a doctor run, checkup, audit, tune-up, or cleanup of their Claude Code setup or configuration.",
+      "input": {
+        "hint": "[prompt-audit [<path>]]"
+      }
+    },
+    {
+      "name": "loop",
+      "description": "Run a prompt or slash command on a recurring interval (e.g. /loop 5m /foo). Omit the interval to let the model self-pace.",
+      "input": {
+        "hint": "[interval] [prompt]"
+      }
+    },
+    {
+      "name": "claude-api",
+      "description": "Reference for the Claude API / Anthropic SDK — model ids, pricing, params, streaming, tool use, MCP, agents, caching, token counting, model migration.\nTRIGGER — read BEFORE opening the target file; don't skip because it \"looks like a one-liner\" — whenever: the prompt names Claude/Anthropic in any form (Claude, Anthropic, Fable, Opus, Sonnet, Haiku, `anthropic`, `@anthropic-ai`, `claude-*`, `us.anthropic.*`, `[1m]`); the user asks about an LLM (pricing/model choice/limits/caching) — never answer from memory; OR the task is LLM-shaped with provider unstated (agent/MCP/tool-definition/multi-agent/RAG/LLM-judge/computer-use; generate/summarize/extract/classify/rewrite/converse over NL; debugging refusals/cutoffs/streaming/tool-calls/tokens).\nSKIP only when another provider is being worked on (overrides all triggers): OpenAI/GPT/Gemini/Llama/Mistral/Cohere/Ollama named in the query; OR `grep -rE 'openai|langchain_openai|google.generativeai|genai|mistralai|cohere|ollama'` over the project hits (run this grep FIRST if no provider named — don't Read the file)."
+    },
+    {
+      "name": "workflow-authoring",
+      "description": "Reference for writing a Workflow tool script (script API and gotchas, resume, quality patterns, worked examples). Load before authoring a script for a workflow the user already opted into; it does not itself authorize running one."
+    },
+    {
+      "name": "run",
+      "description": "Launch and drive this project's app to see a change working. Use when asked to run, start, or screenshot the app, or to confirm a change works in the real app (not just tests). First looks for a project skill that already covers launching the app; otherwise falls back to built-in patterns per project type (CLI, server, TUI, Electron, browser-driven, library)."
+    },
+    {
+      "name": "run-skill-generator",
+      "description": "Author or improve the run-<unit> skill - a per-project skill that tells agents how to build, launch, and drive this project's app. Use when the user asks to set up the project, get it running, write run instructions, or verify build/run steps work from a clean environment."
+    },
+    {
+      "name": "plugin-authoring",
+      "description": "Make a mod: a change to Claude's own interface or behaviour, such as a panel or pane that stays beside the chat and updates, a band, status line, toast, slash command, or hook on tool calls. Use to make, change or debug a mod or its hooks module."
+    },
+    {
+      "name": "advisor",
+      "description": "Let Claude consult a stronger model at key moments",
+      "input": {
+        "hint": "[fable|opus|sonnet|off]"
+      }
+    },
+    {
+      "name": "agents",
+      "description": "(removed) Ask Claude to create/manage subagents, or edit .claude/agents/"
+    },
+    {
+      "name": "auto-mode-setup",
+      "description": "Teach auto mode about your environment, plus optional rule tweaks",
+      "input": {
+        "hint": "[--request-id <uuid>] (--wizard posture=… scope=… depth=… --propose | --expect-sha256 <64-hex> --apply-file <path>)"
+      }
+    },
+    {
+      "name": "autocompact",
+      "description": "Configure the auto-compact window size",
+      "input": {
+        "hint": "[auto|<tokens>]"
+      }
+    },
+    {
+      "name": "clear",
+      "description": "Start a new session with empty context; previous session stays on disk (resumable with /resume)",
+      "input": {
+        "hint": "[name]"
+      }
+    },
+    {
+      "name": "color",
+      "description": "Set the prompt bar color for this session",
+      "input": {
+        "hint": "[red|blue|green|yellow|purple|orange|pink|cyan|default]"
+      }
+    },
+    {
+      "name": "config",
+      "description": "Set a setting by key",
+      "input": {
+        "hint": "key=value"
+      }
+    },
+    {
+      "name": "output-style",
+      "description": "List output styles or switch to one",
+      "input": {
+        "hint": "[style]"
+      }
+    },
+    {
+      "name": "context",
+      "description": "Show current context usage"
+    },
+    {
+      "name": "effort",
+      "description": "Set effort level for model usage",
+      "input": {
+        "hint": "<low|medium|high|xhigh|max|auto|ultracode [on|off]>"
+      }
+    },
+    {
+      "name": "fast",
+      "description": "Toggle fast mode (Opus 5.5)",
+      "input": {
+        "hint": "[on|off]"
+      }
+    },
+    {
+      "name": "focus",
+      "description": "Toggle focus view: just your prompt, summary, and response",
+      "input": {
+        "hint": "[on|off]"
+      }
+    },
+    {
+      "name": "heapdump",
+      "description": "Dump the JS heap to the Desktop; on Linux with no Desktop folder, the home directory"
+    },
+    {
+      "name": "init",
+      "description": "Initialize a new CLAUDE.md file with codebase documentation"
+    },
+    {
+      "name": "mcp",
+      "description": "Manage MCP servers",
+      "input": {
+        "hint": "[reconnect|enable|disable [<server>|all]]"
+      }
+    },
+    {
+      "name": "import",
+      "description": "Import config from another AI coding agent"
+    },
+    {
+      "name": "model",
+      "description": "Set the AI model for Claude Code",
+      "input": {
+        "hint": "<model>"
+      }
+    },
+    {
+      "name": "__remote-workflow",
+      "description": "Run the workflow script delivered in this session environment (server-launched sessions only)"
+    },
+    {
+      "name": "workflow-launch-exec",
+      "description": "Execute a server-launched workflow handoff (workflow_launch event sessions only)"
+    },
+    {
+      "name": "reload-plugins",
+      "description": "Activate pending plugin changes in the current session",
+      "input": {
+        "hint": "[--force]"
+      }
+    },
+    {
+      "name": "reload-skills",
+      "description": "Pick up skills added or changed on disk during this session"
+    },
+    {
+      "name": "rename",
+      "description": "Rename the current conversation",
+      "input": {
+        "hint": "[name]"
+      }
+    },
+    {
+      "name": "security-review",
+      "description": "Complete a security review of the pending changes on the current branch"
+    },
+    {
+      "name": "usage",
+      "description": "Show session cost, plan usage, and what's contributing to your limits"
+    },
+    {
+      "name": "insights",
+      "description": "Generate a report analyzing your Claude Code sessions"
+    },
+    {
+      "name": "recap",
+      "description": "Generate a one-line session recap now"
+    },
+    {
+      "name": "skill-doctor",
+      "description": "Show which loaded skills are unused and costing context"
+    },
+    {
+      "name": "goal",
+      "description": "Set a goal — keep working until the condition is met"
+    },
+    {
+      "name": "design-consent",
+      "description": "Grant Claude agent access to your Design projects"
+    },
+    {
+      "name": "design-revoke",
+      "description": "Revoke Claude agent access to your Design projects"
+    },
+    {
+      "name": "list-agents",
+      "description": "List subagents, teammates, and other Claude sessions you can message"
+    },
+    {
+      "name": "team-onboarding",
+      "description": "Help teammates ramp on Claude Code with a guide from your usage"
+    }
+  ],
+  "skills": [
+    {
+      "name": "asc-app-create-ui",
+      "path": "/home/victor/.claude/skills/asc-app-create-ui/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Create App Store Connect app records through the browser New App form."
+    },
+    {
+      "name": "asc-build-lifecycle",
+      "path": "/home/victor/.claude/skills/asc-build-lifecycle/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Find builds, track processing, and manage build retention with asc; include in upload flows."
+    },
+    {
+      "name": "asc-cli-usage",
+      "path": "/home/victor/.claude/skills/asc-cli-usage/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Foundation for all App Store Connect CLI work: discover, design, and run asc commands — auth, output conventions, id-first resolution, pagination, and the non-interactive rules every asc-* skill composes on."
+    },
+    {
+      "name": "asc-crash-triage",
+      "path": "/home/victor/.claude/skills/asc-crash-triage/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Triage TestFlight crashes, beta feedback, hangs, disk writes, launch diagnostics, and build or app performance summaries with asc."
+    },
+    {
+      "name": "asc-id-resolver",
+      "path": "/home/victor/.claude/skills/asc-id-resolver/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Resolve App Store Connect IDs for apps, builds, app or digital-goods versions, groups, and testers from names."
+    },
+    {
+      "name": "asc-metadata-sync",
+      "path": "/home/victor/.claude/skills/asc-metadata-sync/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Sync, validate, or update App Store metadata, localizations, and keywords; migrate legacy fastlane metadata."
+    },
+    {
+      "name": "asc-notarization",
+      "path": "/home/victor/.claude/skills/asc-notarization/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Archive, export, and notarize macOS apps for distribution outside the App Store with Developer ID signing."
+    },
+    {
+      "name": "asc-release-flow",
+      "path": "/home/victor/.claude/skills/asc-release-flow/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Prepare or execute App Store releases: staging, build/upload, publication, review submission, and Game Center items. Route readiness failures, stuck reviews, cancellation, and retries to asc-submission-health."
+    },
+    {
+      "name": "asc-screenshot-resize",
+      "path": "/home/victor/.claude/skills/asc-screenshot-resize/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Resize and validate App Store submission screenshots with asc size data and macOS sips."
+    },
+    {
+      "name": "asc-shots-pipeline",
+      "path": "/home/victor/.claude/skills/asc-shots-pipeline/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Automate iOS screenshot capture, AXe simulator flows, Koubou framing, and screenshot uploads with asc."
+    },
+    {
+      "name": "asc-signing-setup",
+      "path": "/home/victor/.claude/skills/asc-signing-setup/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Set up or rotate bundle IDs, capabilities, signing certificates, profiles, and encrypted team signing sync with asc."
+    },
+    {
+      "name": "asc-submission-health",
+      "path": "/home/victor/.claude/skills/asc-submission-health/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Validate App Store readiness; diagnose blockers, invalid states, stuck or failed reviews; cancel and retry. Route staging, upload, publication, and submission execution to asc-release-flow."
+    },
+    {
+      "name": "asc-testflight-orchestration",
+      "path": "/home/victor/.claude/skills/asc-testflight-orchestration/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Roll out TestFlight betas; manage distribution, groups, testers, and What to Test notes with asc."
+    },
+    {
+      "name": "asc-whats-new-writer",
+      "path": "/home/victor/.claude/skills/asc-whats-new-writer/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Write localized App Store release notes from git history, bullets, or free text, with optional promotional text."
+    },
+    {
+      "name": "asc-workflow",
+      "path": "/home/victor/.claude/skills/asc-workflow/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Define, validate, run, resume, and audit repo-local asc workflow automations and step outputs for release or TestFlight."
+    },
+    {
+      "name": "asc-xcode-build",
+      "path": "/home/victor/.claude/skills/asc-xcode-build/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Build, archive, export IPA/PKG, upload, generate export options, and manage Xcode version/build numbers with asc."
+    },
+    {
+      "name": "ask-matt",
+      "path": "/home/victor/.claude/skills/ask-matt/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Ask which skill or flow fits your situation. A router over the skills in this repo.",
+      "userInvocationOnly": true
+    },
+    {
+      "name": "code-review",
+      "path": "/home/victor/.claude/skills/code-review/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Standards and spec audit of the diff since a fixed point, run only when the user asks for code-review by name. It does not accept or block a change; review-and-babysit reviews changes for acceptance."
+    },
+    {
+      "name": "codebase-design",
+      "path": "/home/victor/.claude/skills/codebase-design/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Shared vocabulary for designing deep modules. Use when the user wants to design or improve a module's interface, find deepening opportunities, decide where a seam goes, make code more testable or AI-navigable, or when another skill needs the deep-module vocabulary."
+    },
+    {
+      "name": "cua-driver",
+      "path": "/home/victor/.claude/skills/cua-driver/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Drive a native GUI app (macOS, Windows, Linux) via the cua-driver CLI (default) or MCP server; snapshot its accessibility tree, act through snapshot-bound element tokens, native menu paths, exact window geometry, or pixel coordinates, and verify from fresh state. Use when the user asks you to operate, drive, automate, or perform a GUI task in a real application on the host, or to continue, resume, or recall recent Cua activity."
+    },
+    {
+      "name": "diagnosing-bugs",
+      "path": "/home/victor/.claude/skills/diagnosing-bugs/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Diagnosis loop for hard bugs and performance regressions. Use when the user says \"diagnose\"/\"debug this\", or reports something broken/throwing/failing/slow."
+    },
+    {
+      "name": "domain-modeling",
+      "path": "/home/victor/.claude/skills/domain-modeling/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Build and sharpen a project's domain model. Use when discussing codebase terminology, writing or editing a CONTEXT.md, or recording or editing an ADR."
+    },
+    {
+      "name": "frontend-design",
+      "path": "/home/victor/.claude/skills/frontend-design/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Guidance for distinctive, intentional visual design when building new UI or reshaping an existing one. Helps with aesthetic direction, typography, and making choices that don't read as templated defaults."
+    },
+    {
+      "name": "graphify",
+      "path": "/home/victor/.claude/skills/graphify/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Search Victor/Sats canon and Obsidian memory efficiently with a refreshed text index and Graphify link graph; also query or build repository graphs when relevant."
+    },
+    {
+      "name": "grill-me",
+      "path": "/home/victor/.claude/skills/grill-me/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "A relentless interview to sharpen a plan or design.",
+      "userInvocationOnly": true
+    },
+    {
+      "name": "grill-with-docs",
+      "path": "/home/victor/.claude/skills/grill-with-docs/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "A relentless interview to sharpen a plan or design, which also creates docs (ADR's and glossary) as we go.",
+      "userInvocationOnly": true
+    },
+    {
+      "name": "grilling",
+      "path": "/home/victor/.claude/skills/grilling/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Grill the user relentlessly about a plan, decision, or idea. Use when the user wants to stress-test their thinking, or uses any 'grill' trigger phrases."
+    },
+    {
+      "name": "handoff",
+      "path": "/home/victor/.claude/skills/handoff/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Compact the current conversation into a handoff document for another agent to pick up.",
+      "userInvocationOnly": true
+    },
+    {
+      "name": "html-report",
+      "path": "/home/victor/.claude/skills/html-report/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Use when Victor asks for an HTML report or annotated results page. Builds one verified self-contained HTML file in his canonical warm-paper design (v1.2.0), presented via sandbox:// link. Not for chat summaries, artifacts, or unprompted HTML."
+    },
+    {
+      "name": "implement",
+      "path": "/home/victor/.claude/skills/implement/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Implement a piece of work based on a spec or set of tickets.",
+      "userInvocationOnly": true
+    },
+    {
+      "name": "improve-codebase-architecture",
+      "path": "/home/victor/.claude/skills/improve-codebase-architecture/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Scan a codebase for deepening opportunities, present them as a visual HTML report, then grill through whichever one you pick.",
+      "userInvocationOnly": true
+    },
+    {
+      "name": "last30days",
+      "path": "/home/victor/.claude/skills/last30days/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Research what people actually say about any topic in the last 30 days. Pulls posts and engagement from Reddit, X, YouTube, TikTok, Hacker News, Polymarket, GitHub, and the web. Includes a doctor health check to diagnose broken or missing sources."
+    },
+    {
+      "name": "omarchy-config",
+      "path": "/home/victor/.claude/skills/omarchy-config/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Change Omarchy or Hyprland config on Victor's hosts (f13pro, fd, yoga) through the omarchy-dotfiles repo, ending at a dryrun and an apply command for Victor. Use for \"change my Omarchy config\", Hyprland settings, keybindings, monitors, gaps, input, autostart, the bar (shell.json), terminal configs. On these hosts it takes precedence over the `omarchy` skill."
+    },
+    {
+      "name": "prototype",
+      "path": "/home/victor/.claude/skills/prototype/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Build a throwaway prototype to answer a design question. Use when the user wants to sanity-check whether a state model or logic feels right, or explore what a UI should look like."
+    },
+    {
+      "name": "research",
+      "path": "/home/victor/.claude/skills/research/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Investigate a question against high-trust primary sources and capture the findings as a Markdown file in the repo. Use when the user wants a topic researched, docs or API facts gathered, or reading legwork delegated to a background agent."
+    },
+    {
+      "name": "resolving-merge-conflicts",
+      "path": "/home/victor/.claude/skills/resolving-merge-conflicts/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Use when you need to resolve an in-progress git merge/rebase conflict."
+    },
+    {
+      "name": "reverse-engineer-anything",
+      "path": "/home/victor/.claude/skills/reverse-engineer-anything/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Reverse engineer native, managed, Electron/JavaScript, packaged, firmware, and browser targets with REA. Use shipped-artifact or requested runtime evidence to explain features, compare versions, decompile code, or guide a reconstruction. Skip REA for ordinary source-repository architecture analysis."
+    },
+    {
+      "name": "review-and-babysit",
+      "path": "/home/victor/.claude/skills/review-and-babysit/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "The only Sats review process on every machine and harness. Decide whether a change needs review; use fresh voting reviewers chosen by producer under § Who reviews; settle findings by severity; babysit open PRs until ready for merge."
+    },
+    {
+      "name": "setup-matt-pocock-skills",
+      "path": "/home/victor/.claude/skills/setup-matt-pocock-skills/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Configure this repo for the engineering skills: set up its issue tracker, triage label vocabulary, and domain doc layout. Run once before first use of the other engineering skills.",
+      "userInvocationOnly": true
+    },
+    {
+      "name": "t3-orchestrator-prompt",
+      "path": "/home/victor/.claude/skills/t3-orchestrator-prompt/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Use when a bot (Grok Bot seat, Muse, Claude Code, Codex) starts a project build, repo code or long multi-phase work: launch or prompt ONE T3 Code Nightly thread that follows the canonical all-harness T3 rules, then only monitor it."
+    },
+    {
+      "name": "tdd",
+      "path": "/home/victor/.claude/skills/tdd/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Test-driven development. Use when the user wants to build features or fix bugs test-first, mentions \"red-green-refactor\", or wants integration tests."
+    },
+    {
+      "name": "teach",
+      "path": "/home/victor/.claude/skills/teach/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Teach the user a new skill or concept, within this workspace.",
+      "userInvocationOnly": true
+    },
+    {
+      "name": "to-questionnaire",
+      "path": "/home/victor/.claude/skills/to-questionnaire/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Turn a decision you can't fully answer into a questionnaire for someone else to fill in.",
+      "userInvocationOnly": true
+    },
+    {
+      "name": "to-spec",
+      "path": "/home/victor/.claude/skills/to-spec/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Turn the current conversation into a spec and publish it to the project issue tracker: no interview, just synthesis of what you've already discussed.",
+      "userInvocationOnly": true
+    },
+    {
+      "name": "to-tickets",
+      "path": "/home/victor/.claude/skills/to-tickets/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Break a plan, spec, or the current conversation into a set of tracer-bullet tickets, each declaring its blocking edges, published to the configured tracker (edges as text in one file per ticket locally, or native blocking links on a real tracker).",
+      "userInvocationOnly": true
+    },
+    {
+      "name": "triage",
+      "path": "/home/victor/.claude/skills/triage/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Move issues and external PRs through a state machine of triage roles, categorise, verify, grill if needed, and write agent-ready briefs.",
+      "userInvocationOnly": true
+    },
+    {
+      "name": "unslop",
+      "path": "/home/victor/.claude/skills/unslop/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Cut AI tells from any writing. Must always apply."
+    },
+    {
+      "name": "wait-what",
+      "path": "/home/victor/.claude/skills/wait-what/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Stop. That last message did not land: re-pitch it.",
+      "userInvocationOnly": true
+    },
+    {
+      "name": "wayfinder",
+      "path": "/home/victor/.claude/skills/wayfinder/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Plan a huge chunk of work (more than one agent session can hold) as a shared map of decision tickets on your issue tracker, and resolve them one at a time until the way to the destination is clear.",
+      "userInvocationOnly": true
+    },
+    {
+      "name": "wizard",
+      "path": "/home/victor/.claude/skills/wizard/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Generate an interactive bash wizard that walks a human through steps only they can perform. Use when provisioning infrastructure, setting up credentials or CI secrets, walking an unfamiliar third-party dashboard, or running a one-off migration or cutover. Don't invoke this for steps the agent can perform itself."
+    },
+    {
+      "name": "writing-for-agents",
+      "path": "/home/victor/.claude/skills/writing-for-agents/SKILL.md",
+      "enabled": true,
+      "scope": "user",
+      "description": "Writing documents for agents. Use when creating or editing skills, or modifying AGENTS.md or CLAUDE.md."
+    }
+  ],
+  "usageLimits": {
+    "checkedAt": "2026-10-24T22:07:59.078Z",
+    "windows": [],
+    "unavailable": {
+      "reason": "unsupported"
+    }
+  },
+  "instanceId": "claudeAgent",
+  "driver": "claudeAgent",
+  "continuation": {
+    "groupKey": "claude:home:/home/victor/.claude"
+  },
+  "versionAdvisory": {
+    "status": "current",
+    "currentVersion": "2.1.310",
+    "latestVersion": "2.1.310",
+    "updateCommand": "/home/victor/.local/bin/claude update",
+    "canUpdate": true,
+    "canInstallVersion": false,
+    "checkedAt": "2026-10-24T22:07:59.379Z",
+    "message": null
+  },
+  "compatibilityAdvisory": {
+    "status": "supported",
+    "message": null,
+    "recommendedVersion": null,
+    "recommendedRange": ">=2.1.280",
+    "latestVersionStatus": "supported"
+  }
+}
