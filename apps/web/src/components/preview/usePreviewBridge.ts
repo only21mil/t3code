@@ -1,10 +1,11 @@
-import type {
-  DesktopPreviewTabState,
+import {
   PreviewReportStatusInput,
-  ScopedThreadRef,
-  ThreadId,
+  type DesktopPreviewTabState,
+  type ScopedThreadRef,
+  type ThreadId,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { useEffect, useEffectEvent, useRef } from "react";
 
 import {
@@ -50,8 +51,7 @@ export function usePreviewBridge(input: {
     ? new URL(preparedConnection.value.httpBaseUrl).hostname
     : undefined;
 
-  const lastReportedUrl = useRef<string | null>(null);
-  const lastReportedKind = useRef<DesktopPreviewTabState["navStatus"]["kind"] | null>(null);
+  const lastReported = useRef<PreviewReportStatusInput | null>(null);
   const lastDesktopNavStatus = useRef<DesktopPreviewTabState["navStatus"] | null>(null);
   const handleStateChange = useEffectEvent(
     (changedTabId: string, state: DesktopPreviewTabState): void => {
@@ -68,22 +68,19 @@ export function usePreviewBridge(input: {
         threadId: stableThreadRef.threadId,
         tabId,
         state,
-        lastReportedUrl: lastReportedUrl.current,
-        lastReportedKind: lastReportedKind.current,
+        lastReported: lastReported.current,
       });
       if (!reported || serverDriven) return;
-      lastReportedUrl.current = reported.lastReportedUrl;
-      lastReportedKind.current = reported.lastReportedKind;
+      lastReported.current = reported;
       void reportStatus({
         environmentId: stableThreadRef.environmentId,
-        input: reported.input,
+        input: reported,
       });
     },
   );
   useEffect(() => {
     if (!previewBridge || typeof window === "undefined") return;
-    lastReportedUrl.current = null;
-    lastReportedKind.current = null;
+    lastReported.current = null;
     lastDesktopNavStatus.current = null;
     return previewBridge.onStateChange(handleStateChange);
   }, [
@@ -125,26 +122,17 @@ export function projectDesktopState(state: DesktopPreviewTabState): DesktopPrevi
   };
 }
 
-function buildReportInput(args: {
+const sameReport = Schema.toEquivalence(PreviewReportStatusInput);
+
+export function buildReportInput(args: {
   readonly threadId: ThreadId;
   readonly tabId: string;
   readonly state: DesktopPreviewTabState;
-  readonly lastReportedUrl: string | null;
-  readonly lastReportedKind: DesktopPreviewTabState["navStatus"]["kind"] | null;
-}): {
-  readonly input: PreviewReportStatusInput;
-  readonly lastReportedUrl: string;
-  readonly lastReportedKind: DesktopPreviewTabState["navStatus"]["kind"];
-} | null {
-  const { threadId, tabId, state, lastReportedUrl, lastReportedKind } = args;
+  readonly lastReported: PreviewReportStatusInput | null;
+}): PreviewReportStatusInput | null {
+  const { threadId, tabId, state, lastReported } = args;
   const status = state.navStatus;
   if (status.kind === "Idle") return null;
-
-  const sameAsLast =
-    status.kind !== "LoadFailed" &&
-    status.kind === lastReportedKind &&
-    status.url === lastReportedUrl;
-  if (sameAsLast) return null;
 
   const base = {
     threadId,
@@ -154,26 +142,19 @@ function buildReportInput(args: {
   };
   if (status.kind === "LoadFailed") {
     return {
-      input: {
-        ...base,
-        navStatus: {
-          _tag: "LoadFailed",
-          url: status.url,
-          title: status.title,
-          code: status.code,
-          description: status.description,
-        },
+      ...base,
+      navStatus: {
+        _tag: "LoadFailed",
+        url: status.url,
+        title: status.title,
+        code: status.code,
+        description: status.description,
       },
-      lastReportedUrl: status.url,
-      lastReportedKind: "LoadFailed",
     };
   }
-  return {
-    input: {
-      ...base,
-      navStatus: { _tag: status.kind, url: status.url, title: status.title },
-    },
-    lastReportedUrl: status.url,
-    lastReportedKind: status.kind,
+  const input: PreviewReportStatusInput = {
+    ...base,
+    navStatus: { _tag: status.kind, url: status.url, title: status.title },
   };
+  return lastReported && sameReport(input, lastReported) ? null : input;
 }
