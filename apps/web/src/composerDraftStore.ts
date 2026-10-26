@@ -4228,7 +4228,11 @@ export function clearComposerDraftsEnvironment(environmentId: EnvironmentId): vo
     for (const [logicalProjectKey, threadKey] of Object.entries(
       state.logicalProjectDraftThreadKeyByLogicalProjectKey,
     )) {
-      if (parseScopedProjectKey(logicalProjectKey)?.environmentId === environmentId) {
+      // A moved draft keeps its source mapping, so the session's environment decides ownership.
+      const ownerEnvironmentId =
+        state.draftThreadsByThreadKey[threadKey]?.environmentId ??
+        parseScopedProjectKey(logicalProjectKey)?.environmentId;
+      if (ownerEnvironmentId === environmentId) {
         removedThreadKeys.add(threadKey);
       }
     }

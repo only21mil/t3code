@@ -809,6 +809,31 @@ describe("composerDraftStore project draft thread mapping", () => {
     }
   });
 
+  it("keeps a draft moved to another environment when its original environment is cleared", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+    store.setPrompt(draftId, "moved draft");
+    store.setDraftThreadContext(draftId, {
+      projectRef: remoteProjectRef,
+      environmentSelection: "manual",
+      loadBalancedEnvironmentId: null,
+    });
+
+    clearComposerDraftsEnvironment(TEST_ENVIRONMENT_ID);
+
+    const next = useComposerDraftStore.getState();
+    expect(next.getDraftThreadByLogicalProjectKey(scopedProjectKey(projectRef))).toBeNull();
+    expect(next.getDraftThreadByProjectRef(remoteProjectRef)?.draftId).toBe(draftId);
+    expect(partializeComposerDraftStoreState(next).draftsByThreadKey[draftId]?.prompt).toBe(
+      "moved draft",
+    );
+
+    clearComposerDraftsEnvironment(OTHER_TEST_ENVIRONMENT_ID);
+
+    expect(useComposerDraftStore.getState().getDraftThread(draftId)).toBeNull();
+    expect(draftByKey(draftId)).toBeUndefined();
+  });
+
   it("removes a draft's previous project mapping when retargeted in place", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(projectRef, draftId, { threadId });
