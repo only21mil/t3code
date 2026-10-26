@@ -3,6 +3,7 @@ import {
   CheckpointId,
   CheckpointScopeId,
   CommandId,
+  MessageId,
   NodeId,
   ProviderSessionId,
   ProviderThreadId,
@@ -26,6 +27,7 @@ import * as CheckpointRollbackService from "./CheckpointRollbackService.ts";
 import * as CheckpointService from "./CheckpointService.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EffectWorker from "./EffectWorker.ts";
+import { OrchestratorDispatchError, OrchestratorProjectionError } from "./Orchestrator.ts";
 import * as RunFinalizationService from "./RunFinalizationService.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as ProviderTurnControlService from "./ProviderTurnControlService.ts";
@@ -83,6 +85,7 @@ function layerExecutorFor(input: {
   readonly threads?: Partial<ThreadManagementService.ThreadManagementService["Service"]>;
   readonly continueAfterRestart?: boolean;
   readonly interrupt?: ProviderTurnControlService.ProviderTurnControlServiceV2Shape["interrupt"];
+  readonly steer?: ProviderTurnControlService.ProviderTurnControlServiceV2Shape["steer"];
   readonly rollback?: CheckpointRollbackService.CheckpointRollbackServiceV2Shape["execute"];
   readonly respond?: RuntimeRequestService.RuntimeRequestServiceV2["Service"]["respond"];
 }) {
@@ -92,7 +95,7 @@ function layerExecutorFor(input: {
       ProviderTurnControlService.ProviderTurnControlServiceV2,
       ProviderTurnControlService.ProviderTurnControlServiceV2.of({
         interrupt: input.interrupt ?? (() => Effect.void),
-        steer: () => Effect.void,
+        steer: input.steer ?? (() => Effect.void),
         interruptAndAwaitTerminal: (request) =>
           record(
             request.replacementProviderSessionId === undefined
@@ -624,5 +627,116 @@ it.effect.each(["confirmed", "unconfirmed", "failed"] as const)(
         yield* Ref.get(events),
         outcome === "confirmed" ? ["stop-child", "settle-child"] : ["stop-child"],
       );
+    }),
+);
+
+it.effect.each(["mailbox read", "mailbox acceptance", "provider steer"] as const)(
+  "a delegated result reaches the provider once when its %s fails",
+  (failingStep) =>
+    Effect.gen(function* () {
+      const timestamp = DateTime.formatIso(yield* DateTime.now);
+      const workerId = "worker-steer-bookkeeping";
+      const messageId = MessageId.make("message:effect-worker-steer");
+      const pending = yield* Ref.make(true);
+      const attempts = yield* Ref.make(0);
+      const failed = yield* Ref.make(false);
+      const delivered = yield* Ref.make(0);
+      const accepted = yield* Ref.make(0);
+      const failOnce = (step: typeof failingStep) =>
+        step === failingStep
+          ? Ref.getAndSet(failed, true).pipe(Effect.map((done) => !done))
+          : Effect.succeed(false);
+      const steerEffect = (attemptCount: number): EffectOutbox.OrchestrationEffectV2 => ({
+        id: "effect:steer-bookkeeping",
+        commandId: CommandId.make("command:steer-bookkeeping"),
+        threadId,
+        request: {
+          type: "provider-turn.steer",
+          providerSessionId: oldSessionId,
+          providerThreadId,
+          providerTurnId,
+          messageId,
+        },
+        status: "running",
+        attemptCount,
+        availableAt: timestamp,
+        leaseOwner: workerId,
+        leaseExpiresAt: timestamp,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        completedAt: null,
+        lastError: null,
+      });
+      const layerOutbox = Layer.mock(EffectOutbox.EffectOutboxV2)({
+        claimNext: () =>
+          Effect.gen(function* () {
+            if (!(yield* Ref.getAndSet(pending, false))) return Option.none();
+            return Option.some(
+              steerEffect(yield* Ref.updateAndGet(attempts, (count) => count + 1)),
+            );
+          }),
+        get: () => Ref.get(attempts).pipe(Effect.map((count) => Option.some(steerEffect(count)))),
+        awaitCancellation: () => Effect.never,
+        clearCancellation: () => Effect.void,
+        succeed: () => Effect.succeed(true),
+        retry: () => Ref.set(pending, true).pipe(Effect.as(true)),
+      });
+      const layerExecutor = layerExecutorFor({
+        events: yield* Ref.make<ReadonlyArray<string>>([]),
+        steer: () =>
+          Effect.gen(function* () {
+            if (yield* failOnce("provider steer")) {
+              return yield* new ProviderTurnControlService.ProviderTurnControlError({
+                threadId,
+                operation: "steer",
+                providerTurnId,
+                cause: "simulated provider steer failure",
+              });
+            }
+            yield* Ref.update(delivered, (count) => count + 1);
+          }),
+        threads: {
+          getThreadRecords: () =>
+            Effect.gen(function* () {
+              if (yield* failOnce("mailbox read")) {
+                return yield* new OrchestratorProjectionError({ threadId });
+              }
+              return {
+                messages: [
+                  {
+                    id: messageId,
+                    delegatedCompletion: { parentRunId: runId, generation: 1, taskIds: [] },
+                  },
+                ],
+              } as never;
+            }),
+          dispatch: (command) =>
+            Effect.gen(function* () {
+              assert.equal(command.type, "notification.delivery.accept");
+              if (yield* failOnce("mailbox acceptance")) {
+                return yield* new OrchestratorDispatchError({
+                  commandId: command.commandId,
+                  commandType: command.type,
+                  cause: "simulated acceptance failure",
+                });
+              }
+              yield* Ref.update(accepted, (count) => count + 1);
+              return { sequence: 1, storedEvents: [] };
+            }),
+        },
+      });
+      const layerWorker = EffectWorker.layerWithOptions({ workerId }).pipe(
+        Layer.provide(Layer.merge(layerOutbox, layerExecutor)),
+      );
+
+      yield* EffectWorker.OrchestrationEffectWorkerV2.pipe(
+        Effect.flatMap((worker) => worker.drain(10)),
+        Effect.provide(layerWorker),
+      );
+
+      assert.equal(yield* Ref.get(delivered), 1);
+      assert.equal(yield* Ref.get(attempts), failingStep === "mailbox acceptance" ? 1 : 2);
+      // An unaccepted delegated result stays reserved for durable mailbox recovery.
+      assert.equal(yield* Ref.get(accepted), failingStep === "mailbox acceptance" ? 0 : 1);
     }),
 );

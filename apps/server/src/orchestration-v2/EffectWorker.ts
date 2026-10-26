@@ -216,33 +216,43 @@ export const layerExecutor: Layer.Layer<
                 ),
               );
           }
-          case "provider-turn.steer":
-            return providerTurnControl
-              .steer({
-                threadId: effect.threadId,
-                providerSessionId: effect.request.providerSessionId,
-                providerThreadId: effect.request.providerThreadId,
-                providerTurnId: effect.request.providerTurnId,
-                messageId: effect.request.messageId,
-              })
+          case "provider-turn.steer": {
+            const request = effect.request;
+            return threads
+              .getThreadRecords(effect.threadId, ["messages"], { messageIds: [request.messageId] })
               .pipe(
-                Effect.tap(() =>
+                Effect.flatMap((projection) =>
                   Effect.gen(function* () {
-                    if (effect.request.type !== "provider-turn.steer") return;
-                    const messageId = effect.request.messageId;
-                    const projection = yield* threads.getThreadRecords(
-                      effect.threadId,
-                      ["messages", "runs"],
-                      { messageIds: [effect.request.messageId] },
-                    );
-                    const message = projection.messages.find((row) => row.id === messageId);
-                    if (message?.delegatedCompletion === undefined) return;
-                    yield* threads.dispatch({
-                      type: "notification.delivery.accept",
-                      commandId: CommandId.make(`command:mailbox-accepted:${effect.id}`),
+                    const message = projection.messages.find((row) => row.id === request.messageId);
+                    yield* providerTurnControl.steer({
                       threadId: effect.threadId,
-                      messageId: message.id,
+                      providerSessionId: request.providerSessionId,
+                      providerThreadId: request.providerThreadId,
+                      providerTurnId: request.providerTurnId,
+                      messageId: request.messageId,
                     });
+                    if (message?.delegatedCompletion === undefined) return;
+                    yield* threads
+                      .dispatch({
+                        type: "notification.delivery.accept",
+                        commandId: CommandId.make(`command:mailbox-accepted:${effect.id}`),
+                        threadId: effect.threadId,
+                        messageId: message.id,
+                      })
+                      .pipe(
+                        // Providers do not deduplicate steers, so retrying this effect would send
+                        // it again. Mailbox recovery re-offers a result that was never accepted.
+                        Effect.catch((cause) =>
+                          Effect.logWarning(
+                            "orchestration-v2.effect-worker.steer-acceptance-failed",
+                            {
+                              effectId: effect.id,
+                              messageId: message.id,
+                              cause,
+                            },
+                          ),
+                        ),
+                      );
                   }),
                 ),
                 Effect.catch((error) =>
@@ -323,6 +333,7 @@ export const layerExecutor: Layer.Layer<
                     }),
                 ),
               );
+          }
           case "provider-turn.restart":
             return providerTurnControl
               .interruptAndAwaitTerminal({
