@@ -302,6 +302,34 @@ int main(int argc, char **argv) {
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
+it.effect.each([
+  { name: "codex", before: "fail" },
+  { name: "volta-shim", before: "0.128.9" },
+])("finds local Codex after $name recovers from $before without a restart", ({ name, before }) =>
+  Effect.gen(function* () {
+    const h = yield* makeHarness({ local: { version: "0.156.1" } });
+    const payload = `${h.baseDir}/payload-version`;
+    const launcher = `${h.baseDir}/${name}`;
+    yield* h.fs.writeFileString(payload, before);
+    yield* h.fs.writeFileString(
+      launcher,
+      `#!/bin/sh\ncase "$1" in\n--version) version=$(cat '${payload}'); [ "$version" = fail ] && exit 1; printf 'codex-cli %s\\n' "$version";;\napp-server) exit 0;;\nesac\n`,
+      { mode: 0o755 },
+    );
+    yield* h.fs.remove(h.localBinaryPath);
+    yield* h.fs.symlink(launcher, h.localBinaryPath);
+    expect((yield* Effect.flip(h.installation.resolve())).detail).toContain(
+      "Codex is not installed",
+    );
+    yield* h.fs.writeFileString(payload, "0.156.1");
+    expect(yield* h.installation.resolve()).toMatchObject({
+      source: "local",
+      executablePath: h.localBinaryPath,
+      version: "0.156.1",
+    });
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
 it.effect(
   "installs the complete verified package in tools/codex/version and survives a restart",
   () =>

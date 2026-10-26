@@ -370,7 +370,7 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
     Effect.scoped,
     Effect.orElseSucceed(() => false),
   );
-  const localCache = new Map<string, { fingerprint: string; executable: CodexExecutable | null }>();
+  const localCache = new Map<string, { fingerprint: string; executable: CodexExecutable }>();
   const resolveLocal = Effect.fn("CodexInstallation.resolveLocal")(
     function* () {
       const executablePath = yield* resolveCommandPath("codex", { env: environment }).pipe(
@@ -410,10 +410,12 @@ export const makeCodexInstallation = Effect.fn("makeCodexInstallation")(function
               Effect.timeout("5 seconds"),
               Effect.orElseSucceed(() => null),
             );
-      localCache.set(executablePath, { fingerprint, executable });
       if (!executable) return null;
       const advisory = yield* compatibility(executable.version);
-      return advisory?.status === "supported" ? executable : null;
+      if (advisory?.status !== "supported") return null;
+      // Failed probes may be transient, and a version-manager shim's stat misses payload upgrades.
+      localCache.set(executablePath, { fingerprint, executable });
+      return executable;
     },
     Effect.orElseSucceed(() => null),
   );
