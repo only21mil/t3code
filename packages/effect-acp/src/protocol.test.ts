@@ -52,6 +52,7 @@ const decodeSessionCancelNotification = Schema.decodeEffect(
   Schema.fromJsonString(SessionCancelNotification),
 );
 const decodeExtRequest = Schema.decodeEffect(Schema.fromJsonString(ExtRequest));
+const decodeExtResponse = Schema.decodeEffect(Schema.fromJsonString(ExtResponse));
 const decodeRequestPermissionResponse = Schema.decodeEffect(
   Schema.fromJsonString(RequestPermissionResponse),
 );
@@ -536,10 +537,11 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
       assert.deepEqual(yield* Fiber.join(request), { ok: true });
 
       yield* Deferred.succeed(answer, { ok: false });
-      assert.deepEqual(
-        yield* Schema.decodeEffect(Schema.fromJsonString(ExtResponse))(yield* Queue.take(output)),
-        { jsonrpc: "2.0", id: 9, result: { ok: false } },
-      );
+      assert.deepEqual(yield* decodeExtResponse(yield* Queue.take(output)), {
+        jsonrpc: "2.0",
+        id: 9,
+        result: { ok: false },
+      });
     }),
   );
 
