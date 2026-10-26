@@ -11651,6 +11651,22 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         );
         assert.lengthOf(resumedWorkIndexes, 1);
         assert.isAbove(resumedWorkIndexes[0] ?? -1, reopenIndex);
+        const childAnswers = new Map<string, { readonly ordinal: number; readonly text: string }>();
+        for (const event of harness.events) {
+          if (
+            event.type === "turn_item.updated" &&
+            event.turnItem.threadId === finalSubagent?.childThreadId &&
+            event.turnItem.type === "assistant_message"
+          ) {
+            childAnswers.set(event.turnItem.id, event.turnItem);
+          }
+        }
+        assert.deepEqual(
+          [...childAnswers.values()]
+            .toSorted((left, right) => left.ordinal - right.ordinal)
+            .map((answer) => answer.text),
+          [FIRST_SUMMARY, "RESUMED_WORK", SECOND_SUMMARY],
+        );
         assert.isFalse(yield* harness.hasPendingBackgroundWork);
       }).pipe(
         Effect.provide(

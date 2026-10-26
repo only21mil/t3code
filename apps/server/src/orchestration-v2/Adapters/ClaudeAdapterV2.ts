@@ -6072,7 +6072,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             childThread: existingSubagent?.childThread ?? null,
             effort,
             nextChildItemOrdinal: existingSubagent?.nextChildItemOrdinal ?? 100,
-            resultItemOrdinal: existingSubagent?.resultItemOrdinal ?? null,
+            resultItemOrdinal:
+              input.reopen === true ? null : (existingSubagent?.resultItemOrdinal ?? null),
             lastAssistantText:
               input.reopen === true ? null : (existingSubagent?.lastAssistantText ?? null),
             lastAssistantMessageId:
@@ -6283,11 +6284,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             input.status !== "running" &&
             !resultAlreadyShown
           ) {
-            const resultNativeItemId = `${nativeItemId}:result`;
             const resultItemOrdinal = subagent.resultItemOrdinal ?? ++subagent.nextChildItemOrdinal;
             subagent.resultItemOrdinal = resultItemOrdinal;
             yield* emitSubagentConversationMessage({
-              nativeItemId: resultNativeItemId,
+              // A resumed subagent answers again; keying by ordinal keeps earlier answers.
+              nativeItemId: `${nativeItemId}:result:${resultItemOrdinal}`,
               threadId: childThreadId,
               rootNodeId: childRootNodeId,
               role: "assistant",
