@@ -12,6 +12,7 @@ import {
   ProviderTurnId,
   RunId,
   RuntimeRequestId,
+  StopNativeRecord,
   StopNotifierResumeRequest,
   StopNotifierStopRequest,
   ThreadId,
@@ -129,6 +130,19 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
     operation: Schema.Literal("stop"),
     episodeId: Schema.String,
     request: StopNotifierStopRequest,
+    /** Written before the notifier runs when `request.result_path` names T3's own stop record. */
+    nativeRecord: Schema.optional(StopNativeRecord),
+  }),
+  /**
+   * A write whose stop derivation failed commits this instead, in the same
+   * transaction, so the stop is planned again from the projection.
+   */
+  Schema.Struct({
+    type: Schema.Literal("stop-notice.reconcile"),
+    objectiveMessageIds: Schema.Array(MessageId),
+    resolvedRequestIds: Schema.Array(RuntimeRequestId),
+    terminalRunIds: Schema.Array(RunId),
+    subagentEnded: Schema.Boolean,
   }),
   Schema.Struct({
     type: Schema.Literal("stop-notice.deliver"),
@@ -150,6 +164,7 @@ export const REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS = [
   "thread-title.generate",
   "delegated-tasks.stop",
   "stop-notice.deliver",
+  "stop-notice.reconcile",
 ] as const satisfies ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
 
 export const PROCESS_BOUND_EFFECT_TYPES = [
@@ -164,6 +179,7 @@ export const PROCESS_BOUND_EFFECT_TYPES = [
 const SIDE_LANE_EFFECT_TYPES = [
   "thread-title.generate",
   "stop-notice.deliver",
+  "stop-notice.reconcile",
 ] as const satisfies ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
 
 export const OrchestrationEffectStatusV2 = Schema.Literals([

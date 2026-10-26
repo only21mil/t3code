@@ -3183,6 +3183,20 @@ const OrchestrationV2InternalCommand = Schema.Union([
     threadId: ThreadId,
     declaration: StopNoticeDeclaration,
   }),
+  /**
+   * Plans a thread's stop notice again from its committed projection, for a
+   * write whose own stop derivation failed. The write committed this request
+   * as a durable outbox row instead, so its stop is late, never lost.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.stop-notice.reconcile"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    objectiveMessageIds: Schema.Array(MessageId),
+    resolvedRequestIds: Schema.Array(RuntimeRequestId),
+    terminalRunIds: Schema.Array(RunId),
+    subagentEnded: Schema.Boolean,
+  }),
   /** Records one notifier attempt for the episode's stop or resume request. */
   Schema.Struct({
     type: Schema.Literal("thread.stop-notice.record"),

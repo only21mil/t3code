@@ -81,14 +81,27 @@ export const StopNoticeOpener = Schema.Struct({
 });
 export type StopNoticeOpener = typeof StopNoticeOpener.Type;
 
+/**
+ * Where a stop's `resultPath` came from. `declared` is the path the agent
+ * named in its `t3_stop_report`. `native_record` is the stop record T3 writes
+ * under its own state when no path was named: stop metadata and a transcript
+ * reference, never an agent RESULT and never a claim that the work is done.
+ */
+export const StopResultOrigin = Schema.Literals(["declared", "native_record"]);
+export type StopResultOrigin = typeof StopResultOrigin.Type;
+
+/** The owner a stop names when neither the thread nor the server named one. The notifier resolves it on. */
+export const STOP_NOTICE_FALLBACK_OWNER = "Sats";
+
 export const StopNoticeStop = Schema.Struct({
   disposition: StopDisposition,
   source: Schema.Literals(["explicit", "native"]),
   trigger: StopTrigger,
   runId: Schema.NullOr(RunId),
   runtimeRequestId: Schema.NullOr(RuntimeRequestId),
-  owner: Schema.NullOr(TrimmedNonEmptyString),
+  owner: TrimmedNonEmptyString,
   resultPath: Schema.NullOr(TrimmedNonEmptyString),
+  resultOrigin: Schema.NullOr(StopResultOrigin),
   requiredAction: Schema.NullOr(TrimmedNonEmptyString),
   opener: Schema.NullOr(StopNoticeOpener),
   stoppedAt: IsoDateTime,
@@ -163,7 +176,7 @@ export type StopNotice = typeof StopNotice.Type;
 export const StopNotifierStopRequest = Schema.Struct({
   thread_id: ThreadId,
   episode_message_id: TrimmedNonEmptyString,
-  owner: Schema.NullOr(TrimmedNonEmptyString),
+  owner: TrimmedNonEmptyString,
   disposition: StopDisposition,
   continuation: StopContinuation,
   result_path: Schema.NullOr(TrimmedNonEmptyString),
@@ -180,6 +193,40 @@ export const StopNotifierResumeRequest = Schema.Struct({
   owner: Schema.NullOr(TrimmedNonEmptyString),
 });
 export type StopNotifierResumeRequest = typeof StopNotifierResumeRequest.Type;
+
+/**
+ * The stop record T3 writes under its own state when a stop names no result
+ * path, so the notifier's `result_path` always names a real file. Frozen in the
+ * stop's outbox row: every replay writes the same bytes to the same path before
+ * the notifier runs. It holds ids and the stop's own fields only, no secret and
+ * no server configuration.
+ */
+export const StopNativeRecord = Schema.Struct({
+  path: TrimmedNonEmptyString,
+  body: Schema.Struct({
+    schema: Schema.Literal("t3-native-stop-record/v1"),
+    note: Schema.String,
+    threadId: ThreadId,
+    episodeId: TrimmedNonEmptyString,
+    episodeOrigin: Schema.Literals(["message", "runtime_request"]),
+    disposition: StopDisposition,
+    source: Schema.Literals(["explicit", "native"]),
+    trigger: StopTrigger,
+    runId: Schema.NullOr(RunId),
+    runtimeRequestId: Schema.NullOr(RuntimeRequestId),
+    owner: TrimmedNonEmptyString,
+    requiredAction: Schema.NullOr(TrimmedNonEmptyString),
+    opener: Schema.NullOr(StopNoticeOpener),
+    stoppedAt: IsoDateTime,
+    /** Where the work itself is: the thread's own transcript, read through T3. */
+    transcript: Schema.Struct({
+      threadId: ThreadId,
+      runId: Schema.NullOr(RunId),
+      read: Schema.String,
+    }),
+  }),
+});
+export type StopNativeRecord = typeof StopNativeRecord.Type;
 
 /** Notifier receipt for one stop or resume request, as the delivery effect records it. */
 export const StopNotifierReceipt = Schema.Struct({

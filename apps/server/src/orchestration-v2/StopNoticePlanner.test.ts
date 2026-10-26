@@ -59,6 +59,7 @@ const projection = (input: Partial<StopNoticeProjection> = {}): StopNoticeProjec
 const facts: StopNoticeFacts = {
   now: "2026-10-26T01:30:00.000Z",
   defaultOwner: "genesis",
+  nativeRecordDir: null,
   pendingBackgroundWork: false,
   pendingRestartContinuation: false,
 };
@@ -138,6 +139,61 @@ describe("planStopNotice", () => {
         triggers({ terminalRuns: [run(1, "completed")] }),
       ).planned,
     ).toBeNull();
+  });
+
+  it("points a stop with no declared path at T3's own stop record, never a null result path", () => {
+    // Old cause: a run that ended with no t3_stop_report sent result_path null
+    // and owner null, which the notifier refuses as INVALID.
+    const recordFacts = { ...facts, defaultOwner: null, nativeRecordDir: "/srv/t3/stop-notices/" };
+    const opened = step(projection({ runs: [run(1, "running")] }), triggers(), recordFacts);
+    const ended = step(
+      { ...opened.next, runs: [run(1, "completed")] },
+      triggers({ terminalRuns: [run(1, "completed")] }),
+      recordFacts,
+    );
+    const stop = ended.planned?.notice.stop;
+    expect(stop).toMatchObject({
+      disposition: "UNDECLARED",
+      source: "native",
+      owner: "Sats",
+      resultOrigin: "native_record",
+    });
+    expect(stop?.resultPath).toMatch(
+      /^\/srv\/t3\/stop-notices\/[0-9a-f]{32}\/[0-9a-f]{32}\.json$/u,
+    );
+    const effect = ended.planned?.effects.find((candidate) => candidate.operation === "stop");
+    expect(effect?.request).toMatchObject({ owner: "Sats", result_path: stop?.resultPath });
+    expect(effect?.operation === "stop" ? effect.nativeRecord : undefined).toMatchObject({
+      path: stop?.resultPath,
+      body: {
+        schema: "t3-native-stop-record/v1",
+        disposition: "UNDECLARED",
+        episodeId: "message:objective",
+        transcript: { threadId, runId: RunId.make("run:1") },
+      },
+    });
+    expect(JSON.stringify(effect)).not.toMatch(/"DONE"/u);
+
+    // A declared path stays the agent's own, with no record written.
+    const declared = step(
+      { ...opened.next, runs: [run(1, "running")] },
+      triggers({ declaration: declaration("BLOCKED") }),
+      recordFacts,
+    );
+    const declaredEnd = step(
+      { ...declared.next, runs: [run(1, "completed")] },
+      triggers({ terminalRuns: [run(1, "completed")] }),
+      recordFacts,
+    );
+    expect(declaredEnd.planned?.notice.stop).toMatchObject({
+      resultPath: "/home/victor/work/lane/RESULT.md",
+      resultOrigin: "declared",
+      owner: "genesis",
+    });
+    const declaredEffect = declaredEnd.planned?.effects.find((c) => c.operation === "stop");
+    expect(
+      declaredEffect?.operation === "stop" ? declaredEffect.nativeRecord : null,
+    ).toBeUndefined();
   });
 
   it("treats an owned child, queued work or a watch as an interim yield, not a stop", () => {

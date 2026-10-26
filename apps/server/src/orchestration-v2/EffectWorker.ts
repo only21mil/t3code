@@ -537,6 +537,30 @@ export const layerExecutor: Layer.Layer<
               ),
             );
           }
+          case "stop-notice.reconcile": {
+            const request = effect.request;
+            return threads
+              .dispatch({
+                type: "thread.stop-notice.reconcile",
+                commandId: CommandId.make(`command:${effect.id}`),
+                threadId: effect.threadId,
+                objectiveMessageIds: request.objectiveMessageIds,
+                resolvedRequestIds: request.resolvedRequestIds,
+                terminalRunIds: request.terminalRunIds,
+                subagentEnded: request.subagentEnded,
+              })
+              .pipe(
+                Effect.asVoid,
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationEffectExecutionError({
+                      effectId: effect.id,
+                      effectType: request.type,
+                      cause,
+                    }),
+                ),
+              );
+          }
           case "delegated-tasks.stop":
             return threads
               .stopDelegatedTasks({

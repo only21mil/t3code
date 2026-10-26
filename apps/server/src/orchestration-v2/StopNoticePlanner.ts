@@ -7,6 +7,7 @@ import type {
   OrchestrationV2Subagent,
   RuntimeRequestId,
   StopContinuation,
+  StopNativeRecord,
   StopNotice,
   StopNoticeDeclaration,
   StopNoticeDelivery,
@@ -18,7 +19,9 @@ import type {
   StopTrigger,
   ThreadId,
 } from "@t3tools/contracts";
+import { STOP_NOTICE_FALLBACK_OWNER } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
+import { threadRelayContentSha256 } from "@t3tools/shared/threadRelay";
 
 /**
  * Decides, inside the command that ends a run or opens a question, whether the
@@ -34,6 +37,7 @@ export type StopNoticeEffect =
       readonly operation: "stop";
       readonly episodeId: string;
       readonly request: StopNotifierStopRequest;
+      readonly nativeRecord?: StopNativeRecord | undefined;
     }
   | {
       readonly operation: "resume";
@@ -75,6 +79,11 @@ export interface StopNoticeProjection {
 export interface StopNoticeFacts {
   readonly now: string;
   readonly defaultOwner: string | null;
+  /**
+   * Server-owned directory for native stop records. Null leaves a stop with no
+   * declared path without one, which the notifier refuses.
+   */
+  readonly nativeRecordDir: string | null;
   /** Post-turn background work, pull request watches and the like still wake this thread. */
   readonly pendingBackgroundWork: boolean;
   /** A restart continuation will carry the last run's work. */
@@ -287,11 +296,46 @@ function openerOf(
   return { threadId: episodeMessage.senderThreadId, binding: "sender", handbackId: null };
 }
 
-function resumeEffect(
+const shortHash = (value: string) => threadRelayContentSha256(value).slice(0, 32);
+
+/** One file per thread and episode, so a replayed stop rewrites the same path. */
+export function nativeStopRecordPath(directory: string, threadId: ThreadId, episodeId: string) {
+  return `${directory.replace(/[\\/]+$/u, "")}/${shortHash(threadId)}/${shortHash(episodeId)}.json`;
+}
+
+function nativeStopRecord(
+  path: string,
   threadId: ThreadId,
   notice: StopNotice,
-  owner: string | null,
-): StopNoticeEffect {
+  stop: StopNoticeStop,
+): StopNativeRecord {
+  return {
+    path,
+    body: {
+      schema: "t3-native-stop-record/v1",
+      note: "T3 wrote this record because the thread stopped without naming a result path. It is not the agent's RESULT and does not say the work is done. Read the thread's transcript for the work itself.",
+      threadId,
+      episodeId: notice.episodeId,
+      episodeOrigin: notice.episodeOrigin,
+      disposition: stop.disposition,
+      source: stop.source,
+      trigger: stop.trigger,
+      runId: stop.runId,
+      runtimeRequestId: stop.runtimeRequestId,
+      owner: stop.owner,
+      requiredAction: stop.requiredAction,
+      opener: stop.opener,
+      stoppedAt: stop.stoppedAt,
+      transcript: {
+        threadId,
+        runId: stop.runId,
+        read: `t3_thread_read {"threadId":${JSON.stringify(threadId)}}`,
+      },
+    },
+  };
+}
+
+function resumeEffect(threadId: ThreadId, notice: StopNotice, owner: string): StopNoticeEffect {
   return {
     operation: "resume",
     episodeId: notice.episodeId,
@@ -317,7 +361,7 @@ export function planStopNotice(input: {
   }
   const before = thread.stopNotice ?? null;
   const effects: Array<StopNoticeEffect> = [];
-  const owner = triggers.declaration?.owner ?? facts.defaultOwner;
+  const owner = triggers.declaration?.owner ?? facts.defaultOwner ?? STOP_NOTICE_FALLBACK_OWNER;
 
   let notice = before;
   const newest = latestObjectiveMessage(triggers.objectiveMessages);
@@ -408,14 +452,24 @@ export function planStopNotice(input: {
       const handback = opener?.binding === "delegated_task" ? opener : null;
       const requiredAction =
         declaration?.requiredAction ?? defaultRequiredAction(stopped.disposition);
+      const recordPath =
+        declaration?.resultPath == null && facts.nativeRecordDir !== null
+          ? nativeStopRecordPath(facts.nativeRecordDir, thread.id, notice.episodeId)
+          : null;
       const stop: StopNoticeStop = {
         disposition: stopped.disposition,
         source: declaration === null ? "native" : "explicit",
         trigger: stopped.trigger,
         runId: latestRun?.id ?? null,
         runtimeRequestId: pendingRequest?.id ?? null,
-        owner: declaration?.owner ?? facts.defaultOwner,
-        resultPath: declaration?.resultPath ?? null,
+        owner: declaration?.owner ?? facts.defaultOwner ?? STOP_NOTICE_FALLBACK_OWNER,
+        resultPath: declaration?.resultPath ?? recordPath,
+        resultOrigin:
+          declaration?.resultPath != null
+            ? "declared"
+            : recordPath === null
+              ? null
+              : "native_record",
         requiredAction,
         opener,
         stoppedAt: facts.now,
@@ -451,6 +505,9 @@ export function planStopNotice(input: {
           ...(handback === null ? {} : { opener_thread_id: handback.threadId }),
           ...(handback?.handbackId == null ? {} : { handback_id: handback.handbackId }),
         },
+        ...(recordPath === null
+          ? {}
+          : { nativeRecord: nativeStopRecord(recordPath, thread.id, notice, stop) }),
       });
     } else if (
       triggers.terminalRuns.length > 0 &&

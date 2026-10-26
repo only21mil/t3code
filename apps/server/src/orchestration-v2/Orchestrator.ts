@@ -131,7 +131,7 @@ import {
   ThreadForkServiceV2,
 } from "./ThreadForkService.ts";
 import { planThreadDeletion } from "./ThreadDeletion.ts";
-import { applyStopNotifierReceipt } from "./StopNoticePlanner.ts";
+import { applyStopNotifierReceipt, isObjectiveMessage } from "./StopNoticePlanner.ts";
 import { planThreadStopNotice } from "./StopNoticeDerivation.ts";
 import { StopNoticeConfig } from "./StopNoticeConfig.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
@@ -453,6 +453,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.visit":
     case "thread.stop-notice.declare":
     case "thread.stop-notice.record":
+    case "thread.stop-notice.reconcile":
     case "thread.mark-unread":
     case "thread.metadata.update":
     case "thread.pull-request.link":
@@ -2391,7 +2392,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const planned = yield* planThreadStopNotice({
         projectionStore,
         effectOutbox,
-        defaultOwner: stopNoticeConfig.defaultOwner,
+        config: stopNoticeConfig,
         threadId: command.threadId,
         triggers: {
           terminalRuns: [],
@@ -2400,6 +2401,62 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           subagentEnded: false,
           objectiveMessages: [],
           declaration: command.declaration,
+        },
+        plannedEffects: [],
+      }).pipe(mapDispatchError(command));
+      if (planned === null) return;
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "thread.stop-notice-updated",
+        threadId: command.threadId,
+        providerInstanceId: planned.thread.providerInstanceId,
+        occurredAt: planned.occurredAt,
+        payload: planned.thread,
+      });
+      yield* Ref.update(effects, (existing) => [...existing, ...planned.effects]);
+    },
+  );
+
+  // Plans a thread's stop again for a write whose own derivation failed. It
+  // reads the committed projection, so an episode or stop recorded since then
+  // is not repeated.
+  const dispatchStopNoticeReconcile = Effect.fn("orchestrationV2.dispatch.stopNoticeReconcile")(
+    function* (
+      command: Extract<
+        OrchestrationV2ServerCommand,
+        { readonly type: "thread.stop-notice.reconcile" }
+      >,
+      events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+      effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+    ) {
+      if (stopNoticeConfig.command === null) return;
+      const records = yield* projectionStore
+        .getThreadRecords(command.threadId, ["runs", "messages"], {
+          messageRoles: ["user"],
+          messageIds: [...command.objectiveMessageIds],
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) => new OrchestratorProjectionError({ threadId: command.threadId, cause }),
+          ),
+        );
+      const terminalRunIds = new Set(command.terminalRunIds);
+      const planned = yield* planThreadStopNotice({
+        projectionStore,
+        effectOutbox,
+        config: stopNoticeConfig,
+        threadId: command.threadId,
+        triggers: {
+          terminalRuns: records.runs.filter((run) => terminalRunIds.has(run.id)),
+          pendingRequests: [],
+          resolvedRequestIds: new Set(command.resolvedRequestIds),
+          subagentEnded: command.subagentEnded,
+          objectiveMessages:
+            command.objectiveMessageIds.length === 0
+              ? []
+              : records.messages.filter(isObjectiveMessage),
         },
         plannedEffects: [],
       }).pipe(mapDispatchError(command));
@@ -10738,6 +10795,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.stop-notice.record":
         yield* dispatchStopNoticeRecord(command, events);
         break;
+      case "thread.stop-notice.reconcile":
+        yield* dispatchStopNoticeReconcile(command, events, effects);
+        break;
       case "thread.auto-settle": {
         // Automatic settlement (#8600): the sweep evaluated a shell snapshot,
         // so re-check against the live thread before settling. Any change
@@ -11091,7 +11151,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         command.type === "thread.stop" ||
         command.type === "subagent.stop" ||
         command.type === "thread.stop-notice.declare" ||
-        command.type === "thread.stop-notice.record"
+        command.type === "thread.stop-notice.record" ||
+        command.type === "thread.stop-notice.reconcile"
           ? Effect.succeed(planned)
           : Effect.fail(
               new OrchestratorDispatchError({

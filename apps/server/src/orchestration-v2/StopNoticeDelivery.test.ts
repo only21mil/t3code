@@ -1,6 +1,8 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, type StopNativeRecord, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import { describe } from "vite-plus/test";
 
@@ -52,40 +54,53 @@ describe("classifyNotifierRun", () => {
   });
 });
 
+const stubbedDelivery = (
+  calls: Array<ProcessRunner.ProcessRunInput>,
+  beforeRun: Effect.Effect<void> = Effect.void,
+) => {
+  const runner = ProcessRunner.ProcessRunner.of({
+    run: (input) =>
+      beforeRun.pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            calls.push(input);
+            return {
+              stdout:
+                '{"operation":"t3-stop","notification_state":"WEBHOOK_ACCEPTED","delivery_evidence":"recipient_run","recipient_run_id":"r-9","generation":4,"event_id":"e"}\n',
+              stderr: "",
+              code: 0 as never,
+              timedOut: false,
+              stdoutTruncated: false,
+              stderrTruncated: false,
+              stdoutInvalidUtf8: false,
+              stderrInvalidUtf8: false,
+            };
+          }),
+        ),
+      ),
+  });
+  return StopNoticeDelivery.layer.pipe(
+    Layer.provide(Layer.succeed(ProcessRunner.ProcessRunner, runner)),
+    Layer.provide(
+      Layer.succeed(ServerEnvironmentIdentity, {
+        getEnvironmentId: Effect.succeed(EnvironmentId.make("env-test")),
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(StopNoticeConfig, {
+        command: "/opt/sats/sats-completion-notify",
+        defaultOwner: "genesis",
+        nativeRecordDir: null,
+      }),
+    ),
+    Layer.provide(NodeServices.layer),
+  );
+};
+
 it.effect("hands the notifier only the seam fields, with this environment, on stdin", () =>
   Effect.gen(function* () {
     const calls: Array<ProcessRunner.ProcessRunInput> = [];
-    const runner = ProcessRunner.ProcessRunner.of({
-      run: (input) =>
-        Effect.sync(() => {
-          calls.push(input);
-          return {
-            stdout:
-              '{"operation":"t3-stop","notification_state":"WEBHOOK_ACCEPTED","delivery_evidence":"recipient_run","recipient_run_id":"r-9","generation":4,"event_id":"e"}\n',
-            stderr: "",
-            code: 0 as never,
-            timedOut: false,
-            stdoutTruncated: false,
-            stderrTruncated: false,
-            stdoutInvalidUtf8: false,
-            stderrInvalidUtf8: false,
-          };
-        }),
-    });
-    const layer = StopNoticeDelivery.layer.pipe(
-      Layer.provide(Layer.succeed(ProcessRunner.ProcessRunner, runner)),
-      Layer.provide(
-        Layer.succeed(ServerEnvironmentIdentity, {
-          getEnvironmentId: Effect.succeed(EnvironmentId.make("env-test")),
-        }),
-      ),
-      Layer.provide(
-        Layer.succeed(StopNoticeConfig, {
-          command: "/opt/sats/sats-completion-notify",
-          defaultOwner: "genesis",
-        }),
-      ),
-    );
+    const layer = stubbedDelivery(calls);
     const receipt = yield* Effect.gen(function* () {
       const delivery = yield* StopNoticeDelivery.StopNoticeDeliveryService;
       return yield* delivery.notify({
@@ -121,6 +136,151 @@ it.effect("hands the notifier only the seam fields, with this environment, on st
       required_action: "Review the draft.",
     });
   }),
+);
+
+// Inside this checkout, never the system temp directory.
+const recordRoot = `${import.meta.dirname}/.stop-notice-records.test`;
+const removeRecords = FileSystem.FileSystem.use((fs) =>
+  fs.remove(recordRoot, { recursive: true, force: true }),
+);
+
+it.effect("writes the native stop record before the notifier runs, the same bytes on replay", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    yield* removeRecords;
+    const recordPath = `${recordRoot}/thread/episode.json`;
+    const seenBeforeRun: Array<boolean> = [];
+    const calls: Array<ProcessRunner.ProcessRunInput> = [];
+    const layer = stubbedDelivery(
+      calls,
+      fs.exists(recordPath).pipe(
+        Effect.orDie,
+        Effect.map((seen) => {
+          seenBeforeRun.push(seen);
+        }),
+      ),
+    );
+    const nativeRecord: StopNativeRecord = {
+      path: recordPath,
+      body: {
+        schema: "t3-native-stop-record/v1",
+        note: "Not the agent's RESULT.",
+        threadId: ThreadId.make("thread:stopper"),
+        episodeId: "message:objective",
+        episodeOrigin: "message",
+        disposition: "UNDECLARED",
+        source: "native",
+        trigger: "run_completed",
+        runId: null,
+        runtimeRequestId: null,
+        owner: "Sats",
+        requiredAction: "The run ended without a stop report. Read the thread's last message.",
+        opener: null,
+        stoppedAt: "2026-10-26T02:00:00.000Z",
+        transcript: {
+          threadId: ThreadId.make("thread:stopper"),
+          runId: null,
+          read: "t3_thread_read",
+        },
+      },
+    };
+    const notifyOnce = Effect.gen(function* () {
+      const delivery = yield* StopNoticeDelivery.StopNoticeDeliveryService;
+      return yield* delivery.notify({
+        final: false,
+        delivery: {
+          operation: "stop",
+          episodeId: "message:objective",
+          request: {
+            thread_id: ThreadId.make("thread:stopper"),
+            episode_message_id: "message:objective",
+            owner: "Sats",
+            disposition: "UNDECLARED",
+            continuation: "none",
+            result_path: recordPath,
+            required_action: nativeRecord.body.requiredAction,
+          },
+          nativeRecord,
+        },
+      });
+    }).pipe(Effect.provide(layer));
+    yield* Effect.gen(function* () {
+      yield* notifyOnce;
+      const first = yield* fs.readFileString(recordPath);
+      yield* notifyOnce;
+      expect(seenBeforeRun).toEqual([true, true]);
+      expect(yield* fs.readFileString(recordPath)).toBe(first);
+      const written = JSON.parse(first);
+      expect(written).toMatchObject({
+        schema: "t3-native-stop-record/v1",
+        environment: "env-test",
+        disposition: "UNDECLARED",
+        owner: "Sats",
+      });
+      expect(first).not.toContain("sats-completion-notify");
+      expect(JSON.parse(calls[0]?.stdin ?? "{}").result_path).toBe(recordPath);
+      expect(yield* fs.readDirectory(`${recordRoot}/thread`)).toEqual(["episode.json"]);
+    }).pipe(Effect.ensuring(Effect.orDie(removeRecords)));
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("does not run the notifier when the native stop record cannot be written", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    yield* removeRecords;
+    yield* fs.makeDirectory(recordRoot, { recursive: true });
+    // A file where the record's directory must go makes the write fail.
+    yield* fs.writeFileString(`${recordRoot}/blocked`, "");
+    const calls: Array<ProcessRunner.ProcessRunInput> = [];
+    yield* Effect.gen(function* () {
+      const receipt = yield* Effect.gen(function* () {
+        const delivery = yield* StopNoticeDelivery.StopNoticeDeliveryService;
+        return yield* delivery.notify({
+          final: false,
+          delivery: {
+            operation: "stop",
+            episodeId: "message:objective",
+            request: {
+              thread_id: ThreadId.make("thread:stopper"),
+              episode_message_id: "message:objective",
+              owner: "Sats",
+              disposition: "UNDECLARED",
+              continuation: "none",
+              result_path: `${recordRoot}/blocked/episode.json`,
+              required_action: "Read the thread.",
+            },
+            nativeRecord: {
+              path: `${recordRoot}/blocked/episode.json`,
+              body: {
+                schema: "t3-native-stop-record/v1",
+                note: "Not the agent's RESULT.",
+                threadId: ThreadId.make("thread:stopper"),
+                episodeId: "message:objective",
+                episodeOrigin: "message",
+                disposition: "UNDECLARED",
+                source: "native",
+                trigger: "run_completed",
+                runId: null,
+                runtimeRequestId: null,
+                owner: "Sats",
+                requiredAction: "Read the thread.",
+                opener: null,
+                stoppedAt: "2026-10-26T02:00:00.000Z",
+                transcript: {
+                  threadId: ThreadId.make("thread:stopper"),
+                  runId: null,
+                  read: "t3_thread_read",
+                },
+              },
+            },
+          },
+        });
+      }).pipe(Effect.provide(stubbedDelivery(calls)));
+      expect(receipt).toMatchObject({ outcome: "retry", notifierState: null });
+      expect(receipt.error).toContain("native stop record could not be written");
+      expect(calls).toEqual([]);
+    }).pipe(Effect.ensuring(Effect.orDie(removeRecords)));
+  }).pipe(Effect.provide(NodeServices.layer)),
 );
 
 it.effect("reports an unconfigured notifier as unavailable without running anything", () =>

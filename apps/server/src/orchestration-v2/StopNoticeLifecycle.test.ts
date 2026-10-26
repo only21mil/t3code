@@ -6,8 +6,10 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   RunId,
+  RuntimeRequestId,
   ThreadId,
 } from "@t3tools/contracts";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -21,6 +23,7 @@ import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import { StopNoticeConfig } from "./StopNoticeConfig.ts";
+import { deriveStopNotices, StopNoticeDeriver } from "./StopNoticeDerivation.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
@@ -36,6 +39,16 @@ const adapter = {
 } as ProviderAdapter.ProviderAdapterV2["Service"];
 
 // No effect worker: runs stay unstarted, and the outbox rows stay for inspection.
+// While set, every stop derivation fails, as a projection read error would.
+class InjectedDerivationError extends Data.TaggedError("InjectedDerivationError")<{}> {}
+let derivationFails = false;
+const flakyDeriver = Layer.succeed(StopNoticeDeriver, {
+  derive: ((input) =>
+    derivationFails
+      ? Effect.fail(new InjectedDerivationError())
+      : deriveStopNotices(input)) as typeof deriveStopNotices,
+});
+
 const makeLayer = (command: string | null) => {
   const layerDatabase = SqlitePersistence.layerMemory;
   return ThreadManagementService.layer.pipe(
@@ -52,7 +65,10 @@ const makeLayer = (command: string | null) => {
     ),
     Layer.provideMerge(ServerSettings.layerTest()),
     Layer.provideMerge(CommandReceiptStore.layer.pipe(Layer.provide(layerDatabase))),
-    Layer.provide(Layer.succeed(StopNoticeConfig, { command, defaultOwner: "genesis" })),
+    Layer.provide(
+      Layer.succeed(StopNoticeConfig, { command, defaultOwner: "genesis", nativeRecordDir: null }),
+    ),
+    Layer.provide(flakyDeriver),
   );
 };
 
@@ -233,4 +249,72 @@ it.effect("a run ended with no report still stops natively, from the run's own e
     assert.equal(notice?.stop?.disposition, "CANCELED");
     assert.equal(notice?.stop?.trigger, "run_interrupted");
   }).pipe(Effect.provide(makeLayer("/opt/sats/sats-completion-notify"))),
+);
+
+const reconcileRows = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  return (yield* sql<{ readonly effect_id: string; readonly payload_json: string }>`
+    SELECT effect_id, payload_json FROM orchestration_v2_effect_outbox
+    WHERE effect_type = 'stop-notice.reconcile'
+    ORDER BY rowid
+  `).map((row) => ({
+    id: row.effect_id,
+    request: JSON.parse(row.payload_json) as {
+      readonly objectiveMessageIds: ReadonlyArray<MessageId>;
+      readonly resolvedRequestIds: ReadonlyArray<RuntimeRequestId>;
+      readonly terminalRunIds: ReadonlyArray<RunId>;
+      readonly subagentEnded: boolean;
+    },
+  }));
+});
+
+// What the effect worker does with a reconcile row.
+const runReconcile = (row: Effect.Success<typeof reconcileRows>[number]) =>
+  Orchestrator.OrchestratorV2.use((orchestrator) =>
+    orchestrator.dispatch({
+      objectiveMessageIds: row.request.objectiveMessageIds,
+      resolvedRequestIds: row.request.resolvedRequestIds,
+      terminalRunIds: row.request.terminalRunIds,
+      subagentEnded: row.request.subagentEnded,
+      type: "thread.stop-notice.reconcile",
+      commandId: CommandId.make(`command:${row.id}`),
+      threadId,
+    }),
+  );
+
+it.effect("a failed stop derivation commits a reconcile row, never a silently lost stop", () =>
+  Effect.gen(function* () {
+    // Old cause: the derivation error was logged and the run's end committed
+    // with no stop record and no outbox row, so nothing would ever report it.
+    derivationFails = true;
+    yield* createAndSend("lost");
+    yield* interruptLatest("lost");
+    derivationFails = false;
+    assert.isUndefined(yield* stopNotice);
+    assert.deepEqual(yield* stopRows, []);
+    const rows = yield* reconcileRows;
+    assert.isAbove(rows.length, 0);
+    assert.isTrue(
+      rows.some((row) => row.request.objectiveMessageIds.includes(MessageId.make("message:lost"))),
+    );
+    assert.isTrue(rows.some((row) => row.request.terminalRunIds.length > 0));
+
+    // Each row replans from the committed projection; running them again adds nothing.
+    for (const row of rows) yield* runReconcile(row);
+    for (const row of rows) yield* runReconcile(row);
+    const notice = yield* stopNotice;
+    assert.equal(notice?.episodeId, "message:lost");
+    assert.equal(notice?.stop?.source, "native");
+    assert.equal(notice?.stop?.disposition, "CANCELED");
+    assert.deepEqual(
+      (yield* stopRows).map((row) => row.id),
+      [
+        `effect:stop-notice.deliver:resume:${threadId}:message:lost`,
+        `effect:stop-notice.deliver:stop:${threadId}:message:lost`,
+      ],
+    );
+  }).pipe(
+    Effect.ensuring(Effect.sync(() => (derivationFails = false))),
+    Effect.provide(makeLayer("/opt/sats/sats-completion-notify")),
+  ),
 );

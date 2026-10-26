@@ -7,12 +7,14 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
+import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
 import type * as EffectOutbox from "./EffectOutbox.ts";
 import type * as ProjectionStore from "./ProjectionStore.ts";
+import type { StopNoticeConfigShape } from "./StopNoticeConfig.ts";
 import {
   planStopNotice,
   stopNoticeTriggers,
@@ -46,6 +48,7 @@ export function stopNoticeOutboxEffect(
             operation: "stop",
             episodeId: effect.episodeId,
             request: effect.request,
+            ...(effect.nativeRecord === undefined ? {} : { nativeRecord: effect.nativeRecord }),
           }
         : {
             type: "stop-notice.deliver",
@@ -56,13 +59,43 @@ export function stopNoticeOutboxEffect(
   };
 }
 
+/**
+ * The durable stand-in for a write's stop derivation when that derivation
+ * failed: one row per thread the write touched, committed in the same
+ * transaction, which plans the thread again from its projection.
+ */
+export function stopNoticeReconcileEffects(
+  events: ReadonlyArray<OrchestrationV2DomainEvent>,
+  eventKey: string,
+): Array<EffectOutbox.PendingOrchestrationEffectV2> {
+  const effects: Array<EffectOutbox.PendingOrchestrationEffectV2> = [];
+  for (const threadId of new Set(events.map((event) => event.threadId))) {
+    const triggers = stopNoticeTriggers(threadId, events);
+    if (triggers === null) continue;
+    const key = `stop-notice.reconcile:${threadId}:${eventKey}`;
+    effects.push({
+      id: `effect:${key}`,
+      commandId: CommandId.make(`command:effect:${key}`),
+      threadId,
+      request: {
+        type: "stop-notice.reconcile",
+        objectiveMessageIds: triggers.objectiveMessages.map((message) => message.id),
+        resolvedRequestIds: [...triggers.resolvedRequestIds],
+        terminalRunIds: triggers.terminalRuns.map((run) => run.id),
+        subagentEnded: triggers.subagentEnded,
+      },
+    });
+  }
+  return effects;
+}
+
 const BACKGROUND_TURN_ITEM_TYPES = ["command_execution", "dynamic_tool", "subagent"] as const;
 
 /** Plans one thread against its committed projection. Null when nothing changes. */
 export const planThreadStopNotice = Effect.fnUntraced(function* (input: {
   readonly projectionStore: ProjectionStore.ProjectionStoreV2["Service"];
   readonly effectOutbox: EffectOutbox.EffectOutboxV2["Service"];
-  readonly defaultOwner: string | null;
+  readonly config: Pick<StopNoticeConfigShape, "defaultOwner" | "nativeRecordDir">;
   readonly threadId: ThreadId;
   readonly triggers: StopNoticeTriggers;
   /** Effects committed with these events, which the outbox does not show yet. */
@@ -121,7 +154,8 @@ export const planThreadStopNotice = Effect.fnUntraced(function* (input: {
     triggers,
     facts: {
       now: DateTime.formatIso(now),
-      defaultOwner: input.defaultOwner,
+      defaultOwner: input.config.defaultOwner,
+      nativeRecordDir: input.config.nativeRecordDir,
       pendingBackgroundWork,
       pendingRestartContinuation,
     },
@@ -141,7 +175,7 @@ export const planThreadStopNotice = Effect.fnUntraced(function* (input: {
 export const deriveStopNotices = Effect.fnUntraced(function* (input: {
   readonly projectionStore: ProjectionStore.ProjectionStoreV2["Service"];
   readonly effectOutbox: EffectOutbox.EffectOutboxV2["Service"];
-  readonly defaultOwner: string | null;
+  readonly config: Pick<StopNoticeConfigShape, "defaultOwner" | "nativeRecordDir">;
   readonly events: ReadonlyArray<OrchestrationV2DomainEvent>;
   readonly plannedEffects: ReadonlyArray<EffectOutbox.PendingOrchestrationEffectV2>;
   readonly eventKey: string;
@@ -171,7 +205,7 @@ export const deriveStopNotices = Effect.fnUntraced(function* (input: {
     const planned = yield* planThreadStopNotice({
       projectionStore: input.projectionStore,
       effectOutbox: input.effectOutbox,
-      defaultOwner: input.defaultOwner,
+      config: input.config,
       threadId,
       triggers,
       plannedEffects: [...input.plannedEffects, ...effects],
@@ -189,3 +223,10 @@ export const deriveStopNotices = Effect.fnUntraced(function* (input: {
   }
   return { events, effects };
 });
+
+/** Tests swap the derivation to prove a failed one still leaves durable work behind. */
+export class StopNoticeDeriver extends Context.Reference<{
+  readonly derive: typeof deriveStopNotices;
+}>("t3/orchestration-v2/StopNoticeDeriver", {
+  defaultValue: () => ({ derive: deriveStopNotices }),
+}) {}

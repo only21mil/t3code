@@ -1,5 +1,6 @@
 import {
   EnvironmentId,
+  type StopNativeRecord,
   type StopNotifierReceipt,
   StopNotifierResumeRequest,
   StopNotifierStopRequest,
@@ -7,8 +8,11 @@ import {
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import { writeFileStringAtomically } from "@t3tools/shared/atomicWrite";
 
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ProcessRunner from "../processRunner.ts";
@@ -19,6 +23,7 @@ export type StopNoticeDeliveryRequest =
       readonly operation: "stop";
       readonly episodeId: string;
       readonly request: StopNotifierStopRequest;
+      readonly nativeRecord?: StopNativeRecord | undefined;
     }
   | {
       readonly operation: "resume";
@@ -169,8 +174,18 @@ export class StopNoticeDeliveryService extends Context.Reference<StopNoticeDeliv
  */
 const NOTIFIER_TIMEOUT = Duration.seconds(25);
 
+/**
+ * The native stop record's bytes: the frozen row's body plus this server's
+ * environment id, so a replay rewrites the same file.
+ */
+export function nativeStopRecordContents(record: StopNativeRecord, environment: string): string {
+  return `${JSON.stringify({ ...record.body, environment }, null, 2)}\n`;
+}
+
 const make = Effect.gen(function* () {
   const config = yield* StopNoticeConfig;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const processRunner = yield* ProcessRunner.ProcessRunner;
   const environment = yield* ServerEnvironment.ServerEnvironmentIdentity;
 
@@ -184,6 +199,33 @@ const make = Effect.gen(function* () {
         return unavailableReceipt(delivery, "T3CODE_STOP_NOTIFIER must be an absolute path.");
       }
       const environmentId = yield* environment.getEnvironmentId;
+      // The record result_path names is written, by rename, before any transport.
+      if (delivery.operation === "stop" && delivery.nativeRecord !== undefined) {
+        const record = delivery.nativeRecord;
+        const written = yield* writeFileStringAtomically({
+          filePath: record.path,
+          contents: nativeStopRecordContents(record, environmentId),
+        }).pipe(
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(Path.Path, path),
+          Effect.as(null),
+          Effect.catch((error) => Effect.succeed(String(error))),
+        );
+        if (written !== null) {
+          return {
+            operation: delivery.operation,
+            episodeId: delivery.episodeId,
+            outcome: "retry",
+            notifierState: null,
+            deliveryEvidence: null,
+            eventId: null,
+            generation: null,
+            recipientRunId: null,
+            error: `The native stop record could not be written, so the notifier was not run: ${written}`,
+            final: input.final,
+          } satisfies StopNotifierReceipt;
+        }
+      }
       const stdin =
         delivery.operation === "stop"
           ? encodeStopInput({ environment: environmentId, ...delivery.request })

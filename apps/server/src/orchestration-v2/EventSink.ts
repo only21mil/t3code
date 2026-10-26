@@ -33,7 +33,7 @@ import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
 import { StopNoticeConfig } from "./StopNoticeConfig.ts";
-import { deriveStopNotices } from "./StopNoticeDerivation.ts";
+import { StopNoticeDeriver, stopNoticeReconcileEffects } from "./StopNoticeDerivation.ts";
 
 /**
  * ERRORS
@@ -214,6 +214,7 @@ const layerBase: Layer.Layer<
     const projectStore = yield* ProjectStore.ProjectStoreV2;
     const turnItemPositions = yield* TurnItemPositionStore.TurnItemPositionStoreV2;
     const stopNoticeConfig = yield* StopNoticeConfig;
+    const stopNoticeDeriver = yield* StopNoticeDeriver;
     const liveEvents = yield* PubSub.unbounded<OrchestrationV2StoredEvent>();
     const liveEventsByType = new Map<
       OrchestrationV2DomainEvent["type"],
@@ -364,8 +365,10 @@ const layerBase: Layer.Layer<
 
     /**
      * Appends the stop-notice record and delivery rows these committed events
-     * imply, in the same transaction. A derivation failure is logged and the
-     * write still commits, so stop reporting can never block a run's lifecycle.
+     * imply, in the same transaction. When derivation fails, the write commits
+     * a reconcile row per touched thread instead, in that same transaction, so
+     * a run's lifecycle never waits on stop reporting and a committed stop is
+     * never lost. If that row cannot be written either, the whole write fails.
      */
     const appendStopNotices = (input: {
       readonly commandId?: CommandId | undefined;
@@ -376,21 +379,31 @@ const layerBase: Layer.Layer<
         const unchanged = { storedEvents: input.storedEvents, effects: input.effects };
         const lastSequence = input.storedEvents.at(-1)?.sequence;
         if (stopNoticeConfig.command === null || lastSequence === undefined) return unchanged;
-        const derived = yield* deriveStopNotices({
-          projectionStore,
-          effectOutbox,
-          defaultOwner: stopNoticeConfig.defaultOwner,
-          events: input.storedEvents.map((stored) => stored.event),
-          plannedEffects: input.effects,
-          eventKey: String(lastSequence),
-        }).pipe(
-          Effect.catch((cause) =>
-            Effect.logWarning("Stop notice derivation failed; the write commits without it", {
-              cause,
-            }).pipe(Effect.as(null)),
-          ),
-        );
-        if (derived === null || derived.events.length === 0) return unchanged;
+        const events = input.storedEvents.map((stored) => stored.event);
+        const eventKey = String(lastSequence);
+        const derived = yield* stopNoticeDeriver
+          .derive({
+            projectionStore,
+            effectOutbox,
+            config: stopNoticeConfig,
+            events,
+            plannedEffects: input.effects,
+            eventKey,
+          })
+          .pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("Stop notice derivation failed; a reconcile row commits instead", {
+                cause,
+              }).pipe(Effect.as(null)),
+            ),
+          );
+        if (derived === null) {
+          const reconcile = stopNoticeReconcileEffects(events, eventKey);
+          if (reconcile.length === 0) return unchanged;
+          yield* effectOutbox.enqueue(reconcile);
+          return { storedEvents: input.storedEvents, effects: [...input.effects, ...reconcile] };
+        }
+        if (derived.events.length === 0) return unchanged;
         const normalized = yield* normalizeEvents(derived.events);
         const storedEvents = yield* eventStore.append({
           ...(input.commandId === undefined ? {} : { commandId: input.commandId }),
