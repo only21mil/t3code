@@ -1,0 +1,92 @@
+[
+  {
+    "label": "baseline",
+    "window_utc": [
+      "2026-10-26T05:14:50.674363+00:00",
+      "2026-10-26T05:15:00.718149+00:00"
+    ],
+    "duration_s": 10.043785186950117,
+    "strictly_contained_metadata_samples": 4,
+    "metadata_sample_count": 6,
+    "actual_cohort_range": "0\u20130",
+    "actual_total_active_range": "3\u20134",
+    "other_active_range": "2\u20132",
+    "probe_accepted_ms": 45,
+    "probe_client_completion_s": "6.541",
+    "probe_request_to_start_s": "0.521",
+    "probe_runtime_s": "5.995",
+    "queued_range": "0\u20130"
+  },
+  {
+    "label": "baseline-idle",
+    "window_utc": [
+      "2026-10-26T05:15:22.932583+00:00",
+      "2026-10-26T05:15:32.975519+00:00"
+    ],
+    "duration_s": 10.042935294972267,
+    "strictly_contained_metadata_samples": 1,
+    "metadata_sample_count": 1,
+    "actual_cohort_range": "0\u20130",
+    "actual_total_active_range": "3\u20133",
+    "other_active_range": "2\u20132",
+    "probe_accepted_ms": null,
+    "probe_client_completion_s": "n/a",
+    "probe_request_to_start_s": "n/a",
+    "probe_runtime_s": "n/a",
+    "queued_range": "0\u20130"
+  },
+  {
+    "label": "c1",
+    "window_utc": [
+      "2026-10-26T05:16:34.834953+00:00",
+      "2026-10-26T05:16:44.877414+00:00"
+    ],
+    "duration_s": 10.042463174962904,
+    "strictly_contained_metadata_samples": 5,
+    "metadata_sample_count": 6,
+    "actual_cohort_range": "1\u20131",
+    "actual_total_active_range": "5\u20136",
+    "other_active_range": "3\u20133",
+    "probe_accepted_ms": 43,
+    "probe_client_completion_s": "3.002",
+    "probe_request_to_start_s": "0.338",
+    "probe_runtime_s": "2.634",
+    "queued_range": "0\u20130"
+  },
+  {
+    "label": "c2",
+    "window_utc": [
+      "2026-10-26T05:18:02.520379+00:00",
+      "2026-10-26T05:18:12.568096+00:00"
+    ],
+    "duration_s": 10.047718402987812,
+    "strictly_contained_metadata_samples": 5,
+    "metadata_sample_count": 5,
+    "actual_cohort_range": "2\u20132",
+    "actual_total_active_range": "5\u20136",
+    "other_active_range": "2\u20132",
+    "probe_accepted_ms": 176,
+    "probe_client_completion_s": "2.705",
+    "probe_request_to_start_s": "0.377",
+    "probe_runtime_s": "2.164",
+    "queued_range": "0\u20130"
+  },
+  {
+    "label": "c4",
+    "window_utc": [
+      "2026-10-26T05:20:14.559234+00:00",
+      "2026-10-26T05:20:24.606666+00:00"
+    ],
+    "duration_s": 10.047438369016163,
+    "strictly_contained_metadata_samples": 3,
+    "metadata_sample_count": 4,
+    "actual_cohort_range": "4\u20134",
+    "actual_total_active_range": "7\u20138",
+    "other_active_range": "2\u20132",
+    "probe_accepted_ms": 1179,
+    "probe_client_completion_s": "4.117",
+    "probe_request_to_start_s": "0.821",
+    "probe_runtime_s": "2.164",
+    "queued_range": "0\u20130"
+  }
+]

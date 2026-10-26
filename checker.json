@@ -1,0 +1,104 @@
+{
+  "verdict": "PASS",
+  "worker_files": 7,
+  "case_rows": 168,
+  "numeric_checks": 1008,
+  "failures": [],
+  "outputs": [
+    {
+      "key": "c1-w1",
+      "cases": 24,
+      "sha256": "40be75c840445460a52022de4e520a7d14b121a807256c7f24c4cdb838497d49",
+      "bytes": 24993
+    },
+    {
+      "key": "c2-w1",
+      "cases": 24,
+      "sha256": "9d7345e27c58a37d84cfd1d86792053a993ab562c19e7d4c689f596734335fcc",
+      "bytes": 22423
+    },
+    {
+      "key": "c2-w2",
+      "cases": 24,
+      "sha256": "30eed982fcdbe67a5d2dedde239bdb0373c80ce1399bf0efe72d662acbb9a7bf",
+      "bytes": 21555
+    },
+    {
+      "key": "c4-w1",
+      "cases": 24,
+      "sha256": "5d7428d60cdafce142378571e6ae20b5ac09b575ba7b02852edab208d1c15159",
+      "bytes": 19854
+    },
+    {
+      "key": "c4-w2",
+      "cases": 24,
+      "sha256": "93baba2e5b5aac97c2cdb7c02122012dfcaa75c954c105a367927c384446af97",
+      "bytes": 20430
+    },
+    {
+      "key": "c4-w3",
+      "cases": 24,
+      "sha256": "012ba9c4c3fc0e2a9fd7681ff88a67aca2b075a774097320169be5d2e95831fa",
+      "bytes": 24411
+    },
+    {
+      "key": "c4-w4",
+      "cases": 24,
+      "sha256": "73a09b878e9c26e6c13f47a115f2cfeb4b1a5b1cf0fe553bda8f3ddc2b3cd3e6",
+      "bytes": 24293
+    }
+  ],
+  "rounding_rule": "Nearest six decimals; either direction is valid at an exact half-unit tie. Initial Python round comparison rejected seven valid half-up ties; corrected without changing any worker output.",
+  "initial_half_tie_rejections": [
+    [
+      "c1-w1",
+      "C1W1S7",
+      "physical_read_mib_s",
+      5.323438,
+      5.323437
+    ],
+    [
+      "c4-w1",
+      "C4W1S6",
+      "physical_read_mib_s",
+      7.039063,
+      7.039062
+    ],
+    [
+      "c4-w1",
+      "C4W1S10",
+      "physical_write_mib_s",
+      21.132813,
+      21.132812
+    ],
+    [
+      "c4-w1",
+      "C4W1S13",
+      "physical_read_mib_s",
+      8.457813,
+      8.457812
+    ],
+    [
+      "c4-w2",
+      "C4W2S3",
+      "physical_read_mib_s",
+      8.598438,
+      8.598437
+    ],
+    [
+      "c4-w3",
+      "C4W3S8",
+      "physical_read_mib_s",
+      5.476563,
+      5.476562
+    ],
+    [
+      "c4-w3",
+      "C4W3S22",
+      "physical_read_mib_s",
+      7.320313,
+      7.320312
+    ]
+  ],
+  "exact_half_unit_ties": 21
+}

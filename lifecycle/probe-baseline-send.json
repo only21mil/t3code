@@ -1,0 +1,12 @@
+{
+  "accepted_ms": 45,
+  "sent_utc": "2026-10-26T05:14:51.749Z",
+  "receipt": {
+    "threadId": "thread:mcp:e5e926c4-b8db-45a6-8639-8faf6d3fc2fe:capacity-probe-create-20261026:0",
+    "link": "[Sol 6.1 High probe · F-D capacity send timing](t3-thread://v1/thread:mcp:e5e926c4-b8db-45a6-8639-8faf6d3fc2fe:capacity-probe-create-20261026:0)",
+    "messageId": "message:mcp:e5e926c4-b8db-45a6-8639-8faf6d3fc2fe:thread-send:capacity-probe-baseline-20261026",
+    "runId": "run:thread:thread%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Acapacity-probe-create-20261026%3A0:ordinal:1",
+    "status": "starting",
+    "delivery": "started"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "label": "final",
+  "start_utc": "2026-10-26T05:23:34.603Z",
+  "end_utc": "2026-10-26T05:23:36.242Z",
+  "api_ms": 1639,
+  "project_count": 41,
+  "pages": 41,
+  "states": {
+    "running": 3
+  },
+  "active": 3,
+  "queued": 0,
+  "other_project_aggregate": {
+    "running": 2
+  },
+  "own": [
+    {
+      "threadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+      "parentThreadId": null,
+      "status": "running",
+      "latestRunId": "run:thread:mcp%3A0d60e6a6-f691-471e-bb8a-21fd5ad3a688:ordinal:7",
+      "runtimeMode": "full-access",
+      "interactionMode": "default",
+      "model": "gpt-6.1-sol",
+      "providerInstanceId": "codex_auto"
+    }
+  ]
+}

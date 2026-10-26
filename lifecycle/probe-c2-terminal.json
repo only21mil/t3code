@@ -1,0 +1,66 @@
+{
+  "thread": {
+    "threadId": "thread:mcp:e5e926c4-b8db-45a6-8639-8faf6d3fc2fe:capacity-probe-create-20261026:0",
+    "projectId": "mcp:00e3606f-75a6-47db-989b-2d5233cfc598",
+    "title": "Sol 6.1 High probe · F-D capacity send timing",
+    "link": "[Sol 6.1 High probe · F-D capacity send timing](t3-thread://v1/thread:mcp:e5e926c4-b8db-45a6-8639-8faf6d3fc2fe:capacity-probe-create-20261026:0)",
+    "createdBy": "agent",
+    "creationSource": "mcp",
+    "status": "completed",
+    "latestRunId": "run:thread:thread%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Acapacity-probe-create-20261026%3A0:ordinal:3",
+    "activeRunId": null,
+    "providerInstanceId": "codex_auto",
+    "model": "gpt-6.1-sol",
+    "runtimeMode": "full-access",
+    "interactionMode": "default",
+    "linkedPullRequest": null,
+    "pullRequests": [],
+    "titleRegeneration": null,
+    "branch": null,
+    "worktreePath": null,
+    "parentThreadId": null,
+    "relationshipToParent": null,
+    "runCount": 3,
+    "itemCount": 10,
+    "pendingRequestCount": 0,
+    "archived": false,
+    "settled": false,
+    "settledAt": null,
+    "snoozed": false,
+    "snoozedUntil": null,
+    "createdAt": "2026-10-26T05:14:13.222Z",
+    "updatedAt": "2026-10-26T05:18:05.550Z"
+  },
+  "recentRuns": [
+    {
+      "runId": "run:thread:thread%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Acapacity-probe-create-20261026%3A0:ordinal:3",
+      "ordinal": 3,
+      "status": "completed",
+      "providerInstanceId": "codex_auto",
+      "model": "gpt-6.1-sol",
+      "requestedAt": "2026-10-26T05:18:03.009Z",
+      "startedAt": "2026-10-26T05:18:03.386Z",
+      "completedAt": "2026-10-26T05:18:05.550Z"
+    }
+  ],
+  "settled": true,
+  "configuration": {
+    "threadId": "thread:mcp:e5e926c4-b8db-45a6-8639-8faf6d3fc2fe:capacity-probe-create-20261026:0",
+    "modelSelection": {
+      "instanceId": "codex_auto",
+      "model": "gpt-6.1-sol",
+      "options": [
+        {
+          "id": "reasoningEffort",
+          "value": "high"
+        },
+        {
+          "id": "serviceTier",
+          "value": "default"
+        }
+      ]
+    },
+    "runtimeMode": "full-access",
+    "interactionMode": "default"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "clientRequestId": "capacity-canceled-20261026-episode2-once",
+  "at": "2026-10-26T05:35:08.522085+00:00",
+  "accepted": true,
+  "readback": true,
+  "episode": 2,
+  "message_sha256": "5aaca29229f3a0e430dcfcaf47a181d004964769cb2cca112a3fac7f7da481e2",
+  "receipt": {
+    "threadId": "mcp:1af0c694-e5dd-4ef2-9c7f-cf5c1c1915c5",
+    "link": "[grokbot Genesis F-D load migrate-dev-db RCA 20261025](t3-thread://v1/mcp:1af0c694-e5dd-4ef2-9c7f-cf5c1c1915c5)",
+    "messageId": "message:mcp:client%3A68547149-c0be-494d-b519-0d0de269a6a2:thread-send:capacity-canceled-20261026-episode2-once",
+    "runId": "run:thread:mcp%3A1af0c694-e5dd-4ef2-9c7f-cf5c1c1915c5:ordinal:7",
+    "status": "queued",
+    "delivery": "queued"
+  },
+  "mode": "queue",
+  "message_metadata": [],
+  "readback_scope": "Exact own queuedRunId only; message text compared in memory and discarded; only queue metadata saved.",
+  "queue_metadata": {
+    "queuedRunId": "run:thread:mcp%3A1af0c694-e5dd-4ef2-9c7f-cf5c1c1915c5:ordinal:7",
+    "truncated": false,
+    "own_message_sha256_matches": true
+  }
+}

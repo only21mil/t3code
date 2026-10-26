@@ -1,0 +1,284 @@
+[
+  {
+    "label": "c4",
+    "start_utc": "2026-10-26T05:20:16.065Z",
+    "end_utc": "2026-10-26T05:20:18.310Z",
+    "api_ms": 2245,
+    "project_count": 41,
+    "pages": 41,
+    "states": {
+      "running": 8
+    },
+    "active": 8,
+    "queued": 0,
+    "other_project_aggregate": {
+      "running": 2
+    },
+    "own": [
+      {
+        "threadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "parentThreadId": null,
+        "status": "running",
+        "latestRunId": "run:thread:mcp%3A0d60e6a6-f691-471e-bb8a-21fd5ad3a688:ordinal:4",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      },
+      {
+        "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c4-w2-20261026",
+        "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "status": "running",
+        "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c4-w2-20261026:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      },
+      {
+        "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c4-w1-20261026",
+        "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "status": "running",
+        "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c4-w1-20261026:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      },
+      {
+        "threadId": "thread:mcp:e5e926c4-b8db-45a6-8639-8faf6d3fc2fe:capacity-probe-create-20261026:0",
+        "parentThreadId": null,
+        "status": "running",
+        "latestRunId": "run:thread:thread%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Acapacity-probe-create-20261026%3A0:ordinal:4",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      },
+      {
+        "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c4-w3-20261026",
+        "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "status": "running",
+        "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c4-w3-20261026:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      },
+      {
+        "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c4-w4-20261026",
+        "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "status": "running",
+        "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c4-w4-20261026:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      }
+    ]
+  },
+  {
+    "label": "c4",
+    "start_utc": "2026-10-26T05:20:18.310Z",
+    "end_utc": "2026-10-26T05:20:21.598Z",
+    "api_ms": 3288,
+    "project_count": 41,
+    "pages": 41,
+    "states": {
+      "running": 7
+    },
+    "active": 7,
+    "queued": 0,
+    "other_project_aggregate": {
+      "running": 2
+    },
+    "own": [
+      {
+        "threadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "parentThreadId": null,
+        "status": "running",
+        "latestRunId": "run:thread:mcp%3A0d60e6a6-f691-471e-bb8a-21fd5ad3a688:ordinal:4",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      },
+      {
+        "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c4-w1-20261026",
+        "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "status": "running",
+        "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c4-w1-20261026:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      },
+      {
+        "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c4-w4-20261026",
+        "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "status": "running",
+        "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c4-w4-20261026:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      },
+      {
+        "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c4-w3-20261026",
+        "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "status": "running",
+        "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c4-w3-20261026:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      },
+      {
+        "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c4-w2-20261026",
+        "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "status": "running",
+        "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c4-w2-20261026:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      }
+    ]
+  },
+  {
+    "label": "c4",
+    "start_utc": "2026-10-26T05:20:21.598Z",
+    "end_utc": "2026-10-26T05:20:23.233Z",
+    "api_ms": 1635,
+    "project_count": 41,
+    "pages": 41,
+    "states": {
+      "running": 7
+    },
+    "active": 7,
+    "queued": 0,
+    "other_project_aggregate": {
+      "running": 2
+    },
+    "own": [
+      {
+        "threadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "parentThreadId": null,
+        "status": "running",
+        "latestRunId": "run:thread:mcp%3A0d60e6a6-f691-471e-bb8a-21fd5ad3a688:ordinal:4",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      },
+      {
+        "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c4-w3-20261026",
+        "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "status": "running",
+        "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c4-w3-20261026:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      },
+      {
+        "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c4-w1-20261026",
+        "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "status": "running",
+        "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c4-w1-20261026:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      },
+      {
+        "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c4-w4-20261026",
+        "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "status": "running",
+        "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c4-w4-20261026:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      },
+      {
+        "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c4-w2-20261026",
+        "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "status": "running",
+        "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c4-w2-20261026:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      }
+    ]
+  },
+  {
+    "label": "c4",
+    "start_utc": "2026-10-26T05:20:23.233Z",
+    "end_utc": "2026-10-26T05:20:24.928Z",
+    "api_ms": 1695,
+    "project_count": 41,
+    "pages": 41,
+    "states": {
+      "running": 7
+    },
+    "active": 7,
+    "queued": 0,
+    "other_project_aggregate": {
+      "running": 2
+    },
+    "own": [
+      {
+        "threadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "parentThreadId": null,
+        "status": "running",
+        "latestRunId": "run:thread:mcp%3A0d60e6a6-f691-471e-bb8a-21fd5ad3a688:ordinal:4",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      },
+      {
+        "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c4-w3-20261026",
+        "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "status": "running",
+        "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c4-w3-20261026:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      },
+      {
+        "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c4-w1-20261026",
+        "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "status": "running",
+        "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c4-w1-20261026:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      },
+      {
+        "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c4-w4-20261026",
+        "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "status": "running",
+        "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c4-w4-20261026:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      },
+      {
+        "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c4-w2-20261026",
+        "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "status": "running",
+        "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c4-w2-20261026:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      }
+    ]
+  }
+]

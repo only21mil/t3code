@@ -1,0 +1,200 @@
+[
+  {
+    "label": "baseline-0",
+    "start_utc": "2026-10-26T05:14:51.805Z",
+    "end_utc": "2026-10-26T05:14:53.812Z",
+    "api_ms": 2007,
+    "project_count": 41,
+    "pages": 41,
+    "states": {
+      "running": 4
+    },
+    "active": 4,
+    "queued": 0,
+    "other_project_aggregate": {
+      "running": 2
+    },
+    "own": [
+      {
+        "threadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "parentThreadId": null,
+        "status": "running",
+        "latestRunId": "run:thread:mcp%3A0d60e6a6-f691-471e-bb8a-21fd5ad3a688:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      },
+      {
+        "threadId": "thread:mcp:e5e926c4-b8db-45a6-8639-8faf6d3fc2fe:capacity-probe-create-20261026:0",
+        "parentThreadId": null,
+        "status": "running",
+        "latestRunId": "run:thread:thread%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Acapacity-probe-create-20261026%3A0:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      }
+    ]
+  },
+  {
+    "label": "baseline-1",
+    "start_utc": "2026-10-26T05:14:53.814Z",
+    "end_utc": "2026-10-26T05:14:55.409Z",
+    "api_ms": 1595,
+    "project_count": 41,
+    "pages": 41,
+    "states": {
+      "running": 4
+    },
+    "active": 4,
+    "queued": 0,
+    "other_project_aggregate": {
+      "running": 2
+    },
+    "own": [
+      {
+        "threadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "parentThreadId": null,
+        "status": "running",
+        "latestRunId": "run:thread:mcp%3A0d60e6a6-f691-471e-bb8a-21fd5ad3a688:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      },
+      {
+        "threadId": "thread:mcp:e5e926c4-b8db-45a6-8639-8faf6d3fc2fe:capacity-probe-create-20261026:0",
+        "parentThreadId": null,
+        "status": "running",
+        "latestRunId": "run:thread:thread%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Acapacity-probe-create-20261026%3A0:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      }
+    ]
+  },
+  {
+    "label": "baseline-2",
+    "start_utc": "2026-10-26T05:14:55.751Z",
+    "end_utc": "2026-10-26T05:14:57.350Z",
+    "api_ms": 1599,
+    "project_count": 41,
+    "pages": 41,
+    "states": {
+      "running": 4
+    },
+    "active": 4,
+    "queued": 0,
+    "other_project_aggregate": {
+      "running": 2
+    },
+    "own": [
+      {
+        "threadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "parentThreadId": null,
+        "status": "running",
+        "latestRunId": "run:thread:mcp%3A0d60e6a6-f691-471e-bb8a-21fd5ad3a688:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      },
+      {
+        "threadId": "thread:mcp:e5e926c4-b8db-45a6-8639-8faf6d3fc2fe:capacity-probe-create-20261026:0",
+        "parentThreadId": null,
+        "status": "running",
+        "latestRunId": "run:thread:thread%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Acapacity-probe-create-20261026%3A0:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      }
+    ]
+  },
+  {
+    "label": "baseline-3",
+    "start_utc": "2026-10-26T05:14:57.751Z",
+    "end_utc": "2026-10-26T05:15:00.007Z",
+    "api_ms": 2256,
+    "project_count": 41,
+    "pages": 41,
+    "states": {
+      "running": 3
+    },
+    "active": 3,
+    "queued": 0,
+    "other_project_aggregate": {
+      "running": 2
+    },
+    "own": [
+      {
+        "threadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "parentThreadId": null,
+        "status": "running",
+        "latestRunId": "run:thread:mcp%3A0d60e6a6-f691-471e-bb8a-21fd5ad3a688:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      }
+    ]
+  },
+  {
+    "label": "baseline-4",
+    "start_utc": "2026-10-26T05:15:00.008Z",
+    "end_utc": "2026-10-26T05:15:01.939Z",
+    "api_ms": 1931,
+    "project_count": 41,
+    "pages": 41,
+    "states": {
+      "running": 3
+    },
+    "active": 3,
+    "queued": 0,
+    "other_project_aggregate": {
+      "running": 2
+    },
+    "own": [
+      {
+        "threadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "parentThreadId": null,
+        "status": "running",
+        "latestRunId": "run:thread:mcp%3A0d60e6a6-f691-471e-bb8a-21fd5ad3a688:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      }
+    ]
+  },
+  {
+    "label": "baseline-5",
+    "start_utc": "2026-10-26T05:15:01.940Z",
+    "end_utc": "2026-10-26T05:15:03.491Z",
+    "api_ms": 1551,
+    "project_count": 41,
+    "pages": 41,
+    "states": {
+      "running": 3
+    },
+    "active": 3,
+    "queued": 0,
+    "other_project_aggregate": {
+      "running": 2
+    },
+    "own": [
+      {
+        "threadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "parentThreadId": null,
+        "status": "running",
+        "latestRunId": "run:thread:mcp%3A0d60e6a6-f691-471e-bb8a-21fd5ad3a688:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      }
+    ]
+  }
+]

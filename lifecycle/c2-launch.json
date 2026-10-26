@@ -1,0 +1,130 @@
+{
+  "label": "c2",
+  "launchStart": "2026-10-26T05:18:02.845Z",
+  "helpers": [
+    {
+      "key": "c2-w1",
+      "launch_ms": 774,
+      "launch_utc": "2026-10-26T05:18:02.845Z",
+      "delegate": {
+        "taskId": "node:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c2-w1-20261026",
+        "childThreadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c2-w1-20261026",
+        "link": "[Sol 6.1 High produce · produce_capacity_c2_w1](t3-thread://v1/thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c2-w1-20261026)",
+        "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c2-w1-20261026:ordinal:1",
+        "childNodeId": "node:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c2-w1-20261026",
+        "status": "running",
+        "workState": "working",
+        "hasPendingChildRuns": false,
+        "latestTerminalRunId": null,
+        "latestTerminalStatus": null,
+        "latestTerminalSummary": null,
+        "latestTerminalResultContextTransferId": null,
+        "providerInstanceId": "codex_auto",
+        "model": "gpt-6.1-sol",
+        "options": [
+          {
+            "id": "reasoningEffort",
+            "value": "high"
+          },
+          {
+            "id": "serviceTier",
+            "value": "default"
+          }
+        ],
+        "summary": null,
+        "resultContextTransferId": null,
+        "hasPendingQuestion": false,
+        "pendingApproval": null,
+        "waitTimedOut": false,
+        "next": "Completion wakes this thread, so end your turn. Do not wait on it or poll it."
+      },
+      "configuration": {
+        "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c2-w1-20261026",
+        "modelSelection": {
+          "instanceId": "codex_auto",
+          "model": "gpt-6.1-sol",
+          "options": [
+            {
+              "id": "reasoningEffort",
+              "value": "high"
+            },
+            {
+              "id": "serviceTier",
+              "value": "default"
+            }
+          ]
+        },
+        "runtimeMode": "full-access",
+        "interactionMode": "default"
+      }
+    },
+    {
+      "key": "c2-w2",
+      "launch_ms": 773,
+      "launch_utc": "2026-10-26T05:18:02.845Z",
+      "delegate": {
+        "taskId": "node:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c2-w2-20261026",
+        "childThreadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c2-w2-20261026",
+        "link": "[Sol 6.1 High produce · produce_capacity_c2_w2](t3-thread://v1/thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c2-w2-20261026)",
+        "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c2-w2-20261026:ordinal:1",
+        "childNodeId": "node:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c2-w2-20261026",
+        "status": "running",
+        "workState": "working",
+        "hasPendingChildRuns": false,
+        "latestTerminalRunId": null,
+        "latestTerminalStatus": null,
+        "latestTerminalSummary": null,
+        "latestTerminalResultContextTransferId": null,
+        "providerInstanceId": "codex_auto",
+        "model": "gpt-6.1-sol",
+        "options": [
+          {
+            "id": "reasoningEffort",
+            "value": "high"
+          },
+          {
+            "id": "serviceTier",
+            "value": "default"
+          }
+        ],
+        "summary": null,
+        "resultContextTransferId": null,
+        "hasPendingQuestion": false,
+        "pendingApproval": null,
+        "waitTimedOut": false,
+        "next": "Completion wakes this thread, so end your turn. Do not wait on it or poll it."
+      },
+      "configuration": {
+        "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c2-w2-20261026",
+        "modelSelection": {
+          "instanceId": "codex_auto",
+          "model": "gpt-6.1-sol",
+          "options": [
+            {
+              "id": "reasoningEffort",
+              "value": "high"
+            },
+            {
+              "id": "serviceTier",
+              "value": "default"
+            }
+          ]
+        },
+        "runtimeMode": "full-access",
+        "interactionMode": "default"
+      }
+    }
+  ],
+  "probe": {
+    "sent_utc": "2026-10-26T05:18:02.845Z",
+    "accepted_ms": 176,
+    "receipt": {
+      "threadId": "thread:mcp:e5e926c4-b8db-45a6-8639-8faf6d3fc2fe:capacity-probe-create-20261026:0",
+      "link": "[Sol 6.1 High probe · F-D capacity send timing](t3-thread://v1/thread:mcp:e5e926c4-b8db-45a6-8639-8faf6d3fc2fe:capacity-probe-create-20261026:0)",
+      "messageId": "message:mcp:e5e926c4-b8db-45a6-8639-8faf6d3fc2fe:thread-send:capacity-probe-c2-20261026",
+      "runId": "run:thread:thread%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Acapacity-probe-create-20261026%3A0:ordinal:3",
+      "status": "starting",
+      "delivery": "started"
+    }
+  }
+}

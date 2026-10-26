@@ -1,0 +1,38 @@
+{
+  "exit_code": 0,
+  "stdout_json": [
+    {
+      "attempts": 1,
+      "delivery_exit": 0,
+      "disposition": "webhook_accepted",
+      "event_id": "21c475ddfeaeea3ed3767459acddce3093ee6bc94cd5c44203c627709f71aaae",
+      "generation_advanced_from": {
+        "event_id": "168a5303286cd0fd0e8db4385e6d4738f3e19c6ff52263abceb875fca872247f",
+        "from_generation": 1,
+        "kind": "done"
+      },
+      "http_status": 200,
+      "local_appended": true,
+      "local_recorded": true,
+      "log_path": "/home/victor/work/fd-capacity-20261026/rerun/MILESTONES.log",
+      "native_delivery": "verified",
+      "native_recipient_delivery": "delivered",
+      "owner": "GENESIS",
+      "owner_enrollment": {
+        "disposition": "added",
+        "state": "ENROLLED"
+      },
+      "owner_receipt_id": "80f91d42-692f-472d-bb44-175ae11a0122",
+      "reason": "explicit-owner",
+      "receipt_path": "/home/victor/.local/state/sats-completion/milestones/a7ac3eba2426e13bd08249e44a63dde5a55d3f05b4256e017a8ae1193464313b.receipt.json",
+      "recipient_run_id": "80f91d42-692f-472d-bb44-175ae11a0122",
+      "route": "owner:GENESIS",
+      "sats_receipt": "DELIVERED",
+      "state": "WEBHOOK_ACCEPTED"
+    }
+  ],
+  "stderr_present": false,
+  "transport_kind": "done",
+  "objective_disposition": "CANCELED",
+  "episode": 2
+}

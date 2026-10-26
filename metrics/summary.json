@@ -1,0 +1,462 @@
+[
+  {
+    "start_utc": "2026-10-26T05:14:50.674363+00:00",
+    "end_utc": "2026-10-26T05:15:00.718149+00:00",
+    "load_start": [
+      "1.15",
+      "1.89",
+      "3.49"
+    ],
+    "load_end": [
+      "1.13",
+      "1.86",
+      "3.46"
+    ],
+    "available_gib_min": 48.21004867553711,
+    "swap_used_gib_start": 7.938438415527344,
+    "swap_used_gib_end": 7.916942596435547,
+    "swap_in_pages": 3144,
+    "swap_out_pages": 20,
+    "psi_interval_pct": {
+      "io_some": 0.9569300638257204,
+      "io_full": 0.8933882827022837,
+      "memory_some": 0.363528284609671,
+      "memory_full": 0.3608798806957202
+    },
+    "nvme_mib_s": {
+      "read": 12.4295613084402,
+      "write": 22.553203501834812
+    },
+    "top_process_io_deltas": [
+      {
+        "pid": "1703337",
+        "comm": "node-MainThread",
+        "write_delta_bytes": 177475584,
+        "read_delta_bytes": 10465280
+      },
+      {
+        "pid": "425620",
+        "comm": "muse-bin-1.4.13",
+        "write_delta_bytes": 32751616,
+        "read_delta_bytes": 92176384
+      },
+      {
+        "pid": "1570763",
+        "comm": "sats-router",
+        "write_delta_bytes": 22487040,
+        "read_delta_bytes": 0
+      },
+      {
+        "pid": "1717526",
+        "comm": "codex",
+        "write_delta_bytes": 15900672,
+        "read_delta_bytes": 14016512
+      },
+      {
+        "pid": "3186107",
+        "comm": "cli-proxy-api",
+        "write_delta_bytes": 3502080,
+        "read_delta_bytes": 40960
+      },
+      {
+        "pid": "423958",
+        "comm": "opencode.exe",
+        "write_delta_bytes": 3444736,
+        "read_delta_bytes": 0
+      },
+      {
+        "pid": "161175",
+        "comm": "grok-bot",
+        "write_delta_bytes": 430080,
+        "read_delta_bytes": 0
+      },
+      {
+        "pid": "3902412",
+        "comm": "grok-bot",
+        "write_delta_bytes": 372736,
+        "read_delta_bytes": 0
+      },
+      {
+        "pid": "7750",
+        "comm": "codex",
+        "write_delta_bytes": 258048,
+        "read_delta_bytes": 8192
+      },
+      {
+        "pid": "3912782",
+        "comm": "grok-bot",
+        "write_delta_bytes": 118784,
+        "read_delta_bytes": 8192
+      }
+    ],
+    "label": "baseline"
+  },
+  {
+    "start_utc": "2026-10-26T05:15:22.932583+00:00",
+    "end_utc": "2026-10-26T05:15:32.975519+00:00",
+    "load_start": [
+      "1.49",
+      "1.87",
+      "3.42"
+    ],
+    "load_end": [
+      "1.88",
+      "1.95",
+      "3.43"
+    ],
+    "available_gib_min": 47.30109786987305,
+    "swap_used_gib_start": 7.7082061767578125,
+    "swap_used_gib_end": 7.631378173828125,
+    "swap_in_pages": 20632,
+    "swap_out_pages": 505,
+    "psi_interval_pct": {
+      "io_some": 0.4491316400552848,
+      "io_full": 0.4079285467517605,
+      "memory_some": 1.3732439366511007,
+      "memory_full": 1.361125965517609
+    },
+    "nvme_mib_s": {
+      "read": 43.09738199415485,
+      "write": 41.27512777141164
+    },
+    "top_process_io_deltas": [
+      {
+        "pid": "13481",
+        "comm": "gnome-software",
+        "write_delta_bytes": 39682048,
+        "read_delta_bytes": 68796416
+      },
+      {
+        "pid": "1703337",
+        "comm": "node-MainThread",
+        "write_delta_bytes": 35274752,
+        "read_delta_bytes": 1241088
+      },
+      {
+        "pid": "3186107",
+        "comm": "cli-proxy-api",
+        "write_delta_bytes": 11427840,
+        "read_delta_bytes": 1675264
+      },
+      {
+        "pid": "1717526",
+        "comm": "codex",
+        "write_delta_bytes": 4902912,
+        "read_delta_bytes": 446464
+      },
+      {
+        "pid": "161175",
+        "comm": "grok-bot",
+        "write_delta_bytes": 675840,
+        "read_delta_bytes": 0
+      },
+      {
+        "pid": "7750",
+        "comm": "codex",
+        "write_delta_bytes": 335872,
+        "read_delta_bytes": 12288
+      },
+      {
+        "pid": "3902412",
+        "comm": "grok-bot",
+        "write_delta_bytes": 307200,
+        "read_delta_bytes": 0
+      },
+      {
+        "pid": "1570763",
+        "comm": "sats-router",
+        "write_delta_bytes": 159744,
+        "read_delta_bytes": 28672
+      },
+      {
+        "pid": "3912782",
+        "comm": "grok-bot",
+        "write_delta_bytes": 102400,
+        "read_delta_bytes": 0
+      },
+      {
+        "pid": "423958",
+        "comm": "opencode.exe",
+        "write_delta_bytes": 94208,
+        "read_delta_bytes": 0
+      }
+    ],
+    "label": "baseline-idle"
+  },
+  {
+    "start_utc": "2026-10-26T05:16:34.834953+00:00",
+    "end_utc": "2026-10-26T05:16:44.877414+00:00",
+    "load_start": [
+      "1.97",
+      "1.99",
+      "3.35"
+    ],
+    "load_end": [
+      "1.82",
+      "1.96",
+      "3.32"
+    ],
+    "available_gib_min": 47.823280334472656,
+    "swap_used_gib_start": 7.6271514892578125,
+    "swap_used_gib_end": 7.619724273681641,
+    "swap_in_pages": 1318,
+    "swap_out_pages": 0,
+    "psi_interval_pct": {
+      "io_some": 0.5203603845945198,
+      "io_full": 0.48492087201683853,
+      "memory_some": 0.03326873040798919,
+      "memory_full": 0.032472113098010395
+    },
+    "nvme_mib_s": {
+      "read": 0.7526633275434361,
+      "write": 18.3793772040077
+    },
+    "top_process_io_deltas": [
+      {
+        "pid": "1703337",
+        "comm": "node-MainThread",
+        "write_delta_bytes": 203345920,
+        "read_delta_bytes": 6967296
+      },
+      {
+        "pid": "1717526",
+        "comm": "codex",
+        "write_delta_bytes": 23990272,
+        "read_delta_bytes": 5562368
+      },
+      {
+        "pid": "1570763",
+        "comm": "sats-router",
+        "write_delta_bytes": 1613824,
+        "read_delta_bytes": 16384
+      },
+      {
+        "pid": "3186107",
+        "comm": "cli-proxy-api",
+        "write_delta_bytes": 770048,
+        "read_delta_bytes": 0
+      },
+      {
+        "pid": "161175",
+        "comm": "grok-bot",
+        "write_delta_bytes": 430080,
+        "read_delta_bytes": 0
+      },
+      {
+        "pid": "423958",
+        "comm": "opencode.exe",
+        "write_delta_bytes": 167936,
+        "read_delta_bytes": 20480
+      },
+      {
+        "pid": "7750",
+        "comm": "codex",
+        "write_delta_bytes": 118784,
+        "read_delta_bytes": 28672
+      },
+      {
+        "pid": "3912782",
+        "comm": "grok-bot",
+        "write_delta_bytes": 102400,
+        "read_delta_bytes": 0
+      },
+      {
+        "pid": "4152827",
+        "comm": "pocket-id",
+        "write_delta_bytes": 53248,
+        "read_delta_bytes": 16384
+      },
+      {
+        "pid": "357729",
+        "comm": "node-MainThread",
+        "write_delta_bytes": 20480,
+        "read_delta_bytes": 0
+      }
+    ],
+    "label": "c1"
+  },
+  {
+    "start_utc": "2026-10-26T05:18:02.520379+00:00",
+    "end_utc": "2026-10-26T05:18:12.568096+00:00",
+    "load_start": [
+      "1.34",
+      "1.79",
+      "3.15"
+    ],
+    "load_end": [
+      "1.29",
+      "1.76",
+      "3.13"
+    ],
+    "available_gib_min": 47.43092727661133,
+    "swap_used_gib_start": 7.587913513183594,
+    "swap_used_gib_end": 7.579380035400391,
+    "swap_in_pages": 1096,
+    "swap_out_pages": 3,
+    "psi_interval_pct": {
+      "io_some": 0.5210436628521774,
+      "io_full": 0.490210792385995,
+      "memory_some": 0.17960296334174533,
+      "memory_full": 0.17618925302221644
+    },
+    "nvme_mib_s": {
+      "read": 1.9640652940802703,
+      "write": 19.186180983403684
+    },
+    "top_process_io_deltas": [
+      {
+        "pid": "1703337",
+        "comm": "node-MainThread",
+        "write_delta_bytes": 196894720,
+        "read_delta_bytes": 6840320
+      },
+      {
+        "pid": "1717526",
+        "comm": "codex",
+        "write_delta_bytes": 22220800,
+        "read_delta_bytes": 17367040
+      },
+      {
+        "pid": "1570763",
+        "comm": "sats-router",
+        "write_delta_bytes": 15433728,
+        "read_delta_bytes": 69632
+      },
+      {
+        "pid": "425620",
+        "comm": "muse-bin-1.4.13",
+        "write_delta_bytes": 7004160,
+        "read_delta_bytes": 0
+      },
+      {
+        "pid": "3186107",
+        "comm": "cli-proxy-api",
+        "write_delta_bytes": 1220608,
+        "read_delta_bytes": 0
+      },
+      {
+        "pid": "161175",
+        "comm": "grok-bot",
+        "write_delta_bytes": 413696,
+        "read_delta_bytes": 0
+      },
+      {
+        "pid": "7750",
+        "comm": "codex",
+        "write_delta_bytes": 327680,
+        "read_delta_bytes": 24576
+      },
+      {
+        "pid": "2552",
+        "comm": "python3",
+        "write_delta_bytes": 57344,
+        "read_delta_bytes": 0
+      },
+      {
+        "pid": "357729",
+        "comm": "node-MainThread",
+        "write_delta_bytes": 12288,
+        "read_delta_bytes": 0
+      },
+      {
+        "pid": "2241",
+        "comm": "gnome-keyring-d",
+        "write_delta_bytes": 0,
+        "read_delta_bytes": 24576
+      }
+    ],
+    "label": "c2"
+  },
+  {
+    "start_utc": "2026-10-26T05:20:14.559234+00:00",
+    "end_utc": "2026-10-26T05:20:24.606666+00:00",
+    "load_start": [
+      "1.03",
+      "1.51",
+      "2.86"
+    ],
+    "load_end": [
+      "1.33",
+      "1.56",
+      "2.86"
+    ],
+    "available_gib_min": 47.710514068603516,
+    "swap_used_gib_start": 7.556068420410156,
+    "swap_used_gib_end": 7.546604156494141,
+    "swap_in_pages": 2088,
+    "swap_out_pages": 0,
+    "psi_interval_pct": {
+      "io_some": 0.26380853533511595,
+      "io_full": 0.19993155730067944,
+      "memory_some": 0.10567867758953674,
+      "memory_full": 0.09374528764511646
+    },
+    "nvme_mib_s": {
+      "read": 0.9742844036930914,
+      "write": 18.82592724662034
+    },
+    "top_process_io_deltas": [
+      {
+        "pid": "1703337",
+        "comm": "node-MainThread",
+        "write_delta_bytes": 179392512,
+        "read_delta_bytes": 4657152
+      },
+      {
+        "pid": "1717526",
+        "comm": "codex",
+        "write_delta_bytes": 23109632,
+        "read_delta_bytes": 10006528
+      },
+      {
+        "pid": "1570763",
+        "comm": "sats-router",
+        "write_delta_bytes": 15450112,
+        "read_delta_bytes": 196608
+      },
+      {
+        "pid": "425620",
+        "comm": "muse-bin-1.4.13",
+        "write_delta_bytes": 11005952,
+        "read_delta_bytes": 0
+      },
+      {
+        "pid": "3186107",
+        "comm": "cli-proxy-api",
+        "write_delta_bytes": 2650112,
+        "read_delta_bytes": 1085440
+      },
+      {
+        "pid": "7750",
+        "comm": "codex",
+        "write_delta_bytes": 1703936,
+        "read_delta_bytes": 24576
+      },
+      {
+        "pid": "161175",
+        "comm": "grok-bot",
+        "write_delta_bytes": 532480,
+        "read_delta_bytes": 0
+      },
+      {
+        "pid": "423958",
+        "comm": "opencode.exe",
+        "write_delta_bytes": 139264,
+        "read_delta_bytes": 516096
+      },
+      {
+        "pid": "2552",
+        "comm": "python3",
+        "write_delta_bytes": 65536,
+        "read_delta_bytes": 0
+      },
+      {
+        "pid": "17319",
+        "comm": "bridge",
+        "write_delta_bytes": 36864,
+        "read_delta_bytes": 1114112
+      }
+    ],
+    "label": "c4"
+  }
+]

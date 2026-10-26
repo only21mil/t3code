@@ -1,0 +1,253 @@
+[
+  {
+    "label": "c2",
+    "start_utc": "2026-10-26T05:18:03.021Z",
+    "end_utc": "2026-10-26T05:18:05.744Z",
+    "api_ms": 2723,
+    "project_count": 41,
+    "pages": 41,
+    "states": {
+      "running": 5,
+      "waiting": 1
+    },
+    "active": 6,
+    "queued": 0,
+    "other_project_aggregate": {
+      "running": 2
+    },
+    "own": [
+      {
+        "threadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "parentThreadId": null,
+        "status": "running",
+        "latestRunId": "run:thread:mcp%3A0d60e6a6-f691-471e-bb8a-21fd5ad3a688:ordinal:2",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      },
+      {
+        "threadId": "thread:mcp:e5e926c4-b8db-45a6-8639-8faf6d3fc2fe:capacity-probe-create-20261026:0",
+        "parentThreadId": null,
+        "status": "waiting",
+        "latestRunId": "run:thread:thread%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Acapacity-probe-create-20261026%3A0:ordinal:3",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      },
+      {
+        "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c2-w1-20261026",
+        "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "status": "running",
+        "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c2-w1-20261026:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      },
+      {
+        "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c2-w2-20261026",
+        "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "status": "running",
+        "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c2-w2-20261026:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      }
+    ]
+  },
+  {
+    "label": "c2",
+    "start_utc": "2026-10-26T05:18:05.744Z",
+    "end_utc": "2026-10-26T05:18:07.607Z",
+    "api_ms": 1863,
+    "project_count": 41,
+    "pages": 41,
+    "states": {
+      "running": 5
+    },
+    "active": 5,
+    "queued": 0,
+    "other_project_aggregate": {
+      "running": 2
+    },
+    "own": [
+      {
+        "threadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "parentThreadId": null,
+        "status": "running",
+        "latestRunId": "run:thread:mcp%3A0d60e6a6-f691-471e-bb8a-21fd5ad3a688:ordinal:2",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      },
+      {
+        "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c2-w1-20261026",
+        "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "status": "running",
+        "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c2-w1-20261026:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      },
+      {
+        "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c2-w2-20261026",
+        "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "status": "running",
+        "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c2-w2-20261026:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      }
+    ]
+  },
+  {
+    "label": "c2",
+    "start_utc": "2026-10-26T05:18:07.607Z",
+    "end_utc": "2026-10-26T05:18:09.310Z",
+    "api_ms": 1703,
+    "project_count": 41,
+    "pages": 41,
+    "states": {
+      "running": 5
+    },
+    "active": 5,
+    "queued": 0,
+    "other_project_aggregate": {
+      "running": 2
+    },
+    "own": [
+      {
+        "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c2-w2-20261026",
+        "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "status": "running",
+        "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c2-w2-20261026:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      },
+      {
+        "threadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "parentThreadId": null,
+        "status": "running",
+        "latestRunId": "run:thread:mcp%3A0d60e6a6-f691-471e-bb8a-21fd5ad3a688:ordinal:2",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      },
+      {
+        "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c2-w1-20261026",
+        "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "status": "running",
+        "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c2-w1-20261026:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      }
+    ]
+  },
+  {
+    "label": "c2",
+    "start_utc": "2026-10-26T05:18:09.310Z",
+    "end_utc": "2026-10-26T05:18:10.951Z",
+    "api_ms": 1641,
+    "project_count": 41,
+    "pages": 41,
+    "states": {
+      "running": 5
+    },
+    "active": 5,
+    "queued": 0,
+    "other_project_aggregate": {
+      "running": 2
+    },
+    "own": [
+      {
+        "threadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "parentThreadId": null,
+        "status": "running",
+        "latestRunId": "run:thread:mcp%3A0d60e6a6-f691-471e-bb8a-21fd5ad3a688:ordinal:2",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      },
+      {
+        "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c2-w2-20261026",
+        "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "status": "running",
+        "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c2-w2-20261026:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      },
+      {
+        "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c2-w1-20261026",
+        "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "status": "running",
+        "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c2-w1-20261026:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      }
+    ]
+  },
+  {
+    "label": "c2",
+    "start_utc": "2026-10-26T05:18:10.951Z",
+    "end_utc": "2026-10-26T05:18:12.556Z",
+    "api_ms": 1605,
+    "project_count": 41,
+    "pages": 41,
+    "states": {
+      "running": 5
+    },
+    "active": 5,
+    "queued": 0,
+    "other_project_aggregate": {
+      "running": 2
+    },
+    "own": [
+      {
+        "threadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "parentThreadId": null,
+        "status": "running",
+        "latestRunId": "run:thread:mcp%3A0d60e6a6-f691-471e-bb8a-21fd5ad3a688:ordinal:2",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      },
+      {
+        "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c2-w2-20261026",
+        "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "status": "running",
+        "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c2-w2-20261026:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      },
+      {
+        "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c2-w1-20261026",
+        "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+        "status": "running",
+        "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c2-w1-20261026:ordinal:1",
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "model": "gpt-6.1-sol",
+        "providerInstanceId": "codex_auto"
+      }
+    ]
+  }
+]

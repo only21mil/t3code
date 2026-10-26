@@ -1,0 +1,31 @@
+{
+  "clientRequestId": "capacity-result-20261026-once",
+  "endpoint": "http://100.65.3.65:3774/mcp",
+  "at": "2026-10-26T05:26:35.358346+00:00",
+  "accepted": true,
+  "readback": true,
+  "message_sha256": "c7e90659a8eb3cc4ecb73dc07cf9ecae9ca5cc9f9f6c021095de83619dfc33ae",
+  "receipt": {
+    "threadId": "mcp:1af0c694-e5dd-4ef2-9c7f-cf5c1c1915c5",
+    "link": "[grokbot Genesis F-D load migrate-dev-db RCA 20261025](t3-thread://v1/mcp:1af0c694-e5dd-4ef2-9c7f-cf5c1c1915c5)",
+    "messageId": "message:mcp:client%3A68547149-c0be-494d-b519-0d0de269a6a2:thread-send:capacity-result-20261026-once",
+    "runId": "run:thread:mcp%3A1af0c694-e5dd-4ef2-9c7f-cf5c1c1915c5:ordinal:6",
+    "status": "starting",
+    "delivery": "started"
+  },
+  "mode": "queue",
+  "message_metadata": [
+    {
+      "itemId": "turn-item:message:message%3Amcp%3Aclient%253A68547149-c0be-494d-b519-0d0de269a6a2%3Athread-send%3Acapacity-result-20261026-once",
+      "messageId": "message:mcp:client%3A68547149-c0be-494d-b519-0d0de269a6a2:thread-send:capacity-result-20261026-once",
+      "runId": "run:thread:mcp%3A1af0c694-e5dd-4ef2-9c7f-cf5c1c1915c5:ordinal:6",
+      "status": "completed",
+      "createdBy": "agent",
+      "creationSource": "mcp",
+      "updatedAt": "2026-10-26T05:26:35.407Z",
+      "position": 211,
+      "type": "user_message"
+    }
+  ],
+  "readback_scope": "Only exact own callback message item; text and parent thread content discarded and never printed/saved."
+}

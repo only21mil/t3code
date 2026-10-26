@@ -1,0 +1,69 @@
+{
+  "projectId": "mcp:00e3606f-75a6-47db-989b-2d5233cfc598",
+  "nextCursor": null,
+  "threads": [
+    {
+      "threadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+      "parentThreadId": null,
+      "status": "running",
+      "settled": false,
+      "latestRunId": "run:thread:mcp%3A0d60e6a6-f691-471e-bb8a-21fd5ad3a688:ordinal:8"
+    },
+    {
+      "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c4-w3-20261026",
+      "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+      "status": "completed",
+      "settled": true,
+      "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c4-w3-20261026:ordinal:1"
+    },
+    {
+      "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c4-w4-20261026",
+      "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+      "status": "completed",
+      "settled": true,
+      "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c4-w4-20261026:ordinal:1"
+    },
+    {
+      "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c2-w2-20261026",
+      "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+      "status": "completed",
+      "settled": true,
+      "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c2-w2-20261026:ordinal:1"
+    },
+    {
+      "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c1-w1-20261026",
+      "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+      "status": "completed",
+      "settled": true,
+      "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c1-w1-20261026:ordinal:1"
+    },
+    {
+      "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c4-w2-20261026",
+      "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+      "status": "completed",
+      "settled": true,
+      "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c4-w2-20261026:ordinal:1"
+    },
+    {
+      "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c2-w1-20261026",
+      "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+      "status": "completed",
+      "settled": true,
+      "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c2-w1-20261026:ordinal:1"
+    },
+    {
+      "threadId": "thread:delegated-task:command%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Adelegate-task%3Acapacity-c4-w1-20261026",
+      "parentThreadId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+      "status": "completed",
+      "settled": true,
+      "latestRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%253Adelegate-task%253Acapacity-c4-w1-20261026:ordinal:1"
+    },
+    {
+      "threadId": "thread:mcp:e5e926c4-b8db-45a6-8639-8faf6d3fc2fe:capacity-probe-create-20261026:0",
+      "parentThreadId": null,
+      "status": "completed",
+      "settled": true,
+      "latestRunId": "run:thread:thread%3Amcp%3Ae5e926c4-b8db-45a6-8639-8faf6d3fc2fe%3Acapacity-probe-create-20261026%3A0:ordinal:4"
+    }
+  ]
+}

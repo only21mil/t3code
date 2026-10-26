@@ -1,0 +1,14 @@
+{
+  "messageId": "mcp:0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+  "itemId": "turn-item:message:mcp%3A0d60e6a6-f691-471e-bb8a-21fd5ad3a688",
+  "createdBy": "agent",
+  "creationSource": "mcp",
+  "updatedAt": "2026-10-26T05:11:49.621Z",
+  "position": 0,
+  "quotes": [
+    "Stop at first degradation; no server/hub/provider restarts or new caps/throttles.",
+    "Stop at first sustained/measurable degradation relative to baseline, and record the last stable and first degraded actual counts.",
+    "Provider rate limits, failed route, human prompt or native dispatch ceiling are external limits, never F-D hardware capacity."
+  ],
+  "exact_board_phrase_present_in_initial_launch": false
+}
