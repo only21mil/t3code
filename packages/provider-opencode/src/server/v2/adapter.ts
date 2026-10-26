@@ -1272,6 +1272,19 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       };
     };
 
+    // A reused child session this adapter has not seen continues its stored turn ordinals.
+    // Each child turn is one execution, and OpenCode ends every execution with an idle message.
+    const finishedExecutions = (sessionId: string) =>
+      OpenCode2Client.paginate(
+        { sessionID: Session.ID.make(sessionId), limit: 100 },
+        client.message.list,
+      ).pipe(
+        Stream.filter((message) => message.type === "idle"),
+        Stream.runCount,
+        Effect.timeout(REQUEST_REPLY_TIMEOUT),
+        Effect.orElseSucceed(() => 0),
+      );
+
     const attachChild = Effect.fnUntraced(function* (call: SubagentCall, childId: string) {
       if (call.child !== undefined) return;
       const info = announced.get(childId);
@@ -1342,7 +1355,9 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       const subagent = {
         call,
         appThread,
-        turns: previous?.subagent?.turns ?? 0,
+        turns:
+          previous?.subagent?.turns ??
+          (info === undefined ? yield* finishedExecutions(childId) : 0),
         prompt: call.prompt,
         queued: undefined,
       };
