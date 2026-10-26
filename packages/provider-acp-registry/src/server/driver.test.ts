@@ -1,12 +1,23 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { AcpRegistryOperationError, ProviderInstanceId } from "@t3tools/contracts";
 import { AcpRegistrySettings } from "../settings.ts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
+import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
+
+import * as AcpRegistryRuntimeCoordinator from "./AcpRegistryRuntimeCoordinator.ts";
 import * as AcpRegistrySupport from "./AcpRegistrySupport.ts";
 import {
+  AcpRegistryDriver,
   applyAcpRegistryAvailableCommands,
   applyAcpRegistryLiveConfiguration,
   buildCheckedAcpRegistrySnapshot,
@@ -401,3 +412,109 @@ describe("acpRegistrySnapshotReadiness", () => {
     }),
   );
 });
+
+// Advertises a shared command plus a command and skill named after the session's cwd.
+const WORKSPACE_AGENT_SCRIPT = `
+import { basename } from "node:path";
+import { createInterface } from "node:readline";
+const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...message }) + "\\n");
+createInterface({ input: process.stdin }).on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") {
+    send({ id: message.id, result: { protocolVersion: 1, agentCapabilities: {}, authMethods: [] } });
+  } else if (message.method === "session/new") {
+    send({ id: message.id, result: { sessionId: "probe" } });
+    send({
+      method: "session/update",
+      params: {
+        sessionId: "probe",
+        update: {
+          sessionUpdate: "available_commands_update",
+          availableCommands: [
+            { name: "review", description: "Review changes" },
+            { name: basename(message.params.cwd), description: "Project command" },
+            { name: "$" + basename(message.params.cwd) + "-skill", description: "Project skill" },
+          ],
+        },
+      },
+    });
+  } else if (message.id !== undefined) {
+    send({ id: message.id, result: {} });
+  }
+});
+`;
+
+const layerDriver = Layer.mergeAll(
+  TestProviderHost.layer({ cwd: "/machine", runBackgroundWork: false }),
+  IdAllocator.layer,
+  McpProviderSessions.layer,
+  AcpRegistryRuntimeCoordinator.layer,
+  Layer.succeed(
+    ProviderEventLoggers.ProviderEventLoggers,
+    ProviderEventLoggers.NoOpProviderEventLoggers,
+  ),
+).pipe(Layer.provideMerge(NodeServices.layer));
+
+it.layer(layerDriver, { excludeTestServices: true })(
+  "AcpRegistryDriver workspace commands",
+  (it) => {
+    it.effect("discovers project commands in each selected workspace", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fileSystem.realPath(
+          yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-acp-workspaces-" }),
+        );
+        const agentScript = path.join(root, "agent.mjs");
+        yield* fileSystem.writeFileString(agentScript, WORKSPACE_AGENT_SCRIPT);
+        const alpha = path.join(root, "alpha");
+        const beta = path.join(root, "beta");
+        yield* fileSystem.makeDirectory(alpha);
+        yield* fileSystem.makeDirectory(beta);
+
+        const instance = yield* AcpRegistryDriver.create({
+          instanceId: identity.instanceId,
+          displayName: identity.displayName,
+          accentColor: undefined,
+          environment: [],
+          enabled: true,
+          config: decodeSettings({ agentId: "test-agent" }),
+        }).pipe(
+          Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, {
+            ...catalogWithInspection({
+              status: "ready",
+              agentId: "test-agent",
+              version: "1.0.0",
+              distribution: "binary",
+            }),
+            resolve: () =>
+              Effect.succeed({
+                distribution: "binary",
+                spawn: { command: process.execPath, args: [agentScript], env: {} },
+              }),
+          }),
+        );
+        const coordinator = yield* AcpRegistryRuntimeCoordinator.AcpRegistryRuntimeCoordinator;
+        yield* coordinator.publishAvailableCommands(identity.instanceId, {
+          slashCommands: [{ name: "live" }],
+          skills: [],
+        });
+        yield* instance.snapshot.refresh;
+
+        const commandNames = (snapshot: {
+          readonly slashCommands: ReadonlyArray<{ name: string }>;
+        }) => snapshot.slashCommands.map((command) => command.name).toSorted();
+        expect(instance.snapshotForCwd).toBeDefined();
+        const alphaSnapshot = yield* instance.snapshotForCwd!(alpha);
+        expect(commandNames(alphaSnapshot)).toEqual(["alpha", "live", "review"]);
+        expect(alphaSnapshot.skills.map((skill) => skill.name)).toEqual(["alpha-skill"]);
+        expect(commandNames(yield* instance.snapshotForCwd!(beta))).toEqual([
+          "beta",
+          "live",
+          "review",
+        ]);
+        expect(commandNames(yield* instance.snapshot.getSnapshot)).toEqual(["live"]);
+      }).pipe(Effect.scoped),
+    );
+  },
+);

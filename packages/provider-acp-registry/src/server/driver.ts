@@ -619,6 +619,8 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       }
       return { provider: enriched, generation: cacheState.generation };
     });
+    const backgroundProbeKey =
+      effectiveConfig.source === "local" ? `local:${instanceId}` : effectiveConfig.agentId;
     const snapshotSettings = yield* makeProviderSnapshotSettingsSource(effectiveConfig);
     const snapshot = yield* makeManagedServerProvider<
       ProviderSnapshotSettings<AcpRegistrySettings>
@@ -634,9 +636,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         const publishEnrichment = (
           Option.isSome(runtimeCoordinator)
             ? runtimeCoordinator.value.runBackgroundProbe(
-                effectiveConfig.source === "local"
-                  ? `local:${instanceId}`
-                  : effectiveConfig.agentId,
+                backgroundProbeKey,
                 enrichProviderCached(snapshot),
               )
             : enrichProviderCached(snapshot).pipe(Effect.asSome)
@@ -748,6 +748,44 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         : provided;
     };
 
+    // Agents scope commands to the session cwd, so the machine probe misses project commands.
+    const snapshotForCwd = Effect.fn("AcpRegistryDriver.snapshotForCwd")(function* (cwd: string) {
+      const machineSnapshot = yield* snapshot.getSnapshot;
+      if (!machineSnapshot.enabled || !machineSnapshot.installed) return machineSnapshot;
+      const probe = Effect.result(
+        provideAcpManagementServices(
+          probeAcpRegistryConfiguration({
+            instanceId,
+            settings: effectiveConfig,
+            cwd,
+            environment: processEnvironment,
+          }),
+        ),
+      );
+      const probed = yield* Option.isSome(runtimeCoordinator)
+        ? runtimeCoordinator.value.runBackgroundProbe(backgroundProbeKey, probe)
+        : probe.pipe(Effect.asSome);
+      if (Option.isNone(probed) || Result.isFailure(probed.value)) return machineSnapshot;
+      const workspace = probed.value.success;
+      const commandNames = new Set(
+        machineSnapshot.slashCommands.map((command) => command.name.toLowerCase()),
+      );
+      const skillNames = new Set(machineSnapshot.skills.map((skill) => skill.name.toLowerCase()));
+      return {
+        ...machineSnapshot,
+        slashCommands: [
+          ...machineSnapshot.slashCommands,
+          ...workspace.slashCommands.filter(
+            (command) => !commandNames.has(command.name.toLowerCase()),
+          ),
+        ],
+        skills: [
+          ...machineSnapshot.skills,
+          ...workspace.skills.filter((skill) => !skillNames.has(skill.name.toLowerCase())),
+        ],
+      };
+    });
+
     const clearLiveState = Option.isSome(runtimeCoordinator)
       ? runtimeCoordinator.value
           .clearLiveConfiguration(instanceId)
@@ -795,6 +833,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
         ...snapshot,
         refresh: snapshot.refresh.pipe(Effect.tap(() => controller.refreshMethods ?? Effect.void)),
       },
+      snapshotForCwd,
       orchestrationAdapter,
       textGeneration: makeUnsupportedTextGeneration(),
       acpSessionManagement: {
