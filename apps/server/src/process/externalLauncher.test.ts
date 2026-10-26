@@ -180,6 +180,35 @@ it.effect("launches an installed editor with platform-safe arguments", () =>
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
+it.effect("escapes typographic quotes when revealing a Windows file", () =>
+  Effect.gen(function* () {
+    const target = String.raw`C:\workspace\a's ‘draft’ ‚low‛\clip’ “demo”.mp4`;
+    let spawned: ChildProcess.StandardCommand | undefined;
+    yield* Effect.gen(function* () {
+      const launcher = yield* ExternalLauncher.ExternalLauncher;
+      yield* launcher.launchEditor({ editor: "file-manager", cwd: target, reveal: true });
+    }).pipe(
+      Effect.provide(
+        layerTest({
+          platform: "win32",
+          env: { PATH: String.raw`C:\Windows\System32` },
+          onSpawn: (command) => {
+            spawned = command;
+          },
+        }),
+      ),
+    );
+
+    assert.ok(spawned);
+    const encodedCommand = spawned.args[spawned.args.length - 1] ?? "";
+    const decodedCommand = Buffer.from(encodedCommand, "base64").toString("utf16le");
+    assert.equal(
+      decodedCommand,
+      String.raw`$ProgressPreference = 'SilentlyContinue'; $folderVerb = (Get-ItemProperty -LiteralPath 'Registry::HKEY_CLASSES_ROOT\Directory\shell' -ErrorAction SilentlyContinue).'(default)'; if ($folderVerb -and $folderVerb -ne 'none') { Invoke-Item -LiteralPath 'C:\workspace\a''s ‘‘draft’’ ‚‚low‛‛' } else { Start-Process 'explorer.exe' -ArgumentList ('/select,"' + 'C:\workspace\a''s ‘‘draft’’ ‚‚low‛‛\clip’’ “demo”.mp4' + '"') }`,
+    );
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
 it.effect.skipIf(windowsHost)(
   "reveals a WSL file in Windows File Explorer through its UNC path",
   () =>
