@@ -263,7 +263,7 @@ function makeLocalCommandHarness(input: {
   readonly logoutFailure?: string;
   readonly openFailure?: unknown;
   readonly ensureThreadFailure?: unknown;
-  readonly historyReadFailureAfterFallback?: unknown;
+  readonly historyReadFailure?: "resume-fallback" | "missed-run";
   readonly interruptOpen?: boolean;
   readonly interruptRunBeforeOpenFailure?: boolean;
   readonly writeFailure?: unknown;
@@ -448,7 +448,24 @@ function makeLocalCommandHarness(input: {
     checkpoints: [],
     updatedAt: now,
   };
-  if ("historyReadFailureAfterFallback" in input) {
+  if (input.historyReadFailure === "missed-run") {
+    projection = {
+      ...projection,
+      runs: [
+        {
+          ...run,
+          id: RunId.make("missed-run"),
+          ordinal: 1,
+          status: "failed",
+          rootNodeId: NodeId.make("missed-root"),
+          activeAttemptId: RunAttemptId.make("missed-attempt"),
+          completedAt: now,
+        },
+        run,
+      ],
+    };
+  }
+  if (input.historyReadFailure === "resume-fallback") {
     const nativeThreadRef = {
       driver: providerThread.driver,
       nativeId: "native-resume-thread",
@@ -570,7 +587,7 @@ function makeLocalCommandHarness(input: {
   const open = vi.fn(() =>
     input.interruptOpen === true
       ? Effect.interrupt
-      : "historyReadFailureAfterFallback" in input
+      : input.historyReadFailure === "resume-fallback"
         ? Effect.succeed(resumeFallbackSession as never)
         : "ensureThreadFailure" in input
           ? Effect.succeed({ driver: providerThread.driver, ensureThread } as never)
@@ -588,7 +605,9 @@ function makeLocalCommandHarness(input: {
                   ),
                 ),
               )
-            : input.failReadsAfterRunning === true || input.previousTurn !== undefined
+            : input.failReadsAfterRunning === true ||
+                input.previousTurn !== undefined ||
+                input.historyReadFailure === "missed-run"
               ? Effect.succeed({
                   driver: providerThread.driver,
                   providerSession: {
@@ -714,7 +733,7 @@ function makeLocalCommandHarness(input: {
             Effect.fail(
               new ProjectionStore.ProjectionStoreReadError({
                 threadId,
-                cause: input.historyReadFailureAfterFallback,
+                cause: "malformed turn item",
               }),
             ),
         }),
@@ -1141,6 +1160,33 @@ effectIt.effect("does not terminalize a provider-session open interruption", () 
     expect(harness.projection().runs.at(-1)?.status).toBe("starting");
     expect(harness.events).toEqual([]);
   }),
+);
+
+effectIt.effect.each(["missed-run", "resume-fallback"] as const)(
+  "fails the run before it runs when %s history cannot be read",
+  (historyReadFailure) =>
+    Effect.gen(function* () {
+      const harness = makeLocalCommandHarness({ text: "Continue", historyReadFailure });
+
+      const error = yield* harness.startWithRetry.pipe(Effect.flip);
+      expect(error._tag).toBe("ProviderTurnStartError");
+      expect(harness.projection().runs.at(-1)?.status).toBe("starting");
+
+      yield* harness.start;
+
+      expect(harness.startRootRun).not.toHaveBeenCalled();
+      const projection = harness.projection();
+      expect(projection.runs.at(-1)).toMatchObject({ status: "failed", startedAt: null });
+      expect(projection.attempts[0]).toMatchObject({ status: "failed", startedAt: null });
+      expect(projection.nodes[0]).toMatchObject({ status: "failed", startedAt: null });
+      expect(projection.turnItems).toMatchObject([
+        {
+          type: "error",
+          title: "Thread history failed to load",
+          failure: { message: "malformed turn item" },
+        },
+      ]);
+    }),
 );
 
 effectIt.effect("does not overwrite a run interrupted while its provider session opens", () =>
