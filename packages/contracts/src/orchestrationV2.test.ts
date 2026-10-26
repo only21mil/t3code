@@ -5,6 +5,7 @@ import * as Schema from "effect/Schema";
 import { NodeId, RunAttemptId, TrimmedNonEmptyString } from "./index.ts";
 import {
   latestProviderTurnForAttempt,
+  OrchestrationV2CheckpointFileSummary,
   OrchestrationV2ProviderCapabilities,
   OrchestrationV2ProviderThread,
   OrchestrationV2ProviderThreadJson,
@@ -475,6 +476,20 @@ describe("thread open stats", () => {
     const opens = { openedAt: 1, score: 1, picks: [{ query: "upl", at: 1 }] };
     expect(decode({ ...shell, opens }).opens).toEqual(opens);
     expect(decode({ ...shell, opens: { openedAt: "2026-10-01", score: 1 } }).opens).toBeNull();
+  });
+});
+
+describe("checkpoint file summaries", () => {
+  it("keep Git file paths exactly, including surrounding and whitespace-only names", () => {
+    const decode = Schema.decodeUnknownSync(OrchestrationV2CheckpointFileSummary);
+    const encode = Schema.encodeSync(OrchestrationV2CheckpointFileSummary);
+    const file = (path: string) => ({ path, kind: "modified", additions: 1, deletions: 0 });
+
+    for (const path of [" leading.txt", "notes.md ", " "]) {
+      expect(decode(file(path))).toEqual(file(path));
+      expect(encode(file(path))).toEqual(file(path));
+    }
+    expect(() => decode(file(""))).toThrow();
   });
 });
 
