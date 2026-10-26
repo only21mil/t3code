@@ -1168,6 +1168,128 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  // regression: #19883 a reused child session restarted at turn 1 and overwrote its first turn
+  it.effect("continues a reused child session's turns after its root thread unloads", () =>
+    Effect.gen(function* () {
+      const subagentCall = (id: string, input: Record<string, unknown>) => {
+        const tool = { sessionID: SESSION, assistantMessageID: `msg_assistant_${id}`, id };
+        return {
+          start: [
+            out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+            promptAccepted,
+            event("session.execution.started", { sessionID: SESSION }),
+            event("session.tool.input.started", { ...tool, name: "subagent" }),
+            event("session.tool.called", {
+              ...tool,
+              name: "subagent",
+              input: { description: "Sleep", prompt: "sleep", ...input },
+              executed: false,
+            }),
+          ],
+          running: event("session.tool.progress", {
+            ...tool,
+            metadata: { sessionID: CHILD, status: "running" },
+          }),
+          end: [
+            event("session.execution.started", { sessionID: CHILD }),
+            event("session.execution.succeeded", { sessionID: CHILD }),
+            event("session.tool.success", {
+              ...tool,
+              content: [
+                { type: "text", text: `<subagent sessionID="${CHILD}" state="completed">` },
+              ],
+              metadata: { sessionID: CHILD, status: "completed", truncated: false },
+              executed: false,
+            }),
+            event("session.execution.succeeded", { sessionID: SESSION }),
+          ],
+        };
+      };
+      const first = subagentCall("call-first", {});
+      const again = subagentCall("call-again", { sessionID: CHILD });
+      const { runtime, thread } = yield* resumed([
+        ...first.start,
+        event("session.created", childCreated(CHILD)),
+        first.running,
+        ...first.end,
+        out("session.get", { sessionID: SESSION }),
+        replyData("session.get", sessionInfo()),
+        ...noOpenRequests,
+        out("session.instructions.entry.put", {
+          sessionID: SESSION,
+          key: "t3-code",
+          value: "<any>",
+        }),
+        reply("session.instructions.entry.put", null),
+        ...again.start,
+        again.running,
+        out("message.list", { sessionID: CHILD, limit: "100" }),
+        reply("message.list", {
+          data: [
+            { id: "msg_child_prompt", time: { created: 1 }, type: "user", text: "sleep" },
+            { id: "msg_child_idle", time: { created: 2 }, type: "idle", outcome: "succeeded" },
+          ],
+          cursor: {},
+        }),
+        out("session.update", { sessionID: CHILD, permissions: "<any>" }),
+        reply("session.update", null),
+        ...again.end,
+      ]);
+      const childTurns = new Map<string, OrchestrationV2ProviderTurn>();
+      const ended: Array<string> = [];
+      let wake = yield* Deferred.make<void>();
+      yield* runtime.events.pipe(
+        Stream.tap((event) =>
+          Effect.gen(function* () {
+            if (
+              event.type === "provider_turn.updated" &&
+              event.providerTurn.providerThreadId !== thread.id
+            ) {
+              childTurns.set(event.providerTurn.id, event.providerTurn);
+            }
+            if (event.type === "turn.terminal" && event.providerThreadId === thread.id) {
+              ended.push(event.status);
+            }
+            yield* Deferred.succeed(wake, undefined);
+          }),
+        ),
+        Stream.runDrain,
+        Effect.forkScoped,
+      );
+      const until = (check: () => boolean): Effect.Effect<void> =>
+        Effect.suspend(() => {
+          if (check()) return Effect.void;
+          return Effect.gen(function* () {
+            wake = yield* Deferred.make<void>();
+            if (check()) return;
+            yield* Deferred.await(wake);
+            yield* until(check);
+          });
+        });
+
+      yield* runtime.startTurn(withLineage(thread));
+      yield* until(() => ended.length === 1);
+      yield* runtime.unloadThread!({ providerThread: thread });
+      const reloaded = yield* runtime.resumeThread({
+        providerThread: thread,
+        threadId,
+        modelSelection: bigPickle,
+        runtimePolicy: policy(),
+      });
+      yield* runtime.startTurn(withLineage(reloaded));
+      yield* until(() => ended.length === 2);
+
+      assert.deepEqual(ended, ["completed", "completed"]);
+      assert.deepEqual(
+        [...childTurns.values()].map((turn) => [turn.nativeTurnRef?.nativeId, turn.ordinal]),
+        [
+          [`${CHILD}:turn:1`, 1],
+          [`${CHILD}:turn:2`, 2],
+        ],
+      );
+    }).pipe(Effect.scoped),
+  );
+
   const MIDDLE = "ses_middle0000000000000000000";
   const DEEP = "ses_grandchild00000000000000";
   const toolOf = (session: string, id: string) => ({
