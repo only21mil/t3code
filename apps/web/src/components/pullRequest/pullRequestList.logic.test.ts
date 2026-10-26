@@ -38,6 +38,7 @@ import {
   reusePullRequestEntries,
   settlePullRequestOverrides,
 } from "./pullRequestList.logic";
+import { pullRequestGroups } from "./pullRequestListGroups.logic";
 import {
   readPullRequestListPreferences,
   writePullRequestListPreferences,
