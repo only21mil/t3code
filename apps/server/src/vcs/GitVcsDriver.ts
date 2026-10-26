@@ -1355,7 +1355,8 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
             "log",
             "--format=",
             "--diff-merges=remerge",
-            `--since=@${capturedAt}`,
+            // Plain --since stops at the first older commit, hiding newer commits behind it.
+            `--since-as-filter=@${capturedAt}`,
             `${startHead}..${endHead}`,
           ]),
         ],

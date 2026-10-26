@@ -458,6 +458,34 @@ it.layer(layerTest)("CheckpointStore.layer", (it) => {
   });
 
   describe("listAuthoredPaths", () => {
+    it.effect("keeps the turn's commits behind an older-dated commit", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const checkpointStore = yield* CheckpointStore.CheckpointStore;
+        const threadId = ThreadId.make("checkpoint-authored-paths-dates");
+        const refs = {
+          cwd: tmp,
+          fromCheckpointRef: checkpointRefForThreadTurn(threadId, 0),
+          toCheckpointRef: checkpointRefForThreadTurn(threadId, 1),
+        };
+        yield* checkpointStore.captureCheckpoint({
+          cwd: tmp,
+          checkpointRef: refs.fromCheckpointRef,
+        });
+
+        yield* writeTextFile(NodePath.join(tmp, "recent.txt"), "recent\n");
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "recent"]);
+        yield* writeTextFile(NodePath.join(tmp, "old.txt"), "old\n");
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "old"], { committedAt: "2020-01-01T00:00:00Z" });
+        yield* checkpointStore.captureCheckpoint({ cwd: tmp, checkpointRef: refs.toCheckpointRef });
+
+        expect(yield* checkpointStore.listAuthoredPaths(refs)).toEqual(new Set(["recent.txt"]));
+      }),
+    );
+
     it.effect("leaves out paths that only a merged upstream changed", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
