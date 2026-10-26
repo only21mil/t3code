@@ -15,7 +15,7 @@ import {
 import { Lock as LockGlyph, LockOpen } from "lucide";
 import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
-import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactElement, type ReactNode } from "react";
 import {
   isProviderDriverKind,
   resolveProviderInstanceEnabled,
@@ -110,6 +110,19 @@ function makeEnvironmentDraftRow(
     sensitive: variable.sensitive,
     ...(variable.valueRedacted !== undefined ? { valueRedacted: variable.valueRedacted } : {}),
   };
+}
+
+function environmentDraftRowError(row: EnvironmentDraftRow): string | null {
+  const name = row.name.trim();
+  if (ENVIRONMENT_VARIABLE_NAME_PATTERN.test(name)) return null;
+  if (name.length > 0) {
+    return "Use only letters, numbers, and underscores, not starting with a number. Variables won't save until this is fixed.";
+  }
+  // A blank row is an untouched "Add variable" placeholder and is dropped on save.
+  if (row.value.length > 0 || row.sensitive !== true || row.valueRedacted !== undefined) {
+    return "Enter a name. Variables won't save until this is fixed.";
+  }
+  return null;
 }
 
 function providerEnvironmentsEqual(
@@ -307,6 +320,7 @@ export function ProviderEnvironmentSection(props: {
   const lastPublishedEnvironmentRef = useRef<
     ReadonlyArray<ProviderInstanceEnvironmentVariable> | undefined
   >(undefined);
+  const errorIdPrefix = useId();
 
   useEffect(() => {
     const previousEnvironment = previousEnvironmentRef.current;
@@ -327,18 +341,10 @@ export function ProviderEnvironmentSection(props: {
   const publishRows = (nextRows: ReadonlyArray<EnvironmentDraftRow>) => {
     const published: ProviderInstanceEnvironmentVariable[] = [];
     for (const row of nextRows) {
+      // Publishing without an invalid row would delete its saved variable, so hold every edit.
+      if (environmentDraftRowError(row) !== null) return;
       const name = row.name.trim();
-      if (!ENVIRONMENT_VARIABLE_NAME_PATTERN.test(name)) {
-        if (
-          name.length > 0 ||
-          row.value.length > 0 ||
-          row.sensitive !== true ||
-          row.valueRedacted !== undefined
-        ) {
-          return;
-        }
-        continue;
-      }
+      if (name.length === 0) continue;
       const { id: _id, ...rest } = row;
       published.push({ ...rest, name });
     }
@@ -365,6 +371,8 @@ export function ProviderEnvironmentSection(props: {
     setRows(nextRows);
     publishRows(nextRows);
   };
+
+  const nameErrors = rows.map(environmentDraftRowError);
 
   const addVariable = () =>
     setRows([
@@ -401,6 +409,8 @@ export function ProviderEnvironmentSection(props: {
                 placeholder="VARIABLE_NAME"
                 spellCheck={false}
                 aria-label={`Environment variable name ${index + 1}`}
+                aria-invalid={nameErrors[index] ? true : undefined}
+                aria-describedby={nameErrors[index] ? `${errorIdPrefix}-${index}` : undefined}
               />
               <span className="hidden text-xs text-muted-foreground sm:inline" aria-hidden>
                 =
@@ -469,6 +479,14 @@ export function ProviderEnvironmentSection(props: {
               >
                 <XIcon className="size-3" />
               </Button>
+              {nameErrors[index] ? (
+                <p
+                  id={`${errorIdPrefix}-${index}`}
+                  className="basis-full text-2xs text-destructive"
+                >
+                  {nameErrors[index]}
+                </p>
+              ) : null}
             </div>
           ))}
           <p className="text-xs text-muted-foreground">
