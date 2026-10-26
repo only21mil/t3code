@@ -2,6 +2,7 @@ import {
   type CommandId,
   type RuntimeRequestId,
   ThreadId,
+  isProviderNativeSubagentThread,
   type OrchestrationV2ThreadProjection,
   type RunId,
   OrchestratorMcpFailure,
@@ -19,6 +20,7 @@ import {
   readThread,
   unavailable,
 } from "../../threadAccess.ts";
+import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
 import * as ScheduledTasks from "../../../scheduledTasks/ScheduledTaskService.ts";
 import { queuedRunsInDeliveryOrder } from "../../../orchestration-v2/QueuedRunOrder.ts";
@@ -49,6 +51,29 @@ const dispatch = Effect.fn("mcp.dispatchThreadCommand")(function* (
     .pipe(Effect.mapError(dispatchFailure));
   return { sequence: result.sequence };
 });
+
+// An agent that meant to settle a child but dropped its threadId would otherwise settle itself.
+const refuseImplicitSettleOverChildren = Effect.fn("mcp.refuseImplicitSettleOverChildren")(
+  function* (
+    threads: ThreadManagement.ThreadManagementService["Service"],
+    parent: OrchestrationV2ThreadProjection["thread"],
+  ) {
+    const children = (yield* threads
+      .listProjectThreads({ projectId: parent.projectId, includeSubagents: true })
+      .pipe(Effect.mapError(unavailable))).filter(
+      (thread) =>
+        thread.lineage.parentThreadId === parent.id &&
+        thread.lineage.relationshipToParent === "subagent" &&
+        !isProviderNativeSubagentThread(thread) &&
+        thread.settledOverride !== "settled",
+    );
+    if (children.length === 0) return;
+    return yield* new OrchestratorMcpFailure({
+      code: "target_required",
+      message: `This thread has unsettled child threads: ${children.map((child) => child.id).join(", ")}. Pass threadId: a child's id to settle that child, or ${parent.id} to settle this thread.`,
+    });
+  },
+);
 
 const readQuestion = Effect.fn("mcp.readQuestion")(function* (input: {
   threadId?: ThreadId | undefined;
@@ -298,6 +323,8 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
       const { threads, projection, caller } = yield* readThread(input.threadId);
       const common = { commandId: yield* newCommandId(), threadId: projection.thread.id };
       if (input.action === "settle") {
+        if (input.threadId === undefined)
+          yield* refuseImplicitSettleOverChildren(threads, projection.thread);
         return yield* threads
           .settleThread({ ...common, byOwnAgent: caller?.id === projection.thread.id })
           .pipe(Effect.mapError(dispatchFailure));
