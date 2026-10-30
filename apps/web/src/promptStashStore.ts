@@ -41,18 +41,34 @@ type PersistedPromptStashState = typeof PersistedPromptStashState.Type;
 const decodePersistedPromptStashState = Schema.decodeUnknownSync(PersistedPromptStashState);
 
 /**
- * `pendingImageCount` only has meaning within the session that wrote it: the
- * encode loop that would clear it does not survive a reload. An entry still
- * pending when a tab loads was orphaned by a closed tab or a crash mid-encode,
- * so the count is settled then — otherwise the entry would be stuck showing
- * "saving…" and refuse to restore forever. If another tab is in fact still
- * encoding it, that tab's finalize overwrites the settled fields.
+ * How long a stash's image encode may plausibly run. `compressImageForStash`
+ * re-encodes images one at a time, up to the composer's attachment limit, with
+ * several quality and scale passes each, so this sits well past the worst case.
  */
-function clearOrphanedPendingImages(
+const PENDING_IMAGE_ENCODE_WINDOW_MS = 15 * 60 * 1000;
+
+/**
+ * `pendingImageCount` is cleared only by the encode loop of the tab that
+ * stashed the entry, and that loop does not survive a reload. An entry still
+ * pending past the encode window was orphaned by a closed tab or a crash
+ * mid-encode, so a loading tab settles it — otherwise it would be stuck
+ * showing "saving…" and refuse to restore forever. A younger entry may still
+ * be encoding in another open tab; settling it would let it restore without
+ * its images and make that tab's finalize find nothing to attach to.
+ * Returns null when nothing settled.
+ */
+function settleOrphanedPendingImages(
   entries: ReadonlyArray<PromptStashEntry>,
-): ReadonlyArray<PromptStashEntry> {
-  return entries.map((entry) => {
+  now: number,
+): ReadonlyArray<PromptStashEntry> | null {
+  let settledAny = false;
+  const settled = entries.map((entry) => {
     if (!entry.pendingImageCount) return entry;
+    const startedAt = Date.parse(entry.createdAt);
+    if (!Number.isNaN(startedAt) && now - startedAt <= PENDING_IMAGE_ENCODE_WINDOW_MS) {
+      return entry;
+    }
+    settledAny = true;
     const lostCount = entry.pendingImageCount;
     return {
       ...entry,
@@ -66,6 +82,7 @@ function clearOrphanedPendingImages(
       ],
     };
   });
+  return settledAny ? settled : null;
 }
 
 export function partitionStashAttachments(
@@ -197,8 +214,8 @@ function latestEntries(current: ReadonlyArray<PromptStashEntry>): ReadonlyArray<
 
 function loadPersistedEntries(): ReadonlyArray<PromptStashEntry> | null {
   const persisted = readPersistedEntries();
-  if (!persisted?.some((entry) => entry.pendingImageCount)) return persisted;
-  const settled = clearOrphanedPendingImages(persisted);
+  const settled = persisted && settleOrphanedPendingImages(persisted, Date.now());
+  if (!settled) return persisted;
   // Later changes start from storage, so the settled counts must land there too.
   persistEntries(settled);
   return settled;

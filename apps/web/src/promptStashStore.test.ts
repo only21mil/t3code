@@ -248,6 +248,42 @@ describe("promptStashStore", () => {
     expect(usePromptStashStore.getState().entries[1]).toEqual(entry);
   });
 
+  it("keeps the pending count of an entry another tab may still be encoding", () => {
+    // A far-future createdAt is unambiguously within any encode window, without reading the clock.
+    const encoding = {
+      ...makeEntry({ id: "encoding" }),
+      createdAt: "9999-01-01T00:00:00.000Z",
+      pendingImageCount: 1,
+    };
+    writePromptStashStorageForTest(JSON.stringify({ version: 2, state: { entries: [encoding] } }));
+    expect(usePromptStashStore.getState().entries).toEqual([encoding]);
+
+    // Storage still holds the pending entry, not a settled copy.
+    const store = usePromptStashStore.getState();
+    store.stashEntry(makeEntry({ id: "later" }));
+    expect(usePromptStashStore.getState().entries[1]).toEqual(encoding);
+
+    const image = {
+      id: "img-encoded",
+      name: "encoded.webp",
+      mimeType: "image/webp",
+      sizeBytes: 12,
+      dataUrl: "data:image/webp;base64,BBBB",
+    };
+    expect(
+      store.finalizeEntryImages("encoding", {
+        attachments: [image],
+        droppedImageNames: [],
+        unreadableImageNames: [],
+      }).attached,
+    ).toBe(true);
+    expect(store.takeEntry("encoding").entry).toMatchObject({
+      attachments: [image],
+      unreadableImageNames: [],
+      pendingImageCount: 0,
+    });
+  });
+
   it("keeps images storage rejected for this session and settles the stored entry", async () => {
     // A localStorage that rejects large writes, as a full origin quota does.
     const stored = new Map<string, string>();
