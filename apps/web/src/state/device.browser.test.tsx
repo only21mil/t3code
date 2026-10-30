@@ -8,16 +8,28 @@ import {
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
+import { page } from "vite-plus/test/browser";
 import { useEffect } from "react";
 
 import { act, render } from "../../test/render";
 import { DevicePanel } from "../components/device/DevicePanel";
-import { useAgentOpenedPreviews } from "../components/preview/useAgentOpenedPreviews";
+import {
+  startAgentOpenedPreviews,
+  resetDeviceSessionBaselinesForTests,
+} from "../components/preview/agentOpenedPreviews";
 import { usePreviewMiniPlayerStore } from "../previewMiniPlayerStore";
-import { readThreadPreviewState } from "../previewStateStore";
+import { appAtomRegistry } from "../rpc/atomRegistry";
 import { deviceEnvironment, useDeviceState } from "./device";
 
+vi.mock(import("./presentation"), async (original) => ({
+  ...(await original()),
+  environmentSummaries: {
+    ...(await original()).environmentSummaries,
+    connectedEnvironmentIdsAtom: Atom.make([EnvironmentId.make("device-loading")]),
+  },
+}));
 vi.mock(import("../hooks/useSettings"), () => ({
+  getClientSettings: (() => ({ browserAutoShowFloatingPreview: true })) as never,
   useClientSettings: ((
     select: (settings: { browserAutoShowFloatingPreview: boolean }) => unknown,
   ) => select({ browserAutoShowFloatingPreview: true })) as never,
@@ -31,6 +43,11 @@ vi.mock(import("../components/device/DeviceHostUpdates"), () => ({
 }));
 
 it("baselines the first device snapshot without reopening dismissed devices", async () => {
+  const viewport = { width: window.innerWidth, height: window.innerHeight };
+  await page.viewport(1280, 800);
+  await using _viewport = {
+    [Symbol.asyncDispose]: () => page.viewport(viewport.width, viewport.height),
+  };
   const threadRef = {
     environmentId: EnvironmentId.make("device-loading"),
     threadId: ThreadId.make("thread"),
@@ -65,29 +82,21 @@ it("baselines the first device snapshot without reopening dismissed devices", as
     hubBasePath: "/api/device-hub",
     revision: 1,
   };
-  const registry = AtomRegistry.make();
-  using _registry = { [Symbol.dispose]: () => registry.dispose() };
+  const registry = appAtomRegistry;
+  resetDeviceSessionBaselinesForTests();
+  using _baselines = { [Symbol.dispose]: resetDeviceSessionBaselinesForTests };
   const stateAtom = Atom.make<AsyncResult.AsyncResult<DeviceServiceState>>(AsyncResult.initial());
   using _subscription = vi.spyOn(deviceEnvironment, "state").mockReturnValue(stateAtom);
   using _store = {
     [Symbol.dispose]: () => usePreviewMiniPlayerStore.getState().removeThread(threadRef),
   };
+  using _following = { [Symbol.dispose]: startAgentOpenedPreviews() };
   let loaded = false;
   function Probe() {
     const device = useDeviceState(threadRef.environmentId);
     useEffect(() => {
       loaded = device.loaded;
     }, [device.loaded]);
-    useAgentOpenedPreviews({
-      threadRef,
-      deviceState: device.state,
-      deviceStateLoaded: device.loaded,
-      previewState: readThreadPreviewState(threadRef),
-      serverBrowserAvailable: false,
-      panelSurfaces: [],
-      miniPlayerSource: null,
-      sheetLayout: false,
-    });
     return null;
   }
   await using _screen = await render(
