@@ -3985,6 +3985,27 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
     }),
   );
 
+  // A forge with no open change requests that records the ones created.
+  const makeChangeRequestRecorder = () => {
+    const created: Array<{ readonly baseRefName: string; readonly headSelector: string }> = [];
+    const unexpected = (operation: string) =>
+      Effect.die(new Error(`Unexpected source control call: ${operation}`));
+    const provider: SourceControlProvider["Service"] = {
+      kind: SourceControlProviderKind.make("github"),
+      listChangeRequests: () => Effect.succeed([]),
+      getDefaultBranch: () => Effect.succeed("main"),
+      createChangeRequest: (input) =>
+        Effect.sync(() => {
+          created.push({ baseRefName: input.baseRefName, headSelector: input.headSelector });
+        }),
+      getChangeRequest: () => unexpected("getChangeRequest"),
+      getRepositoryCloneUrls: () => unexpected("getRepositoryCloneUrls"),
+      createRepository: () => unexpected("createRepository"),
+      checkoutChangeRequest: () => unexpected("checkoutChangeRequest"),
+    };
+    return { provider, created };
+  };
+
   it.effect("creates the PR from the push remote when the branch tracks the base repository", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
@@ -4010,7 +4031,8 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       yield* runGit(repoDir, ["config", "remote.pushDefault", "fork"]);
       NodeFS.writeFileSync(NodePath.join(repoDir, "changes.txt"), "change\n");
 
-      const { manager, ghCalls } = yield* makeManager();
+      const { provider, created } = makeChangeRequestRecorder();
+      const { manager } = yield* makeManager({ sourceControlProvider: provider });
       const result = yield* runStackedAction(manager, {
         cwd: repoDir,
         action: "commit_push_pr",
@@ -4018,12 +4040,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
 
       expect(result.push).toMatchObject({ status: "pushed", upstreamBranch: "fork/topic" });
       expect(result.pr.status).toBe("created");
-      expect(
-        ghCalls.some((call) => call.includes("pr create --base main --head octocat:topic")),
-      ).toBe(true);
-      expect(ghCalls.some((call) => call.includes("pr create --base main --head topic"))).toBe(
-        false,
-      );
+      expect(created).toEqual([{ baseRefName: "main", headSelector: "octocat:topic" }]);
       expect(yield* runGit(repoDir, ["rev-parse", "--abbrev-ref", "@{upstream}"])).toMatchObject({
         stdout: "origin/topic\n",
       });
@@ -4055,7 +4072,8 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       );
       yield* runGit(repoDir, ["config", "remote.pushDefault", "fork"]);
 
-      const { manager, ghCalls } = yield* makeManager();
+      const { provider, created } = makeChangeRequestRecorder();
+      const { manager } = yield* makeManager({ sourceControlProvider: provider });
       const result = yield* runStackedAction(manager, {
         cwd: repoDir,
         action: "commit_push_pr",
@@ -4066,9 +4084,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         upstreamBranch: "fork/topic",
       });
       expect(result.pr.status).toBe("created");
-      expect(
-        ghCalls.some((call) => call.includes("pr create --base main --head octocat:topic")),
-      ).toBe(true);
+      expect(created).toEqual([{ baseRefName: "main", headSelector: "octocat:topic" }]);
     }),
   );
 
@@ -4098,7 +4114,8 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       yield* runGit(repoDir, ["config", "remote.pushDefault", "fork"]);
       NodeFS.writeFileSync(NodePath.join(repoDir, "changes.txt"), "change\n");
 
-      const { manager, ghCalls } = yield* makeManager();
+      const { provider, created } = makeChangeRequestRecorder();
+      const { manager } = yield* makeManager({ sourceControlProvider: provider });
       const result = yield* runStackedAction(manager, {
         cwd: repoDir,
         action: "commit_push_pr",
@@ -4106,9 +4123,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
 
       expect(result.push).toMatchObject({ status: "pushed", upstreamBranch: "fork/topic" });
       expect(result.pr.status).toBe("created");
-      expect(
-        ghCalls.some((call) => call.includes("pr create --base release --head octocat:topic")),
-      ).toBe(true);
+      expect(created).toEqual([{ baseRefName: "release", headSelector: "octocat:topic" }]);
     }),
   );
 
