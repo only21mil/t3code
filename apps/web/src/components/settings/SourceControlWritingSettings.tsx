@@ -145,7 +145,7 @@ export function SourceControlWritingSettingsSection() {
     activeSelection.instanceId,
     activeSelection.model,
   );
-  const writerModelDisabledReason = useScopedModelDisabledReason(settings, instanceEntries);
+  const writerModelDisabledReason = useScopedModelDisabledReason(settings, instanceEntries, true);
   const writerInstanceEntry = instanceEntries.find(
     (entry) => entry.instanceId === activeSelection.instanceId,
   );

@@ -168,13 +168,24 @@ it("rejects a scoped model when another environment requires extensions for it",
     ],
   ]);
   function Availability() {
-    const reason = useScopedModelDisabledReason(
+    const backgroundReason = useScopedModelDisabledReason(
+      { ...DEFAULT_UNIFIED_SETTINGS, providerInstances: state.providerInstances },
+      deriveProviderInstanceEntries([provider]),
+      true,
+    );
+    const threadReason = useScopedModelDisabledReason(
       { ...DEFAULT_UNIFIED_SETTINGS, providerInstances: state.providerInstances },
       deriveProviderInstanceEntries([provider]),
     );
-    return <p>{reason(instanceId, "demo/model") ?? "Available"}</p>;
+    return (
+      <>
+        <p>{backgroundReason(instanceId, "demo/model") ?? "Available"}</p>
+        <p>{threadReason(instanceId, "demo/model") ?? "Available for threads"}</p>
+      </>
+    );
   }
   await using screen = await render(<Availability />);
+  await expect.element(screen.getByText("Available for threads")).toBeVisible();
   await expect
     .element(
       screen.getByText(
