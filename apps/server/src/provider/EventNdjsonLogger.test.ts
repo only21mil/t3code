@@ -430,17 +430,16 @@ it.layer(NodeServices.layer)("EventNdjsonLogger", (it) => {
       try {
         const store = yield* makeEventNdjsonLogStore(basePath, {
           batchWindowMs: 0,
-          maxTotalBytes: 1,
-          retentionCheckIntervalMs: 1,
         });
         const logger = store.logger("native");
 
         yield* logger.write({ id: "finished-first" }, ThreadId.make("finished"));
-        yield* TestClock.adjust(1);
+        yield* TestClock.adjust("5 minutes");
         yield* logger.write({ id: "active-first" }, ThreadId.make("active"));
         assert.equal(NodeFS.existsSync(finishedPath), true);
+        NodeFS.truncateSync(finishedPath, 512 * 1024 * 1024 + 1);
 
-        yield* TestClock.adjust(1);
+        yield* TestClock.adjust("5 minutes");
         yield* logger.write({ id: "active-second" }, ThreadId.make("active"));
         assert.equal(NodeFS.existsSync(finishedPath), false);
         assert.equal(NodeFS.existsSync(activePath), true);
