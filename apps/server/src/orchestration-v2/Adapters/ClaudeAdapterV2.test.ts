@@ -5109,6 +5109,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       shown: false,
     },
     {
+      name: "drops the CLI's API error frame when the repeated failure is truncated",
+      text: `API Error: ${"safeguard detail ".repeat(40)}`.trim(),
+      apiErrorStatus: 400,
+      shown: false,
+    },
+    {
       name: "keeps the CLI's API error frame when the failure says something else",
       text: "API Error: 429 Specific rate limit detail.",
       apiErrorStatus: 429,
@@ -5145,7 +5151,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       const terminal = yield* Queue.take(harness.terminalReceipts);
       assert.equal(terminal.status, "failed");
       if (terminal.status !== "failed") return;
-      assert.equal(terminal.failure.message === input.text, !input.shown);
+      assert.equal(terminal.failure.message === input.text.slice(0, 500).trim(), !input.shown);
       const assistantTexts = harness.events.flatMap((event) =>
         event.type === "message.updated" && event.message.role === "assistant"
           ? [event.message.text]
