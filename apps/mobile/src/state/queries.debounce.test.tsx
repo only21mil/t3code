@@ -65,7 +65,7 @@ it.each([
   { status: "cached", generation: 0, query: "missing", pending: false },
   { status: "empty", generation: 0, query: "missing", pending: false },
   { status: "synchronizing", generation: 0, query: "", pending: false },
-  { status: "synchronizing", generation: 0, query: "a", pending: false },
+  { status: "synchronizing", generation: 0, query: "a", pending: true },
 ])("reports title search loading for $status generation $generation query '$query'", (state) => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   mocks.shellState = { status: state.status, generation: state.generation };

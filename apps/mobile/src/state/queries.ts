@@ -226,7 +226,7 @@ export function useThreadSearch(
   const initialSnapshotPending = useAtomValue(
     initialThreadSnapshotPendingAtom(
       JSON.stringify(
-        scope.titlesOnly === true && normalizedQuery.length >= 2 ? environmentIds : [],
+        scope.titlesOnly === true && normalizedQuery.length > 0 ? environmentIds : [],
       ),
     ),
   );
