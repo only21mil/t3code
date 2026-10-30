@@ -195,6 +195,7 @@ import {
   findNewTaskDraftKeys,
   flushComposerDrafts,
   getComposerDraftSnapshot,
+  mergeComposerDraftContent,
   mergeComposerDraftContentState,
   migrateLegacyNewTaskDraft,
   modelOptionMemoryAtom,
@@ -202,6 +203,7 @@ import {
   removeComposerDraftsForEnvironment,
   replaceComposerDraftAttachments,
   resetComposerDraftsLoadState,
+  restoreComposerDraftSnapshot,
   restoreComposerDraftSnapshotState,
   restoreCloudComposerDrafts,
   retargetNewTaskDraft,
@@ -213,6 +215,7 @@ import {
   waitForComposerDraftsLoaded,
   setStickyComposerModelSelection,
   stickyComposerModelSelectionAtom,
+  undoComposerDraftMerge,
   undoComposerDraftMergeState,
   updateComposerDraftSettings,
 } from "./use-composer-drafts";
@@ -2108,6 +2111,67 @@ describe("mobile composer drafts", () => {
       "pending-plan",
     ]);
   });
+
+  it.each([
+    [
+      "a merge",
+      (draftKey: string) =>
+        mergeComposerDraftContent(draftKey, { text: "Recovered", attachments: [] }),
+    ],
+    [
+      "a snapshot restore",
+      (draftKey: string) =>
+        restoreComposerDraftSnapshot(draftKey, { text: "Recovered", attachments: [] }),
+    ],
+    [
+      "a merge undo",
+      (draftKey: string) =>
+        undoComposerDraftMerge(
+          draftKey,
+          { text: "Recovered", attachments: [] },
+          getComposerDraftSnapshot(draftKey),
+        ),
+    ],
+  ])(
+    "releases a draft it cannot read once %s replaces it and never writes it back",
+    async (_writer, replace) => {
+      const load = vi.spyOn(threadOutboxManager, "load").mockResolvedValue(true);
+      onTestFinished(() => load.mockRestore());
+      const draftKey = "environment-1:thread-1";
+      const file = {
+        id: "newer-file",
+        type: "file",
+        name: "plan.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 42,
+        fileUri: "file:///documents/t3-composer-attachments/plan.pdf",
+      };
+      const removed = Promise.withResolvers<unknown>();
+      composerAttachmentCleanupMocks.remove.mockImplementationOnce(async () => {
+        removed.resolve(JSON.parse(composerDraftFileMocks.getDocument()).drafts);
+      });
+      composerDraftFileMocks.setDocument({
+        schemaVersion: 1,
+        drafts: {
+          [draftKey]: {
+            text: "Written by a newer build",
+            attachments: [file],
+            workspaceSelection: { mode: "cloud", branch: null, worktreePath: null },
+          },
+        },
+      });
+
+      await waitForComposerDraftsLoaded();
+      await replace(draftKey);
+
+      expect(await removed.promise).toEqual({
+        [draftKey]: expect.objectContaining({ text: "Recovered" }),
+      });
+      expect(composerAttachmentCleanupMocks.remove).toHaveBeenCalledWith(file.fileUri);
+      await restoreComposerDraftSnapshot(draftKey, { text: "", attachments: [] });
+      expect(JSON.parse(composerDraftFileMocks.getDocument()).drafts).toEqual({});
+    },
+  );
 
   it("drops a pending task's draft it cannot read with the task's environment", async () => {
     const load = vi.spyOn(threadOutboxManager, "load").mockResolvedValue(true);
