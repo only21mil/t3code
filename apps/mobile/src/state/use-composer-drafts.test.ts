@@ -172,6 +172,7 @@ import {
 } from "@t3tools/shared/composerContextReferences";
 import { appAtomRegistry } from "./atom-registry";
 import { threadOutboxManager } from "./thread-outbox";
+import { clearThreadOutboxEnvironment } from "./thread-outbox-removal";
 import {
   appendComposerDraftAttachments,
   captureComposerDraftInsertion,
@@ -2045,6 +2046,124 @@ describe("mobile composer drafts", () => {
     await flushComposerDrafts();
 
     expect(JSON.parse(composerDraftFileMocks.getDocument()).drafts).toEqual({});
+  });
+
+  it("replaces a draft it cannot read when that composer is edited before drafts load", async () => {
+    composerDraftFileMocks.setDocument({
+      schemaVersion: 1,
+      drafts: {
+        "environment-1:thread-1": {
+          text: "Written by a newer build",
+          attachments: [],
+          workspaceSelection: { mode: "cloud", branch: null, worktreePath: null },
+        },
+      },
+    });
+    composerDraftFileMocks.blockRead();
+
+    ensureComposerDraftsLoaded();
+    setComposerDraftText("environment-1:thread-1", "Started over");
+    setComposerDraftText("environment-1:thread-1", "");
+    composerDraftFileMocks.releaseRead();
+    await flushComposerDrafts();
+
+    expect(JSON.parse(composerDraftFileMocks.getDocument()).drafts).toEqual({});
+  });
+
+  it("releases the files of a draft it cannot read once that draft is replaced", async () => {
+    const load = vi.spyOn(threadOutboxManager, "load").mockResolvedValue(true);
+    onTestFinished(() => load.mockRestore());
+    const released = Promise.withResolvers<void>();
+    composerAttachmentCleanupMocks.releaseUploads.mockImplementationOnce(async () => {
+      released.resolve();
+    });
+    const environmentId = EnvironmentId.make("environment-1");
+    const file = {
+      id: "newer-file",
+      type: "file",
+      name: "plan.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 42,
+      fileUri: "file:///documents/t3-composer-attachments/plan.pdf",
+      uploadEnvironmentId: environmentId,
+      uploadedAttachmentId: "pending-plan",
+    };
+    composerDraftFileMocks.setDocument({
+      schemaVersion: 1,
+      drafts: {
+        "environment-1:thread-1": {
+          text: "Written by a newer build",
+          attachments: [file],
+          workspaceSelection: { mode: "cloud", branch: null, worktreePath: null },
+        },
+      },
+    });
+
+    await waitForComposerDraftsLoaded();
+    setComposerDraftText("environment-1:thread-1", "Started over");
+    await released.promise;
+
+    expect(composerAttachmentCleanupMocks.remove).toHaveBeenCalledWith(file.fileUri);
+    expect(composerAttachmentCleanupMocks.releaseUploads).toHaveBeenCalledWith(environmentId, [
+      "pending-plan",
+    ]);
+  });
+
+  it("drops a pending task's draft it cannot read with the task's environment", async () => {
+    const load = vi.spyOn(threadOutboxManager, "load").mockResolvedValue(true);
+    onTestFinished(() => load.mockRestore());
+    const environmentId = EnvironmentId.make("environment-1");
+    const message = {
+      environmentId,
+      threadId: ThreadId.make("thread-1"),
+      messageId: MessageId.make("message-1"),
+      commandId: CommandId.make("command-1"),
+      text: "Start the task",
+      attachments: [],
+      creation: {
+        projectId: ProjectId.make("project-1"),
+        workspaceMode: "local" as const,
+        branch: null,
+        worktreePath: null,
+      },
+      createdAt: "2026-10-30T12:00:00.000Z",
+    };
+    const clearOutbox = vi
+      .spyOn(threadOutboxManager, "clearEnvironment")
+      .mockResolvedValue([message]);
+    onTestFinished(() => clearOutbox.mockRestore());
+    const removed = Promise.withResolvers<void>();
+    composerAttachmentCleanupMocks.remove.mockImplementationOnce(async () => {
+      removed.resolve();
+    });
+    const file = {
+      id: "newer-file",
+      type: "file",
+      name: "plan.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 42,
+      fileUri: "file:///documents/t3-composer-attachments/plan.pdf",
+    };
+    composerDraftFileMocks.setDocument({
+      schemaVersion: 1,
+      drafts: {
+        [`pending-task:${message.messageId}`]: {
+          text: "Edited by a newer build",
+          attachments: [file],
+          workspaceSelection: { mode: "cloud", branch: null, worktreePath: null },
+        },
+      },
+    });
+
+    await Promise.all([
+      clearThreadOutboxEnvironment(environmentId),
+      clearComposerDraftsEnvironment(environmentId),
+    ]);
+    await flushComposerDrafts();
+
+    expect(JSON.parse(composerDraftFileMocks.getDocument()).drafts).toEqual({});
+    await removed.promise;
+    expect(composerAttachmentCleanupMocks.remove).toHaveBeenCalledWith(file.fileUri);
   });
 
   it("drops drafts it cannot read with their environment, also at sign-out", async () => {

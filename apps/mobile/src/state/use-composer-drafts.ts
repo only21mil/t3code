@@ -481,6 +481,8 @@ export const composerCloudDraftsAtom = Atom.make<ComposerCloudDraftState>({
 
 let loadPromise: Promise<void> | null = null;
 let unreadableDrafts: Record<string, unknown> = {};
+// Edits before hydration replace the unreadable draft read for the same key.
+let draftKeysEditedBeforeLoad: Set<string> | null = new Set();
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let persistRetryNeeded = false;
 const persistenceQueue = new SerializedAsyncQueue();
@@ -488,6 +490,7 @@ const persistenceQueue = new SerializedAsyncQueue();
 export function resetComposerDraftsLoadState(): void {
   loadPromise = null;
   unreadableDrafts = {};
+  draftKeysEditedBeforeLoad = new Set();
   persistRetryNeeded = false;
 }
 
@@ -825,6 +828,23 @@ function unreadableDraftAttachments(raw: unknown): ReadonlyArray<ComposerAttachm
   });
 }
 
+function dropUnreadableDrafts(draftKeys: Iterable<string>): void {
+  const removed: ComposerAttachmentReference[] = [];
+  for (const draftKey of draftKeys) {
+    if (!Object.hasOwn(unreadableDrafts, draftKey)) continue;
+    removed.push(...unreadableDraftAttachments(unreadableDrafts[draftKey]));
+    delete unreadableDrafts[draftKey];
+  }
+  scheduleUnusedComposerAttachmentCleanup(removed);
+}
+
+/** For owners that remove a draft by key, such as a removed pending task. */
+export function clearUnreadableComposerDraft(draftKey: string): void {
+  if (!Object.hasOwn(unreadableDrafts, draftKey)) return;
+  dropUnreadableDrafts([draftKey]);
+  schedulePersistComposerState();
+}
+
 function unreadableDraftAttachmentOwners() {
   return Object.values(unreadableDrafts).map((raw) => ({
     attachments: unreadableDraftAttachments(raw),
@@ -990,7 +1010,7 @@ export async function releaseUnusedComposerAttachmentFiles(
 }
 
 export function scheduleUnusedComposerAttachmentCleanup(
-  attachments: ReadonlyArray<DraftComposerAttachment>,
+  attachments: ReadonlyArray<ComposerAttachmentReference>,
 ): void {
   if (
     !attachments.some(
@@ -1039,6 +1059,8 @@ export function ensureComposerDraftsLoaded(): void {
   }
   const loading = loadPersistedComposerState().then((persisted) => {
     unreadableDrafts = persisted.unreadableDrafts;
+    dropUnreadableDrafts(draftKeysEditedBeforeLoad ?? []);
+    draftKeysEditedBeforeLoad = null;
     if (Object.keys(unreadableDrafts).length > 0) {
       console.warn(
         "[composer-drafts] kept drafts this build cannot read",
@@ -1293,11 +1315,14 @@ function updateComposerDrafts(
     return;
   }
   appAtomRegistry.set(composerDraftsAtom, next);
+  if (draftKeysEditedBeforeLoad !== null) {
+    for (const key of new Set([...Object.keys(current), ...Object.keys(next)])) {
+      if (current[key] !== next[key]) draftKeysEditedBeforeLoad.add(key);
+    }
+  }
   // An edit replaces the draft this build could not read under the same key,
   // even when the edit is cleared again before it is saved.
-  for (const key of Object.keys(unreadableDrafts)) {
-    if (current[key] !== next[key]) delete unreadableDrafts[key];
-  }
+  dropUnreadableDrafts(Object.keys(unreadableDrafts).filter((key) => current[key] !== next[key]));
   schedulePersistComposerState();
 }
 

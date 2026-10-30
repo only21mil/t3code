@@ -5,6 +5,7 @@ import { threadOutboxManager } from "./thread-outbox";
 import type { QueuedThreadMessage } from "./thread-outbox-model";
 import {
   clearComposerDraft,
+  clearUnreadableComposerDraft,
   composerDraftsAtom,
   flushComposerDrafts,
   scheduleUnusedComposerAttachmentCleanup,
@@ -35,6 +36,7 @@ async function cleanUpRemovedMessages(
         continue;
       }
       const draftKey = `pending-task:${message.messageId}`;
+      clearUnreadableComposerDraft(draftKey);
       const draft = drafts[draftKey];
       if (draft === undefined) {
         continue;
