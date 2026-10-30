@@ -225,9 +225,7 @@ export function useThreadSearch(
   const anyOlderSettled = useAtomValue(anyOlderSettledAtom(JSON.stringify(environmentIds)));
   const initialSnapshotPending = useAtomValue(
     initialThreadSnapshotPendingAtom(
-      JSON.stringify(
-        scope.titlesOnly === true && normalizedQuery.length > 0 ? environmentIds : [],
-      ),
+      JSON.stringify(scope.titlesOnly === true && normalizedQuery.length > 0 ? environmentIds : []),
     ),
   );
   // Messages need a word of three or more letters; older settled titles match from two.
