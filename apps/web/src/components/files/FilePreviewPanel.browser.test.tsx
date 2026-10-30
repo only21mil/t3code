@@ -1,8 +1,7 @@
 import { EnvironmentId, ThreadId, type ProjectReadFileResult } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
-import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
+import { act, fakeTimers, render } from "../../../test/render";
 
 const state = vi.hoisted(() => ({
   file: null as ProjectReadFileResult | null,
@@ -10,6 +9,11 @@ const state = vi.hoisted(() => ({
   writeFile: vi.fn(),
 }));
 
+vi.mock(import("@t3tools/client-runtime/state/runtime"), async (original) => ({
+  ...(await original()),
+  runAtomCommand: ((_registry: unknown, _command: unknown, request: unknown) =>
+    state.writeFile(request)) as never,
+}));
 vi.mock(import("~/state/session"), async (original) => ({
   ...(await original()),
   readEnvironmentScope: () => true,
@@ -73,67 +77,61 @@ import FilePreviewPanel from "./FilePreviewPanel";
 
 const environmentId = EnvironmentId.make("markdown-preview-test");
 const threadRef = { environmentId, threadId: ThreadId.make("thread") };
-let root: Root;
-let container: HTMLDivElement;
-
-beforeEach(() => {
-  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  vi.useFakeTimers();
-  localStorage.setItem("t3code.fileExplorerOpen", "false");
-  localStorage.setItem("t3code.renderMarkdown", "true");
+function setup() {
+  const keys = ["t3code.fileExplorerOpen", "t3code.renderMarkdown"];
+  const previous = keys.map((key) => localStorage.getItem(key));
+  localStorage.setItem(keys[0]!, "false");
+  localStorage.setItem(keys[1]!, "true");
   state.optimistic = null;
   state.writeFile.mockReset().mockResolvedValue(AsyncResult.success(undefined));
-  container = document.body.appendChild(document.createElement("div"));
-  root = createRoot(container);
-});
+  return {
+    [Symbol.dispose]() {
+      for (const [index, key] of keys.entries()) {
+        const value = previous[index];
+        if (value == null) localStorage.removeItem(key);
+        else localStorage.setItem(key, value);
+      }
+    },
+  };
+}
 
-afterEach(async () => {
-  await act(async () => root.unmount());
-  container.remove();
-  localStorage.removeItem("t3code.fileExplorerOpen");
-  localStorage.removeItem("t3code.renderMarkdown");
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
-});
-
-async function openMarkdown(truncated: boolean) {
+function markdownPreview(truncated: boolean) {
   state.file = {
     relativePath: "tasks.md",
     contents: "- [ ] Keep the rest of this file\n",
     byteLength: truncated ? 1_200_000 : 32,
     truncated,
   };
-  await act(async () =>
-    root.render(
-      <FilePreviewPanel
-        environmentId={environmentId}
-        cwd="/workspace"
-        projectName="Project"
-        relativePath="tasks.md"
-        threadRef={threadRef}
-        composerDraftTarget={threadRef}
-        keybindings={[]}
-        availableEditors={[]}
-        openInShortcutEnabled={false}
-        revealLine={null}
-        revealRequestId={0}
-        onOpenFile={vi.fn()}
-        onNavigateFolder={vi.fn()}
-        folderTrail={undefined}
-        onPendingChange={vi.fn()}
-        selectedFilePending={false}
-        workspaceMutationId={null}
-      />,
-    ),
+  return (
+    <FilePreviewPanel
+      environmentId={environmentId}
+      cwd="/workspace"
+      projectName="Project"
+      relativePath="tasks.md"
+      threadRef={threadRef}
+      composerDraftTarget={threadRef}
+      keybindings={[]}
+      availableEditors={[]}
+      openInShortcutEnabled={false}
+      revealLine={null}
+      revealRequestId={0}
+      onOpenFile={vi.fn()}
+      onNavigateFolder={vi.fn()}
+      folderTrail={undefined}
+      onPendingChange={vi.fn()}
+      selectedFilePending={false}
+      workspaceMutationId={null}
+    />
   );
-  const checkbox = container.querySelector<HTMLInputElement>('input[type="checkbox"]');
-  expect(checkbox).not.toBeNull();
-  return checkbox!;
 }
 
 describe("rendered Markdown task saves", () => {
   it("keeps a truncated read read-only without queuing a replacement", async () => {
-    const checkbox = await openMarkdown(true);
+    using _settings = setup();
+    await using screen = await render(markdownPreview(true));
+    using _timers = fakeTimers();
+    const checkbox = screen.container.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    expect(checkbox).not.toBeNull();
     expect(checkbox.disabled).toBe(true);
     expect(checkbox.readOnly).toBe(true);
     await act(async () => checkbox.click());
@@ -144,7 +142,11 @@ describe("rendered Markdown task saves", () => {
   });
 
   it("still toggles and saves tasks from a complete read", async () => {
-    const checkbox = await openMarkdown(false);
+    using _settings = setup();
+    await using screen = await render(markdownPreview(false));
+    using _timers = fakeTimers();
+    const checkbox = screen.container.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    expect(checkbox).not.toBeNull();
     expect(checkbox.disabled).toBe(false);
     await act(async () => checkbox.click());
     await vi.advanceTimersByTimeAsync(500);
