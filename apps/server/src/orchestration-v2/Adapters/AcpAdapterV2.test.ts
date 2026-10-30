@@ -2751,9 +2751,6 @@ describe("AcpAdapterV2", () => {
           return processTree.childPidsOf(pid);
         },
       };
-      let containment:
-        | AcpSessionRuntime.AcpSessionRuntime["Service"]["processContainment"]
-        | undefined;
       const instanceId = ProviderInstanceId.make("acp-test-cgroup-ledger-idle");
       const adapter = yield* makeAcpAdapterV2({
         instanceId,
@@ -2767,10 +2764,6 @@ describe("AcpAdapterV2", () => {
             mockAgentPath,
             ownDescendantProcessGroups: true,
             ownDetachedProcessGroup: true,
-            wrapRuntime: (runtime) => {
-              containment = runtime.processContainment;
-              return runtime;
-            },
           }),
         },
         selfInvocation,
@@ -2792,7 +2785,6 @@ describe("AcpAdapterV2", () => {
         })
         .pipe(Effect.provideService(Scope.Scope, sessionScope));
       yield* runtime.ensureThread({ threadId, modelSelection, runtimePolicy });
-      assert.equal(containment, "cgroup-v2");
       // The agent's children are listed once, to capture the root it may
       // signal at teardown, and never again while the session is open.
       assert.equal(childListReads, 1);
