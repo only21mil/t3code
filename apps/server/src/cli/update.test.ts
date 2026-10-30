@@ -90,7 +90,9 @@ it.layer(NodeServices.layer)("t3 update launcher", (it) => {
     { name: "Windows launcher records", recorded: "C:\\t3.cmd\r\n" },
     // An interrupted append cut this record short.
     { name: "an unterminated launcher record", recorded: "/opt/t" },
-  ])("keeps the runtime a repointed launcher off PATH points at with $name", ({ recorded }) =>
+    // Another process's append is cut short after t3 update reads the records.
+    { name: "a record cut short after the read", recorded: "/opt/t3\n", cut: "/opt/t" },
+  ])("keeps the runtime a repointed launcher off PATH points at with $name", ({ recorded, cut }) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -110,11 +112,26 @@ it.layer(NodeServices.layer)("t3 update launcher", (it) => {
       const launcher = path.join(root, "t3");
       yield* fs.symlink(path.join(root, "runtime/versions/1.0.0/t3"), launcher);
 
+      const launchersFile = path.join(root, "runtime/launchers");
       yield* repointLauncher({
         launchedAs: launcher,
         baseDir: root,
         targetEntryPath: path.join(root, "runtime/versions/2.0.0/t3"),
-      });
+      }).pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          readFileString: (file, encoding) =>
+            fs
+              .readFileString(file, encoding)
+              .pipe(
+                Effect.tap(() =>
+                  cut === undefined || file !== launchersFile
+                    ? Effect.void
+                    : fs.writeFileString(file, cut, { flag: "a" }),
+                ),
+              ),
+        }),
+      );
       // A later server start prunes with no idea how this machine launches t3.
       const removed = yield* prunePinnedRuntimes({ baseDir: root, keep: [] }).pipe(
         Effect.provideService(ProcessRunner.ProcessRunner, unrelatedLsof),
@@ -155,7 +172,7 @@ it.layer(NodeServices.layer)("t3 update launcher", (it) => {
         targetEntryPath: newExe,
       });
 
-      assert.equal(yield* fs.readFileString(launchersFile), `${launcher}\n`);
+      assert.equal(yield* fs.readFileString(launchersFile), `\n${launcher}\n`);
     }).pipe(Effect.scoped, Effect.provideService(HostProcess.Platform, "linux")),
   );
 

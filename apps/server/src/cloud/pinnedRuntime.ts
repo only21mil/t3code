@@ -383,10 +383,12 @@ const PINNED_RUNTIME_PRUNE_GRACE = Duration.hours(1);
  */
 const PINNED_RUNTIME_LAUNCHERS_FILE = "launchers";
 
-/** Ends a record an interrupted append left unterminated, so it cannot swallow the next one. */
-const launcherRecords = (recorded: string, launchers: ReadonlyArray<string>) =>
-  (recorded.length === 0 || recorded.endsWith("\n") ? "" : "\n") +
-  launchers.map((launcher) => `${launcher}\n`).join("");
+/**
+ * Starts on a fresh line whatever the file ends with when the append lands: another process's
+ * append may have been cut short since this one read the file. Readers skip the blank lines.
+ */
+const launcherRecords = (launchers: ReadonlyArray<string>) =>
+  `\n${launchers.map((launcher) => `${launcher}\n`).join("")}`;
 
 export function launcherOwnsVersionsDir(
   path: Path.Path,
@@ -414,7 +416,7 @@ export const recordPinnedRuntimeLauncher = Effect.fn("cloud.pinned_runtime.recor
     const launcher = path.resolve(input.launcher);
     const recorded = yield* fs.readFileString(launchersFile).pipe(Effect.orElseSucceed(() => ""));
     if (recorded.split(/\r?\n/).includes(launcher)) return;
-    yield* fs.writeFileString(launchersFile, launcherRecords(recorded, [launcher]), { flag: "a" });
+    yield* fs.writeFileString(launchersFile, launcherRecords([launcher]), { flag: "a" });
   },
 );
 
@@ -432,8 +434,9 @@ const shellLauncherTargets = Effect.fn("cloud.pinned_runtime.shell_launcher_targ
   const home = yield* HostProcess.HomeDirectory;
   const launcherName = platform === "win32" ? "t3.cmd" : "t3";
   const launchersFile = path.join(baseDir, PINNED_RUNTIME_DIR, PINNED_RUNTIME_LAUNCHERS_FILE);
-  const records = yield* fs.readFileString(launchersFile).pipe(Effect.orElseSucceed(() => ""));
-  const recorded = records.split(/\r?\n/).filter((launcher) => launcher.trim().length > 0);
+  const recorded = (yield* fs.readFileString(launchersFile).pipe(Effect.orElseSucceed(() => "")))
+    .split(/\r?\n/)
+    .filter((launcher) => launcher.trim().length > 0);
   const found = [
     environment["T3CODE_INSTALL_BIN_DIR"] || path.join(home, ".local", "bin"),
     ...(environment["PATH"] ?? environment["Path"] ?? "").split(platform === "win32" ? ";" : ":"),
@@ -468,7 +471,7 @@ const shellLauncherTargets = Effect.fn("cloud.pinned_runtime.shell_launcher_targ
   }
   if (unrecorded.length > 0) {
     yield* fs
-      .writeFileString(launchersFile, launcherRecords(records, unrecorded), { flag: "a" })
+      .writeFileString(launchersFile, launcherRecords(unrecorded), { flag: "a" })
       .pipe(Effect.ignore);
   }
   return targets;
