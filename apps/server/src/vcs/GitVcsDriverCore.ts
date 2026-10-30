@@ -390,19 +390,6 @@ function parseUpstreamRefByFirstSeparator(
   };
 }
 
-// A branch tracking a differently named ref was cut from it, the way `git
-// checkout -b feature origin/dev` and our own worktree flow leave it. That
-// upstream is the branch's base, not its publish target.
-function isAliasOfUpstreamHead(
-  branch: string,
-  upstream: { readonly upstreamRef: string; readonly branchName: string },
-): boolean {
-  return (
-    branch === upstream.branchName ||
-    (branch.endsWith(`/${upstream.branchName}`) && upstream.upstreamRef.endsWith(`/${branch}`))
-  );
-}
-
 function parseTrackingBranchByUpstreamRef(stdout: string, upstreamRef: string): string | null {
   for (const line of stdout.split("\n")) {
     const trimmedLine = line.trim();
@@ -2584,27 +2571,17 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
     const hasNoLocalDelta = details.aheadCount === 0 && details.behindCount === 0;
     if (hasNoLocalDelta && details.hasUpstream) {
-      // Matching the upstream says nothing about the push remote, which can
-      // still be missing these commits.
+      // Matching the upstream says nothing about a separate push remote, which
+      // the push path below checks before skipping.
       const upstream = yield* resolveCurrentUpstream(cwd).pipe(Effect.orElseSucceed(() => null));
-      const pushRemote =
-        upstream && isAliasOfUpstreamHead(branch, upstream)
-          ? yield* resolveSeparatePushRemoteName(cwd, branch, upstream.remoteName)
-          : null;
-      if (!upstream || !pushRemote) {
+      const pushRemote = upstream
+        ? yield* resolveSeparatePushRemoteName(cwd, branch, upstream.remoteName)
+        : null;
+      if (!pushRemote) {
         return {
           status: "skipped_up_to_date" as const,
           branch,
           ...(details.upstreamRef ? { upstreamBranch: details.upstreamRef } : {}),
-        };
-      }
-      const pushRemoteRef = `${pushRemote}/${upstream.branchName}`;
-      if (yield* remoteRefContainsHead(cwd, pushRemoteRef)) {
-        return {
-          status: "skipped_up_to_date" as const,
-          branch,
-          upstreamBranch: pushRemoteRef,
-          pushRemote,
         };
       }
     } else if (hasNoLocalDelta) {
@@ -2664,9 +2641,23 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       Effect.orElseSucceed(() => null),
     );
     if (currentUpstream) {
-      // Pushing HEAD onto a base upstream would write feature commits to a
-      // shared branch (bare `git push` refuses this under push.default=simple).
-      if (!isAliasOfUpstreamHead(branch, currentUpstream)) {
+      // A branch tracking a differently named ref was cut from it, the way `git
+      // checkout -b feature origin/dev` and our own worktree flow leave it.
+      // That upstream is the branch's base, not its publish target, and pushing
+      // HEAD onto it would write feature commits to a shared branch (bare `git
+      // push` refuses this under push.default=simple).
+      const isAliasOfUpstreamHead =
+        branch === currentUpstream.branchName ||
+        (branch.endsWith(`/${currentUpstream.branchName}`) &&
+          currentUpstream.upstreamRef.endsWith(`/${branch}`));
+      if (!isAliasOfUpstreamHead) {
+        if (hasNoLocalDelta) {
+          return {
+            status: "skipped_up_to_date" as const,
+            branch,
+            ...(details.upstreamRef ? { upstreamBranch: details.upstreamRef } : {}),
+          };
+        }
         const publishRemoteName = yield* resolvePushRemoteName(cwd, branch).pipe(
           Effect.orElseSucceed(() => null),
         );
@@ -2713,6 +2704,27 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         currentUpstream.remoteName,
       );
       if (pushRemote) {
+        const pushRemoteRef = `${pushRemote}/${currentUpstream.branchName}`;
+        // The local ref can be stale when the branch was deleted or rewound
+        // elsewhere, so read the push remote before skipping.
+        if (
+          hasNoLocalDelta &&
+          (yield* fetchRemoteTrackingBranch({
+            cwd,
+            remoteName: pushRemote,
+            remoteBranch: currentUpstream.branchName,
+          }).pipe(
+            Effect.andThen(remoteRefContainsHead(cwd, pushRemoteRef)),
+            Effect.orElseSucceed(() => false),
+          ))
+        ) {
+          return {
+            status: "skipped_up_to_date" as const,
+            branch,
+            upstreamBranch: pushRemoteRef,
+            pushRemote,
+          };
+        }
         yield* runGit(
           "GitVcsDriver.pushCurrentBranch.pushToPushRemote",
           cwd,

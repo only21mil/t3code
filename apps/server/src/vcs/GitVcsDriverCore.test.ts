@@ -4449,7 +4449,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         }),
     );
 
-    it.effect.each(["absent", "behind"] as const)(
+    it.effect.each(["absent", "behind", "deleted", "rewound"] as const)(
       "pushes an up-to-date tracked branch to the push remote when its branch there is %s",
       (forkState) =>
         Effect.gen(function* () {
@@ -4471,6 +4471,17 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           yield* driver.commit(cwd, "Add upstream update", "");
           yield* git(cwd, ["push", "-u", "upstream", "topic"]);
           yield* git(cwd, ["config", "remote.pushDefault", "fork"]);
+          if (forkState === "deleted" || forkState === "rewound") {
+            // Another checkout changes the fork after this one last fetched it,
+            // leaving a local fork/topic that still contains HEAD.
+            yield* git(cwd, ["push", "fork", "topic"]);
+            yield* git(
+              forkRemote,
+              forkState === "deleted"
+                ? ["--git-dir=.", "update-ref", "-d", "refs/heads/topic"]
+                : ["--git-dir=.", "update-ref", "refs/heads/topic", "topic~1"],
+            );
+          }
 
           const pushed = yield* driver.pushCurrentBranch(cwd, null);
 
@@ -4513,6 +4524,32 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           upstreamBranch: "fork/topic",
           pushRemote: "fork",
         });
+      }),
+    );
+
+    it.effect("skips an up-to-date branch whose differently named upstream is its base", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const upstreamRemote = yield* makeTmpDir("git-upstream-remote-");
+        const forkRemote = yield* makeTmpDir("git-fork-remote-");
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* git(upstreamRemote, ["init", "--bare"]);
+        yield* git(forkRemote, ["init", "--bare"]);
+        yield* git(cwd, ["remote", "add", "upstream", upstreamRemote]);
+        yield* git(cwd, ["remote", "add", "fork", forkRemote]);
+        yield* git(cwd, ["push", "upstream", "HEAD:refs/heads/release"]);
+        yield* git(cwd, ["fetch", "upstream"]);
+        yield* git(cwd, ["checkout", "-b", "topic", "--track", "upstream/release"]);
+        yield* git(cwd, ["config", "remote.pushDefault", "fork"]);
+
+        const pushed = yield* driver.pushCurrentBranch(cwd, null);
+
+        assert.deepInclude(pushed, {
+          status: "skipped_up_to_date",
+          upstreamBranch: "upstream/release",
+        });
+        assert.equal(yield* git(forkRemote, ["--git-dir=.", "branch", "--list", "topic"]), "");
       }),
     );
   });
