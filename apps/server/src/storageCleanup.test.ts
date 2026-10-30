@@ -2282,6 +2282,33 @@ describe("storage cleanup reports and local file policies", () => {
 });
 
 describe("settled worktree rechecks", () => {
+  it.live.each(["autoResumeLimitedThreads", "snoozeLimitedThreads"] as const)(
+    "keeps a usage-limited checkout when %s is enabled during measurement",
+    (preference) =>
+      runCleanupTest(
+        Effect.gen(function* () {
+          const fixture = yield* pausedMeasurementFixture();
+          fixture.setSettings({ autoResumeLimitedThreads: false, snoozeLimitedThreads: false });
+          fixture.setThreads([
+            shell({
+              branch: "feature",
+              worktreePath: fixture.worktree,
+              status: "failed",
+              latestRunId: RunId.make("limited-run"),
+              lastErrorClass: "usage_limit",
+              usageLimitResetAt: DateTime.formatIso(at(DAY_MS)),
+            }),
+          ]);
+          const run = yield* fixture.service.runNow.pipe(Effect.forkChild);
+          yield* Deferred.await(fixture.measuring);
+          fixture.setSettings({ [preference]: true });
+          yield* Deferred.succeed(fixture.resume, undefined);
+          const report = yield* Fiber.join(run);
+          expect(report.entries[0]?.outcome).toBe("kept");
+          expect(yield* fixture.fs.exists(fixture.worktree)).toBe(true);
+        }),
+      ),
+  );
   it.live.each([{ settledAt: null }, { settledAt: at(DAY_MS) }])(
     "keeps a checkout changed during measurement (%j)",
     (change) =>
