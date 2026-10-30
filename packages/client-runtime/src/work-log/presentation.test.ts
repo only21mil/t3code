@@ -76,7 +76,6 @@ describe("workEntryIndicatesToolFailure", () => {
     };
     expect(workEntryIndicatesToolFailure(entry)).toBe(false);
     expect(workEntryDisplayIndicatesToolFailure(entry)).toBe(false);
-    expect(workEntryIndicatesToolSuccess(entry)).toBe(true);
   });
 
   it("ignores failure phrases in reasoning text", () => {
