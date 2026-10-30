@@ -67,42 +67,55 @@ function releaseEncodeLock(entryId: string): void {
  */
 const PENDING_IMAGE_ENCODE_WINDOW_MS = 15 * 60 * 1000;
 
-async function orphanedPendingEntryIds(
-  entries: ReadonlyArray<PromptStashEntry>,
-): Promise<ReadonlySet<string>> {
-  const pending = entries.filter(
-    (entry) => entry.pendingImageCount && !encodeLockReleases.has(entry.id),
-  );
-  if (pending.length === 0) return new Set();
-  const snapshot = await encodeLocks()
-    ?.query()
-    .catch(() => undefined);
-  if (!snapshot) {
-    const now = Date.now();
-    return new Set(
-      pending
-        .filter((entry) => {
-          const startedAt = Date.parse(entry.createdAt);
-          return Number.isNaN(startedAt) || now - startedAt > PENDING_IMAGE_ENCODE_WINDOW_MS;
-        })
-        .map((entry) => entry.id),
-    );
-  }
-  const owned = new Set(
-    [...(snapshot.held ?? []), ...(snapshot.pending ?? [])].map((lock) => lock.name),
-  );
+function orphanedPendingEntryIds(entries: ReadonlyArray<PromptStashEntry>): ReadonlySet<string> {
+  const now = Date.now();
   return new Set(
-    pending.filter((entry) => !owned.has(encodeLockName(entry.id))).map((entry) => entry.id),
+    entries
+      .filter((entry) => {
+        if (!entry.pendingImageCount) return false;
+        const startedAt = Date.parse(entry.createdAt);
+        return Number.isNaN(startedAt) || now - startedAt > PENDING_IMAGE_ENCODE_WINDOW_MS;
+      })
+      .map((entry) => entry.id),
+  );
+}
+
+/** Runs `critical` holding every named lock, or not at all when anyone holds or awaits one. */
+function withEveryLockIfAvailable(
+  locks: LockManager,
+  names: ReadonlyArray<string>,
+  critical: () => void,
+): Promise<void> {
+  const [name, ...rest] = names;
+  if (name === undefined) {
+    critical();
+    return Promise.resolve();
+  }
+  return locks.request(name, { ifAvailable: true }, (lock) =>
+    lock ? withEveryLockIfAvailable(locks, rest, critical) : undefined,
   );
 }
 
 /**
- * Only the stashing tab's encode clears `pendingImageCount`, so an entry whose encode lock
- * nobody holds would show "saving…" forever. Settles those against a fresh read, since
- * another tab may have written while the lock query was in flight.
+ * Only the stashing tab's encode clears `pendingImageCount`, so an entry nobody encodes would
+ * show "saving…" forever. Settling holds every pending entry's encode lock, which its encoder
+ * frees only after finalizing, so no finalize lands between this read and write.
  */
-async function settleOrphanedPendingImages(loaded: ReadonlyArray<PromptStashEntry>): Promise<void> {
-  const orphanIds = await orphanedPendingEntryIds(loaded);
+function settleOrphanedPendingImages(loaded: ReadonlyArray<PromptStashEntry>): Promise<void> {
+  const pendingIds = loaded.filter((entry) => entry.pendingImageCount).map((entry) => entry.id);
+  if (pendingIds.length === 0) return Promise.resolve();
+  const locks = encodeLocks();
+  if (!locks) {
+    settlePendingImages(orphanedPendingEntryIds(loaded));
+    return Promise.resolve();
+  }
+  // Any live encoder, this tab's included, defers settling to a later load.
+  return withEveryLockIfAvailable(locks, pendingIds.map(encodeLockName), () =>
+    settlePendingImages(new Set(pendingIds)),
+  ).catch(() => {});
+}
+
+function settlePendingImages(orphanIds: ReadonlySet<string>): void {
   if (orphanIds.size === 0) return;
   const latest = readPersistedEntries();
   if (!latest) return;
@@ -288,7 +301,7 @@ export const usePromptStashStore = create<PromptStashStoreState>()((set, get) =>
   stashEntry: (entry) => {
     const nextEntries = [entry, ...latestEntries(get().entries)];
     const evicted = nextEntries.length > MAX_STASH_ENTRIES ? (nextEntries.pop() ?? null) : null;
-    // Requested before the write, so a tab that reads the pending entry can see its owner.
+    // Requested before the write, so the owner is normally registered before another tab reads the entry.
     if (entry.pendingImageCount) holdEncodeLock(entry.id);
     const { written, durable } = persistEntries(nextEntries);
     // A rejected write must not leave the entry visible either: the caller
