@@ -42,6 +42,55 @@ function makeEntry(input: {
   };
 }
 
+const encodedImage = {
+  id: "img-encoded",
+  name: "encoded.webp",
+  mimeType: "image/webp",
+  sizeBytes: 12,
+  dataUrl: "data:image/webp;base64,BBBB",
+};
+
+/** A localStorage every tab imported after this call shares, as tabs of one origin do. */
+function stubSharedStorage() {
+  const shared = { stored: new Map<string, string>(), afterNextRead: null as (() => void) | null };
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => {
+      const value = shared.stored.get(key) ?? null;
+      const afterRead = shared.afterNextRead;
+      shared.afterNextRead = null;
+      afterRead?.();
+      return value;
+    },
+    setItem: (key: string, value: string) => {
+      shared.stored.set(key, value);
+    },
+    removeItem: (key: string) => {
+      shared.stored.delete(key);
+    },
+  });
+  return shared;
+}
+
+function stubLockManager() {
+  const held = new Set<string>();
+  vi.stubGlobal("navigator", {
+    locks: {
+      request: (name: string, callback: () => Promise<void>) => {
+        held.add(name);
+        return Promise.resolve()
+          .then(callback)
+          .finally(() => held.delete(name));
+      },
+      query: async () => ({ held: [...held].map((name) => ({ name })), pending: [] }),
+    },
+  });
+}
+
+async function importTab() {
+  vi.resetModules();
+  return await import("./promptStashStore");
+}
+
 function resetPromptStashStore() {
   usePromptStashStore.setState({ entries: [] });
   writePromptStashStorageForTest("");
@@ -230,26 +279,105 @@ describe("promptStashStore", () => {
     expect(attached).toBe(false);
   });
 
-  it("settles a pending count left behind by a crashed or closed session", () => {
-    writePromptStashStorageForTest(
-      JSON.stringify({
-        version: 2,
+  it("settles a pending count left behind by a crashed or closed session", async () => {
+    stubLockManager();
+    try {
+      await writePromptStashStorageForTest(
+        JSON.stringify({
+          version: 2,
+          state: {
+            entries: [{ ...makeEntry({ id: "orphan" }), pendingImageCount: 2 }],
+          },
+        }),
+      );
+
+      const entry = usePromptStashStore.getState().entries[0];
+      expect(entry?.pendingImageCount).toBe(0);
+      expect(entry?.unreadableImageNames).toHaveLength(2);
+
+      usePromptStashStore.getState().stashEntry(makeEntry({ id: "later" }));
+      expect(usePromptStashStore.getState().entries[1]).toEqual(entry);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps an entry pending however old while the tab encoding it is alive", async () => {
+    const shared = stubSharedStorage();
+    stubLockManager();
+    try {
+      const encodingTab = (await importTab()).usePromptStashStore;
+      const loadingTab = await importTab();
+      // A suspended tab can resume its encode long after it stashed.
+      encodingTab.getState().stashEntry({
+        ...makeEntry({ id: "suspended" }),
+        createdAt: "2000-01-01T00:00:00.000Z",
+        pendingImageCount: 1,
+      });
+
+      await loadingTab.writePromptStashStorageForTest(
+        shared.stored.get(PROMPT_STASH_STORAGE_KEY) ?? "",
+      );
+      expect(loadingTab.usePromptStashStore.getState().entries[0]?.pendingImageCount).toBe(1);
+
+      expect(
+        encodingTab.getState().finalizeEntryImages("suspended", {
+          attachments: [encodedImage],
+          droppedImageNames: [],
+          unreadableImageNames: [],
+        }).attached,
+      ).toBe(true);
+      expect(loadingTab.usePromptStashStore.getState().takeEntry("suspended").entry).toMatchObject({
+        attachments: [encodedImage],
+        unreadableImageNames: [],
+        pendingImageCount: 0,
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("settling an orphan keeps images another tab finalized meanwhile", async () => {
+    const shared = stubSharedStorage();
+    stubLockManager();
+    try {
+      const tab = await importTab();
+      const orphan = { ...makeEntry({ id: "orphan" }), pendingImageCount: 1 };
+      const encoding = { ...makeEntry({ id: "encoding" }), pendingImageCount: 1 };
+      shared.afterNextRead = () => {
+        shared.stored.set(
+          PROMPT_STASH_STORAGE_KEY,
+          JSON.stringify({
+            version: 2,
+            state: {
+              entries: [orphan, { ...encoding, attachments: [encodedImage], pendingImageCount: 0 }],
+            },
+          }),
+        );
+      };
+
+      await tab.writePromptStashStorageForTest(
+        JSON.stringify({ version: 2, state: { entries: [orphan, encoding] } }),
+      );
+
+      expect(JSON.parse(shared.stored.get(PROMPT_STASH_STORAGE_KEY) ?? "null")).toMatchObject({
         state: {
-          entries: [{ ...makeEntry({ id: "orphan" }), pendingImageCount: 2 }],
+          entries: [
+            { id: "orphan", pendingImageCount: 0, unreadableImageNames: [expect.any(String)] },
+            { id: "encoding", attachments: [encodedImage], pendingImageCount: 0 },
+          ],
         },
-      }),
-    );
-
-    const entry = usePromptStashStore.getState().entries[0];
-    expect(entry?.pendingImageCount).toBe(0);
-    expect(entry?.unreadableImageNames).toHaveLength(2);
-
-    usePromptStashStore.getState().stashEntry(makeEntry({ id: "later" }));
-    expect(usePromptStashStore.getState().entries[1]).toEqual(entry);
+      });
+      expect(tab.usePromptStashStore.getState().takeEntry("encoding").entry?.attachments).toEqual([
+        encodedImage,
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("keeps the pending count of an entry another tab may still be encoding", () => {
-    // A far-future createdAt is unambiguously within any encode window, without reading the clock.
+    // Without Web Locks the age window decides; a far-future createdAt is inside it, clock unread.
     const encoding = {
       ...makeEntry({ id: "encoding" }),
       createdAt: "9999-01-01T00:00:00.000Z",

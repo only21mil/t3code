@@ -40,34 +40,75 @@ type PersistedPromptStashState = typeof PersistedPromptStashState.Type;
 
 const decodePersistedPromptStashState = Schema.decodeUnknownSync(PersistedPromptStashState);
 
+/** Held by the stashing tab until its encode finalizes; a closed or crashed tab drops it. */
+const encodeLockName = (entryId: string) => `t3code:prompt-stash:encode:${entryId}`;
+const encodeLockReleases = new Map<string, () => void>();
+
+// Typed as always present, but missing in older browsers and non-secure contexts.
+function encodeLocks(): LockManager | undefined {
+  return typeof navigator === "undefined" ? undefined : navigator.locks;
+}
+
+function holdEncodeLock(entryId: string): void {
+  const locks = encodeLocks();
+  if (!locks) return;
+  const released = new Promise<void>((resolve) => encodeLockReleases.set(entryId, resolve));
+  void locks.request(encodeLockName(entryId), () => released).catch(() => {});
+}
+
+function releaseEncodeLock(entryId: string): void {
+  encodeLockReleases.get(entryId)?.();
+  encodeLockReleases.delete(entryId);
+}
+
 /**
- * How long a stash's image encode may plausibly run. `compressImageForStash`
- * re-encodes images one at a time, up to the composer's attachment limit, with
- * several quality and scale passes each, so this sits well past the worst case.
+ * Without Web Locks (older browsers, plain-http origins), ownership is unknowable, so only
+ * entries older than any plausible encode settle; a tab suspended past it can still lose them.
  */
 const PENDING_IMAGE_ENCODE_WINDOW_MS = 15 * 60 * 1000;
 
-/**
- * `pendingImageCount` is cleared only by the encode loop of the tab that
- * stashed the entry, and that loop does not survive a reload. An entry still
- * pending past the encode window was orphaned by a closed tab or a crash
- * mid-encode, so a loading tab settles it — otherwise it would be stuck
- * showing "saving…" and refuse to restore forever. A younger entry may still
- * be encoding in another open tab; settling it would let it restore without
- * its images and make that tab's finalize find nothing to attach to.
- * Returns null when nothing settled.
- */
-function settleOrphanedPendingImages(
+async function orphanedPendingEntryIds(
   entries: ReadonlyArray<PromptStashEntry>,
-  now: number,
-): ReadonlyArray<PromptStashEntry> | null {
+): Promise<ReadonlySet<string>> {
+  const pending = entries.filter(
+    (entry) => entry.pendingImageCount && !encodeLockReleases.has(entry.id),
+  );
+  if (pending.length === 0) return new Set();
+  const snapshot = await encodeLocks()
+    ?.query()
+    .catch(() => undefined);
+  if (!snapshot) {
+    const now = Date.now();
+    return new Set(
+      pending
+        .filter((entry) => {
+          const startedAt = Date.parse(entry.createdAt);
+          return Number.isNaN(startedAt) || now - startedAt > PENDING_IMAGE_ENCODE_WINDOW_MS;
+        })
+        .map((entry) => entry.id),
+    );
+  }
+  const owned = new Set(
+    [...(snapshot.held ?? []), ...(snapshot.pending ?? [])].map((lock) => lock.name),
+  );
+  return new Set(
+    pending.filter((entry) => !owned.has(encodeLockName(entry.id))).map((entry) => entry.id),
+  );
+}
+
+/**
+ * Only the stashing tab's encode clears `pendingImageCount`, so an entry whose encode lock
+ * nobody holds would show "saving…" forever. Settles those against a fresh read, since
+ * another tab may have written while the lock query was in flight.
+ */
+async function settleOrphanedPendingImages(loaded: ReadonlyArray<PromptStashEntry>): Promise<void> {
+  const orphanIds = await orphanedPendingEntryIds(loaded);
+  if (orphanIds.size === 0) return;
+  const latest = readPersistedEntries();
+  if (!latest) return;
   let settledAny = false;
-  const settled = entries.map((entry) => {
-    if (!entry.pendingImageCount) return entry;
-    const startedAt = Date.parse(entry.createdAt);
-    if (!Number.isNaN(startedAt) && now - startedAt <= PENDING_IMAGE_ENCODE_WINDOW_MS) {
-      return entry;
-    }
+  const settled = latest.map((entry) => {
+    if (!entry.pendingImageCount || !orphanIds.has(entry.id)) return entry;
     settledAny = true;
     const lostCount = entry.pendingImageCount;
     return {
@@ -82,7 +123,9 @@ function settleOrphanedPendingImages(
       ],
     };
   });
-  return settledAny ? settled : null;
+  if (!settledAny) return;
+  persistEntries(settled);
+  usePromptStashStore.setState({ entries: visibleEntries(settled) });
 }
 
 export function partitionStashAttachments(
@@ -212,15 +255,6 @@ function latestEntries(current: ReadonlyArray<PromptStashEntry>): ReadonlyArray<
   return readPersistedEntries() ?? current;
 }
 
-function loadPersistedEntries(): ReadonlyArray<PromptStashEntry> | null {
-  const persisted = readPersistedEntries();
-  const settled = persisted && settleOrphanedPendingImages(persisted, Date.now());
-  if (!settled) return persisted;
-  // Later changes start from storage, so the settled counts must land there too.
-  persistEntries(settled);
-  return settled;
-}
-
 interface PromptStashStoreState {
   entries: ReadonlyArray<PromptStashEntry>;
   stashEntry: (entry: PromptStashEntry) => {
@@ -254,11 +288,14 @@ export const usePromptStashStore = create<PromptStashStoreState>()((set, get) =>
   stashEntry: (entry) => {
     const nextEntries = [entry, ...latestEntries(get().entries)];
     const evicted = nextEntries.length > MAX_STASH_ENTRIES ? (nextEntries.pop() ?? null) : null;
+    // Requested before the write, so a tab that reads the pending entry can see its owner.
+    if (entry.pendingImageCount) holdEncodeLock(entry.id);
     const { written, durable } = persistEntries(nextEntries);
     // A rejected write must not leave the entry visible either: the caller
     // keeps the composer intact on failure, so a stashed copy would
     // duplicate the prompt. Eviction likewise only sticks on success.
     if (!written) {
+      releaseEncodeLock(entry.id);
       return { evicted: null, written: false, durable: false };
     }
     set(() => ({ entries: visibleEntries(nextEntries) }));
@@ -275,6 +312,7 @@ export const usePromptStashStore = create<PromptStashStoreState>()((set, get) =>
     return { entry, durable };
   },
   finalizeEntryImages: (entryId, images) => {
+    releaseEncodeLock(entryId);
     const entries = latestEntries(get().entries);
     const index = entries.findIndex((candidate) => candidate.id === entryId);
     const existing = index === -1 ? undefined : entries[index];
@@ -303,14 +341,18 @@ export const usePromptStashStore = create<PromptStashStoreState>()((set, get) =>
   },
 }));
 
+/** Shows storage as it is now; orphaned pending counts settle once ownership is known. */
+function loadPersistedEntries(): Promise<void> {
+  const persisted = readPersistedEntries();
+  usePromptStashStore.setState({ entries: persisted ?? [] });
+  return persisted ? settleOrphanedPendingImages(persisted) : Promise.resolve();
+}
+
 {
   try {
     baseStashStorage.removeItem(LEGACY_PROMPT_STASH_STORAGE_KEY);
   } catch {}
-  const persisted = loadPersistedEntries();
-  if (persisted) {
-    usePromptStashStore.setState({ entries: persisted });
-  }
+  void loadPersistedEntries();
   // Fires only for writes from other tabs, keeping this tab's list current.
   if (storageIsDurable && typeof window !== "undefined") {
     window.addEventListener("storage", (event) => {
@@ -320,7 +362,7 @@ export const usePromptStashStore = create<PromptStashStoreState>()((set, get) =>
   }
 }
 
-export function writePromptStashStorageForTest(raw: string): void {
+export function writePromptStashStorageForTest(raw: string): Promise<void> {
   baseStashStorage.setItem(PROMPT_STASH_STORAGE_KEY, raw);
-  usePromptStashStore.setState({ entries: loadPersistedEntries() ?? [] });
+  return loadPersistedEntries();
 }
