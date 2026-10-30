@@ -141,7 +141,11 @@ it.layer(NodeServices.layer)("t3 update launcher", (it) => {
       );
 
       assert.deepStrictEqual(removed, ["1.0.0"]);
-      assert.equal(yield* fs.realPath(launcher), path.join(root, "runtime/versions/2.0.0/t3"));
+      // macOS temp dirs sit behind the /var -> /private/var symlink, so compare canonical paths.
+      assert.equal(
+        yield* fs.realPath(launcher),
+        yield* fs.realPath(path.join(root, "runtime/versions/2.0.0/t3")),
+      );
     }).pipe(Effect.scoped, Effect.provideService(HostProcess.Platform, "linux")),
   );
 
