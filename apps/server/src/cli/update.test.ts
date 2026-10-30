@@ -83,7 +83,14 @@ it.layer(NodeServices.layer)("t3 update launcher", (it) => {
     }).pipe(Effect.scoped, Effect.provideService(HostProcess.Platform, "linux")),
   );
 
-  it.effect("keeps the runtime a repointed launcher off PATH points at", () =>
+  it.effect.each([
+    { name: "no launcher records", recorded: undefined },
+    { name: "an empty launcher record", recorded: "" },
+    { name: "whole launcher records", recorded: "/opt/t3\n" },
+    { name: "Windows launcher records", recorded: "C:\\t3.cmd\r\n" },
+    // An interrupted append cut this record short.
+    { name: "an unterminated launcher record", recorded: "/opt/t" },
+  ])("keeps the runtime a repointed launcher off PATH points at with $name", ({ recorded }) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -95,6 +102,9 @@ it.layer(NodeServices.layer)("t3 update launcher", (it) => {
         yield* fs.writeFileString(path.join(directory, "t3"), "");
         yield* fs.writeFileString(path.join(directory, ".install-complete"), `${version}\n`);
         yield* fs.utimes(path.join(directory, ".install-complete"), 0, 0);
+      }
+      if (recorded !== undefined) {
+        yield* fs.writeFileString(path.join(root, "runtime/launchers"), recorded);
       }
       // A launcher in the T3 home itself, which neither PATH nor the default bin dir reaches.
       const launcher = path.join(root, "t3");

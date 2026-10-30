@@ -428,6 +428,33 @@ it.layer(NodeServices.layer)("prunePinnedRuntimes", (it) => {
     }),
   );
 
+  it.effect("remembers a launcher found on PATH after an unterminated launcher record", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { baseDir, versionsDir } = yield* setup(["1.0.0", "1.1.0"]);
+      const binDir = path.join(baseDir, "custom-bin");
+      yield* fs.makeDirectory(binDir);
+      yield* fs.symlink(path.join(versionsDir, "1.0.0", "t3"), path.join(binDir, "t3"));
+      // An interrupted append cut this record short.
+      yield* fs.writeFileString(path.join(baseDir, "runtime", "launchers"), "/opt/t");
+      const prune = (environment: Record<string, string>) =>
+        prunePinnedRuntimes({ baseDir, keep: [] }).pipe(
+          Effect.provideService(ProcessRunner.ProcessRunner, lsofRunner("p1\nftxt\nn/bin/sh\n")),
+          Effect.provideService(HostProcess.Platform, "darwin"),
+          Effect.provideService(HostProcess.Environment, environment),
+          Effect.provideService(HostProcess.HomeDirectory, baseDir),
+        );
+
+      yield* prune({ PATH: binDir });
+      // A service that cannot see the interactive PATH.
+      const removed = yield* prune({});
+
+      assert.deepEqual(removed, []);
+      assert.isTrue(yield* fs.exists(path.join(versionsDir, "1.0.0", "t3")));
+    }),
+  );
+
   it.effect("matches a Windows shim whatever its casing", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

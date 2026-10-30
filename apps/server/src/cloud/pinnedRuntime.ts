@@ -383,6 +383,11 @@ const PINNED_RUNTIME_PRUNE_GRACE = Duration.hours(1);
  */
 const PINNED_RUNTIME_LAUNCHERS_FILE = "launchers";
 
+/** Ends a record an interrupted append left unterminated, so it cannot swallow the next one. */
+const launcherRecords = (recorded: string, launchers: ReadonlyArray<string>) =>
+  (recorded.length === 0 || recorded.endsWith("\n") ? "" : "\n") +
+  launchers.map((launcher) => `${launcher}\n`).join("");
+
 export function launcherOwnsVersionsDir(
   path: Path.Path,
   versionsDir: string,
@@ -409,7 +414,7 @@ export const recordPinnedRuntimeLauncher = Effect.fn("cloud.pinned_runtime.recor
     const launcher = path.resolve(input.launcher);
     const recorded = yield* fs.readFileString(launchersFile).pipe(Effect.orElseSucceed(() => ""));
     if (recorded.split(/\r?\n/).includes(launcher)) return;
-    yield* fs.writeFileString(launchersFile, `${launcher}\n`, { flag: "a" });
+    yield* fs.writeFileString(launchersFile, launcherRecords(recorded, [launcher]), { flag: "a" });
   },
 );
 
@@ -427,9 +432,8 @@ const shellLauncherTargets = Effect.fn("cloud.pinned_runtime.shell_launcher_targ
   const home = yield* HostProcess.HomeDirectory;
   const launcherName = platform === "win32" ? "t3.cmd" : "t3";
   const launchersFile = path.join(baseDir, PINNED_RUNTIME_DIR, PINNED_RUNTIME_LAUNCHERS_FILE);
-  const recorded = (yield* fs.readFileString(launchersFile).pipe(Effect.orElseSucceed(() => "")))
-    .split(/\r?\n/)
-    .filter((launcher) => launcher.trim().length > 0);
+  const records = yield* fs.readFileString(launchersFile).pipe(Effect.orElseSucceed(() => ""));
+  const recorded = records.split(/\r?\n/).filter((launcher) => launcher.trim().length > 0);
   const found = [
     environment["T3CODE_INSTALL_BIN_DIR"] || path.join(home, ".local", "bin"),
     ...(environment["PATH"] ?? environment["Path"] ?? "").split(platform === "win32" ? ";" : ":"),
@@ -464,9 +468,7 @@ const shellLauncherTargets = Effect.fn("cloud.pinned_runtime.shell_launcher_targ
   }
   if (unrecorded.length > 0) {
     yield* fs
-      .writeFileString(launchersFile, unrecorded.map((launcher) => `${launcher}\n`).join(""), {
-        flag: "a",
-      })
+      .writeFileString(launchersFile, launcherRecords(records, unrecorded), { flag: "a" })
       .pipe(Effect.ignore);
   }
   return targets;
