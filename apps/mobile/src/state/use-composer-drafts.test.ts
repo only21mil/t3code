@@ -2112,7 +2112,7 @@ describe("mobile composer drafts", () => {
     ]);
   });
 
-  it.each([
+  const unreadableDraftReplacements = [
     [
       "a merge",
       (draftKey: string) =>
@@ -2132,7 +2132,9 @@ describe("mobile composer drafts", () => {
           getComposerDraftSnapshot(draftKey),
         ),
     ],
-  ])(
+  ] as const;
+
+  it.each(unreadableDraftReplacements)(
     "releases a draft it cannot read once %s replaces it and never writes it back",
     async (_writer, replace) => {
       const load = vi.spyOn(threadOutboxManager, "load").mockResolvedValue(true);
@@ -2170,6 +2172,48 @@ describe("mobile composer drafts", () => {
       expect(composerAttachmentCleanupMocks.remove).toHaveBeenCalledWith(file.fileUri);
       await restoreComposerDraftSnapshot(draftKey, { text: "", attachments: [] });
       expect(JSON.parse(composerDraftFileMocks.getDocument()).drafts).toEqual({});
+    },
+  );
+
+  it.each(unreadableDraftReplacements)(
+    "keeps a draft it cannot read and its files when %s cannot be saved",
+    async (_writer, replace) => {
+      const load = vi.spyOn(threadOutboxManager, "load").mockResolvedValue(true);
+      onTestFinished(() => load.mockRestore());
+      const draftKey = "environment-1:thread-1";
+      const drafts = {
+        [draftKey]: {
+          text: "Written by a newer build",
+          attachments: [
+            {
+              id: "newer-file",
+              type: "file",
+              name: "plan.pdf",
+              mimeType: "application/pdf",
+              sizeBytes: 42,
+              fileUri: "file:///documents/t3-composer-attachments/plan.pdf",
+              uploadEnvironmentId: "environment-1",
+              uploadedAttachmentId: "pending-plan",
+            },
+          ],
+          workspaceSelection: { mode: "cloud", branch: null, worktreePath: null },
+        },
+      };
+      const unrelated = {
+        fileUri: "file:///documents/t3-composer-attachments/unrelated.pdf",
+      };
+      composerDraftFileMocks.setDocument({ schemaVersion: 1, drafts });
+      await waitForComposerDraftsLoaded();
+
+      composerDraftFileMocks.setWriteError(new Error("storage unavailable"));
+      await expect(replace(draftKey)).rejects.toBeInstanceOf(ComposerDraftPersistenceError);
+      composerDraftFileMocks.setWriteError(null);
+      // A cleanup started by the failed write would finish ahead of this later one.
+      await releaseUnusedComposerAttachmentFiles([unrelated]);
+
+      expect(composerAttachmentCleanupMocks.remove.mock.calls).toEqual([[unrelated.fileUri]]);
+      expect(composerAttachmentCleanupMocks.releaseUploads).not.toHaveBeenCalled();
+      expect(JSON.parse(composerDraftFileMocks.getDocument()).drafts).toEqual(drafts);
     },
   );
 

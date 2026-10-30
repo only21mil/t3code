@@ -828,14 +828,18 @@ function unreadableDraftAttachments(raw: unknown): ReadonlyArray<ComposerAttachm
   });
 }
 
-function dropUnreadableDrafts(draftKeys: Iterable<string>): void {
+// Release the returned attachments behind a scheduled persist or after an awaited write succeeds;
+// cleanup's flush only retries scheduled persists, so it cannot see a failed direct write.
+function dropUnreadableDrafts(
+  draftKeys: Iterable<string>,
+): ReadonlyArray<ComposerAttachmentReference> {
   const removed: ComposerAttachmentReference[] = [];
   for (const draftKey of draftKeys) {
     if (!Object.hasOwn(unreadableDrafts, draftKey)) continue;
     removed.push(...unreadableDraftAttachments(unreadableDrafts[draftKey]));
     delete unreadableDrafts[draftKey];
   }
-  scheduleUnusedComposerAttachmentCleanup(removed);
+  return removed;
 }
 
 // An edit replaces the draft this build could not read under the same key,
@@ -843,15 +847,18 @@ function dropUnreadableDrafts(draftKeys: Iterable<string>): void {
 function dropReplacedUnreadableDrafts(
   current: Record<string, ComposerDraft>,
   next: Record<string, ComposerDraft>,
-): void {
-  dropUnreadableDrafts(Object.keys(unreadableDrafts).filter((key) => current[key] !== next[key]));
+): ReadonlyArray<ComposerAttachmentReference> {
+  return dropUnreadableDrafts(
+    Object.keys(unreadableDrafts).filter((key) => current[key] !== next[key]),
+  );
 }
 
 /** For owners that remove a draft by key, such as a removed pending task. */
 export function clearUnreadableComposerDraft(draftKey: string): void {
   if (!Object.hasOwn(unreadableDrafts, draftKey)) return;
-  dropUnreadableDrafts([draftKey]);
+  const removed = dropUnreadableDrafts([draftKey]);
   schedulePersistComposerState();
+  scheduleUnusedComposerAttachmentCleanup(removed);
 }
 
 function unreadableDraftAttachmentOwners() {
@@ -1068,7 +1075,7 @@ export function ensureComposerDraftsLoaded(): void {
   }
   const loading = loadPersistedComposerState().then((persisted) => {
     unreadableDrafts = persisted.unreadableDrafts;
-    dropUnreadableDrafts(draftKeysEditedBeforeLoad ?? []);
+    scheduleUnusedComposerAttachmentCleanup(dropUnreadableDrafts(draftKeysEditedBeforeLoad ?? []));
     draftKeysEditedBeforeLoad = null;
     if (Object.keys(unreadableDrafts).length > 0) {
       console.warn(
@@ -1329,8 +1336,9 @@ function updateComposerDrafts(
       if (current[key] !== next[key]) draftKeysEditedBeforeLoad.add(key);
     }
   }
-  dropReplacedUnreadableDrafts(current, next);
+  const replaced = dropReplacedUnreadableDrafts(current, next);
   schedulePersistComposerState();
+  scheduleUnusedComposerAttachmentCleanup(replaced);
 }
 
 export function setStickyComposerModelSelection(modelSelection: ModelSelection): void {
@@ -1776,13 +1784,12 @@ export async function mergeComposerDraftContent(
       !currentAttachmentIds.has(attachment.id) && !nextAttachmentIds.has(attachment.id),
   ).length;
   // Publish content and receipt before awaiting disk; concurrent typing then preserves the receipt in later serialized writes.
-  if (next !== current) {
-    appAtomRegistry.set(composerDraftsAtom, next);
-    dropReplacedUnreadableDrafts(current, next);
-  }
+  if (next !== current) appAtomRegistry.set(composerDraftsAtom, next);
+  const replaced = dropReplacedUnreadableDrafts(current, next);
   await persistenceQueue.run(() =>
     writePersistedComposerState(next, appAtomRegistry.get(stickyComposerModelSelectionAtom)),
   );
+  scheduleUnusedComposerAttachmentCleanup(replaced);
   return { skippedAttachmentCount };
 }
 
@@ -1801,10 +1808,11 @@ export async function restoreComposerDraftSnapshot(
   const current = appAtomRegistry.get(composerDraftsAtom);
   const next = restoreComposerDraftSnapshotState(current, draftKey, snapshot);
   appAtomRegistry.set(composerDraftsAtom, next);
-  dropReplacedUnreadableDrafts(current, next);
+  const replaced = dropReplacedUnreadableDrafts(current, next);
   await persistenceQueue.run(() =>
     writePersistedComposerState(next, appAtomRegistry.get(stickyComposerModelSelectionAtom)),
   );
+  scheduleUnusedComposerAttachmentCleanup(replaced);
 }
 
 export function sameComposerDraftState(a: ComposerDraft, b: ComposerDraft): boolean {
@@ -1882,10 +1890,11 @@ export async function undoComposerDraftMerge(
   const current = appAtomRegistry.get(composerDraftsAtom);
   const next = undoComposerDraftMergeState(current, draftKey, snapshot, merged);
   appAtomRegistry.set(composerDraftsAtom, next);
-  dropReplacedUnreadableDrafts(current, next);
+  const replaced = dropReplacedUnreadableDrafts(current, next);
   await persistenceQueue.run(() =>
     writePersistedComposerState(next, appAtomRegistry.get(stickyComposerModelSelectionAtom)),
   );
+  scheduleUnusedComposerAttachmentCleanup(replaced);
 }
 
 export function clearComposerDraftContent(
