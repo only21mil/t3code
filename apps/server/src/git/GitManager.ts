@@ -89,11 +89,7 @@ import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
-import {
-  extractBranchNameFromRemoteRef,
-  parseRemoteNames,
-  parseRemoteRefWithRemoteNames,
-} from "./remoteRefs.ts";
+import { extractBranchNameFromRemoteRef } from "./remoteRefs.ts";
 import { detachStackFrame } from "./detachStackFrame.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import type { GitManagerServiceError } from "@t3tools/contracts";
@@ -2280,7 +2276,7 @@ export const make = Effect.gen(function* () {
     fallbackBranch: string | null,
     threadId: ThreadId | undefined,
     emit: GitActionProgressEmitter,
-    pushedUpstreamRef?: string,
+    pushRemoteRef?: { readonly remoteName: string; readonly upstreamRef: string },
   ) {
     const provider = yield* sourceControlProvider(cwd);
     const terms = getChangeRequestTerminologyForKind(provider.kind);
@@ -2301,31 +2297,11 @@ export const make = Effect.gen(function* () {
       });
     }
 
-    // A push to a configured push remote keeps tracking the fetch upstream, so
-    // the PR head is where the commits went, not the tracked ref.
-    const pushedRemoteRef =
-      pushedUpstreamRef && pushedUpstreamRef !== details.upstreamRef
-        ? parseRemoteRefWithRemoteNames(
-            pushedUpstreamRef,
-            parseRemoteNames(
-              (yield* gitCore.execute({
-                operation: "GitManager.runPrStep.remotes",
-                cwd,
-                args: ["remote"],
-                timeoutMs: 5_000,
-              })).stdout,
-            ),
-          )
-        : null;
+    // A configured push remote receives the commits while the branch keeps
+    // tracking its upstream, so the PR head is the push remote's branch.
     const headContext = yield* resolveBranchHeadContext(
       cwd,
-      pushedRemoteRef
-        ? {
-            branch,
-            upstreamRef: pushedRemoteRef.remoteRef,
-            remoteName: pushedRemoteRef.remoteName,
-          }
-        : { branch, upstreamRef: details.upstreamRef },
+      pushRemoteRef ? { branch, ...pushRemoteRef } : { branch, upstreamRef: details.upstreamRef },
     );
 
     const existing = yield* findOpenPr(cwd, headContext);
@@ -3267,7 +3243,9 @@ export const make = Effect.gen(function* () {
                     currentBranch,
                     input.threadId,
                     progress.emit,
-                    push.status === "pushed" ? push.upstreamBranch : undefined,
+                    "pushRemote" in push && push.pushRemote && push.upstreamBranch
+                      ? { remoteName: push.pushRemote, upstreamRef: push.upstreamBranch }
+                      : undefined,
                   ),
                 ),
               )

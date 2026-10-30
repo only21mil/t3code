@@ -390,6 +390,19 @@ function parseUpstreamRefByFirstSeparator(
   };
 }
 
+// A branch tracking a differently named ref was cut from it, the way `git
+// checkout -b feature origin/dev` and our own worktree flow leave it. That
+// upstream is the branch's base, not its publish target.
+function isAliasOfUpstreamHead(
+  branch: string,
+  upstream: { readonly upstreamRef: string; readonly branchName: string },
+): boolean {
+  return (
+    branch === upstream.branchName ||
+    (branch.endsWith(`/${upstream.branchName}`) && upstream.upstreamRef.endsWith(`/${branch}`))
+  );
+}
+
 function parseTrackingBranchByUpstreamRef(stdout: string, upstreamRef: string): string | null {
   for (const line of stdout.split("\n")) {
     const trimmedLine = line.trim();
@@ -1727,6 +1740,30 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     return yield* resolvePrimaryRemoteName(cwd).pipe(Effect.orElseSucceed(() => null));
   });
 
+  // A fork workflow fetches from the upstream but pushes to the configured
+  // push remote, and keeps the upstream for pulls, as plain `git push` does.
+  const resolveSeparatePushRemoteName = Effect.fn("resolveSeparatePushRemoteName")(function* (
+    cwd: string,
+    branch: string,
+    upstreamRemoteName: string,
+  ) {
+    const pushRemoteName = yield* resolveConfiguredPushRemoteName(cwd, branch).pipe(
+      Effect.orElseSucceed(() => null),
+    );
+    return pushRemoteName && pushRemoteName !== upstreamRemoteName ? pushRemoteName : null;
+  });
+
+  const remoteRefContainsHead = (cwd: string, remoteRef: string) =>
+    executeGit(
+      "GitVcsDriver.pushCurrentBranch.publishContainsHead",
+      cwd,
+      ["merge-base", "--is-ancestor", "HEAD", `refs/remotes/${remoteRef}`],
+      { allowNonZeroExit: true },
+    ).pipe(
+      Effect.map((result) => result.exitCode === 0),
+      Effect.orElseSucceed(() => false),
+    );
+
   const ensureRemote: GitVcsDriver.GitVcsDriver["Service"]["ensureRemote"] = Effect.fn(
     "ensureRemote",
   )(function* (input) {
@@ -2546,15 +2583,31 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     }
 
     const hasNoLocalDelta = details.aheadCount === 0 && details.behindCount === 0;
-    if (hasNoLocalDelta) {
-      if (details.hasUpstream) {
+    if (hasNoLocalDelta && details.hasUpstream) {
+      // Matching the upstream says nothing about the push remote, which can
+      // still be missing these commits.
+      const upstream = yield* resolveCurrentUpstream(cwd).pipe(Effect.orElseSucceed(() => null));
+      const pushRemote =
+        upstream && isAliasOfUpstreamHead(branch, upstream)
+          ? yield* resolveSeparatePushRemoteName(cwd, branch, upstream.remoteName)
+          : null;
+      if (!upstream || !pushRemote) {
         return {
           status: "skipped_up_to_date" as const,
           branch,
           ...(details.upstreamRef ? { upstreamBranch: details.upstreamRef } : {}),
         };
       }
-
+      const pushRemoteRef = `${pushRemote}/${upstream.branchName}`;
+      if (yield* remoteRefContainsHead(cwd, pushRemoteRef)) {
+        return {
+          status: "skipped_up_to_date" as const,
+          branch,
+          upstreamBranch: pushRemoteRef,
+          pushRemote,
+        };
+      }
+    } else if (hasNoLocalDelta) {
       const comparableBaseBranch = yield* resolveBaseBranchForNoUpstream(cwd, branch).pipe(
         Effect.orElseSucceed(() => null),
       );
@@ -2571,21 +2624,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
         const publishBranch = yield* resolvePublishBranchName(cwd, branch);
         // The configured diff base can contain HEAD while the publish branch is still behind.
-        const publishContainsHead = yield* executeGit(
-          "GitVcsDriver.pushCurrentBranch.publishContainsHead",
-          cwd,
-          [
-            "merge-base",
-            "--is-ancestor",
-            "HEAD",
-            `refs/remotes/${publishRemoteName}/${publishBranch}`,
-          ],
-          { allowNonZeroExit: true },
-        ).pipe(
-          Effect.map((result) => result.exitCode === 0),
-          Effect.orElseSucceed(() => false),
-        );
-        if (publishContainsHead) {
+        if (yield* remoteRefContainsHead(cwd, `${publishRemoteName}/${publishBranch}`)) {
           return {
             status: "skipped_up_to_date" as const,
             branch,
@@ -2625,16 +2664,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       Effect.orElseSucceed(() => null),
     );
     if (currentUpstream) {
-      // A branch tracking a differently named ref was cut from it, the way `git
-      // checkout -b feature origin/dev` and our own worktree flow leave it.
-      // That upstream is the branch's base, not its publish target, and pushing
-      // HEAD onto it would write feature commits to a shared branch (bare `git
-      // push` refuses this under push.default=simple).
-      const isAliasOfUpstreamHead =
-        branch === currentUpstream.branchName ||
-        (branch.endsWith(`/${currentUpstream.branchName}`) &&
-          currentUpstream.upstreamRef.endsWith(`/${branch}`));
-      if (!isAliasOfUpstreamHead) {
+      // Pushing HEAD onto a base upstream would write feature commits to a
+      // shared branch (bare `git push` refuses this under push.default=simple).
+      if (!isAliasOfUpstreamHead(branch, currentUpstream)) {
         const publishRemoteName = yield* resolvePushRemoteName(cwd, branch).pipe(
           Effect.orElseSucceed(() => null),
         );
@@ -2675,22 +2707,23 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         };
       }
 
-      // A fork workflow fetches from the upstream but pushes to the configured
-      // push remote, and keeps the upstream for pulls, as plain `git push` does.
-      const configuredPushRemoteName = yield* resolveConfiguredPushRemoteName(cwd, branch).pipe(
-        Effect.orElseSucceed(() => null),
+      const pushRemote = yield* resolveSeparatePushRemoteName(
+        cwd,
+        branch,
+        currentUpstream.remoteName,
       );
-      if (configuredPushRemoteName && configuredPushRemoteName !== currentUpstream.remoteName) {
+      if (pushRemote) {
         yield* runGit(
           "GitVcsDriver.pushCurrentBranch.pushToPushRemote",
           cwd,
-          ["push", "--", configuredPushRemoteName, `HEAD:refs/heads/${currentUpstream.branchName}`],
+          ["push", "--", pushRemote, `HEAD:refs/heads/${currentUpstream.branchName}`],
           { timeoutMs: null },
         );
         return {
           status: "pushed" as const,
           branch,
-          upstreamBranch: `${configuredPushRemoteName}/${currentUpstream.branchName}`,
+          upstreamBranch: `${pushRemote}/${currentUpstream.branchName}`,
+          pushRemote,
           setUpstream: false,
         };
       }
