@@ -2217,6 +2217,73 @@ describe("mobile composer drafts", () => {
     },
   );
 
+  it.each(unreadableDraftReplacements)(
+    "keeps a draft it cannot read and its files when a settings update and then %s cannot be saved",
+    async (_writer, replace) => {
+      const load = vi.spyOn(threadOutboxManager, "load").mockResolvedValue(true);
+      onTestFinished(() => load.mockRestore());
+      const cleanupSettled = Promise.withResolvers<void>();
+      const warning = vi.spyOn(console, "warn").mockImplementation((message) => {
+        if (message === "[composer-attachments] could not remove unused files") {
+          cleanupSettled.resolve();
+        }
+      });
+      onTestFinished(() => warning.mockRestore());
+      composerAttachmentCleanupMocks.releaseUploads.mockImplementationOnce(async () => {
+        cleanupSettled.resolve();
+      });
+      const draftKey = "new-task:restored-message-1";
+      const drafts = {
+        [draftKey]: {
+          text: "Written by a newer build",
+          attachments: [
+            {
+              id: "newer-file",
+              type: "file",
+              name: "plan.pdf",
+              mimeType: "application/pdf",
+              sizeBytes: 42,
+              fileUri: "file:///documents/t3-composer-attachments/plan.pdf",
+              uploadEnvironmentId: "environment-1",
+              uploadedAttachmentId: "pending-plan",
+            },
+          ],
+          workspaceSelection: { mode: "cloud", branch: null, worktreePath: null },
+        },
+      };
+      composerDraftFileMocks.setDocument({ schemaVersion: 1, drafts });
+      await waitForComposerDraftsLoaded();
+
+      composerDraftFileMocks.setWriteError(new Error("storage unavailable"));
+      updateComposerDraftSettings(draftKey, {
+        project: {
+          environmentId: EnvironmentId.make("environment-1"),
+          projectId: ProjectId.make("project-1"),
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+      });
+      await expect(replace(draftKey)).rejects.toBeInstanceOf(ComposerDraftPersistenceError);
+      await cleanupSettled.promise;
+
+      expect(composerAttachmentCleanupMocks.remove).not.toHaveBeenCalled();
+      expect(composerAttachmentCleanupMocks.releaseUploads).not.toHaveBeenCalled();
+      expect(JSON.parse(composerDraftFileMocks.getDocument()).drafts).toEqual(drafts);
+      expect(warning).toHaveBeenCalledWith(
+        "[composer-attachments] could not remove unused files",
+        expect.any(ComposerDraftPersistenceError),
+      );
+
+      composerDraftFileMocks.setWriteError(null);
+      await flushComposerDrafts();
+
+      expect(JSON.parse(composerDraftFileMocks.getDocument()).drafts).toEqual({
+        [draftKey]: expect.objectContaining({ text: "Recovered" }),
+      });
+      expect(composerAttachmentCleanupMocks.remove).not.toHaveBeenCalled();
+      expect(composerAttachmentCleanupMocks.releaseUploads).not.toHaveBeenCalled();
+    },
+  );
+
   it("drops a pending task's draft it cannot read with the task's environment", async () => {
     const load = vi.spyOn(threadOutboxManager, "load").mockResolvedValue(true);
     onTestFinished(() => load.mockRestore());

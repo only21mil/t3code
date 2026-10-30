@@ -1069,6 +1069,32 @@ export function schedulePersistComposerState(): void {
   }, PERSIST_DEBOUNCE_MS);
 }
 
+function cancelScheduledPersist(): boolean {
+  if (persistTimer === null) return false;
+  clearTimeout(persistTimer);
+  persistTimer = null;
+  return true;
+}
+
+// A write that cancelled a scheduled persist fails like it would have, so cleanup waiting on
+// flushComposerDrafts cannot release attachments the saved document still references.
+function persistComposerDraftsNow(
+  drafts: Record<string, ComposerDraft>,
+  cancelledScheduledPersist: boolean,
+): Promise<void> {
+  return persistenceQueue.run(async () => {
+    try {
+      await writePersistedComposerState(
+        drafts,
+        appAtomRegistry.get(stickyComposerModelSelectionAtom),
+      );
+    } catch (error) {
+      if (cancelledScheduledPersist) persistRetryNeeded = true;
+      throw error;
+    }
+  });
+}
+
 export function ensureComposerDraftsLoaded(): void {
   if (loadPromise !== null) {
     return;
@@ -1767,10 +1793,7 @@ export async function mergeComposerDraftContent(
   if (loadPromise !== null) {
     await loadPromise;
   }
-  if (persistTimer !== null) {
-    clearTimeout(persistTimer);
-    persistTimer = null;
-  }
+  const cancelledScheduledPersist = cancelScheduledPersist();
   const current = appAtomRegistry.get(composerDraftsAtom);
   const next = mergeComposerDraftContentState(current, draftKey, content);
   const currentAttachmentIds = new Set(
@@ -1786,9 +1809,7 @@ export async function mergeComposerDraftContent(
   // Publish content and receipt before awaiting disk; concurrent typing then preserves the receipt in later serialized writes.
   if (next !== current) appAtomRegistry.set(composerDraftsAtom, next);
   const replaced = dropReplacedUnreadableDrafts(current, next);
-  await persistenceQueue.run(() =>
-    writePersistedComposerState(next, appAtomRegistry.get(stickyComposerModelSelectionAtom)),
-  );
+  await persistComposerDraftsNow(next, cancelledScheduledPersist);
   scheduleUnusedComposerAttachmentCleanup(replaced);
   return { skippedAttachmentCount };
 }
@@ -1801,17 +1822,12 @@ export async function restoreComposerDraftSnapshot(
   if (loadPromise !== null) {
     await loadPromise;
   }
-  if (persistTimer !== null) {
-    clearTimeout(persistTimer);
-    persistTimer = null;
-  }
+  const cancelledScheduledPersist = cancelScheduledPersist();
   const current = appAtomRegistry.get(composerDraftsAtom);
   const next = restoreComposerDraftSnapshotState(current, draftKey, snapshot);
   appAtomRegistry.set(composerDraftsAtom, next);
   const replaced = dropReplacedUnreadableDrafts(current, next);
-  await persistenceQueue.run(() =>
-    writePersistedComposerState(next, appAtomRegistry.get(stickyComposerModelSelectionAtom)),
-  );
+  await persistComposerDraftsNow(next, cancelledScheduledPersist);
   scheduleUnusedComposerAttachmentCleanup(replaced);
 }
 
@@ -1883,17 +1899,12 @@ export async function undoComposerDraftMerge(
   if (loadPromise !== null) {
     await loadPromise;
   }
-  if (persistTimer !== null) {
-    clearTimeout(persistTimer);
-    persistTimer = null;
-  }
+  const cancelledScheduledPersist = cancelScheduledPersist();
   const current = appAtomRegistry.get(composerDraftsAtom);
   const next = undoComposerDraftMergeState(current, draftKey, snapshot, merged);
   appAtomRegistry.set(composerDraftsAtom, next);
   const replaced = dropReplacedUnreadableDrafts(current, next);
-  await persistenceQueue.run(() =>
-    writePersistedComposerState(next, appAtomRegistry.get(stickyComposerModelSelectionAtom)),
-  );
+  await persistComposerDraftsNow(next, cancelledScheduledPersist);
   scheduleUnusedComposerAttachmentCleanup(replaced);
 }
 
@@ -2040,14 +2051,9 @@ export async function clearComposerDraftsEnvironment(environmentId: EnvironmentI
     ...removedUnreadable.flatMap(([, raw]) => unreadableDraftAttachments(raw)),
   ];
 
-  if (persistTimer !== null) {
-    clearTimeout(persistTimer);
-    persistTimer = null;
-  }
+  const cancelledScheduledPersist = cancelScheduledPersist();
   appAtomRegistry.set(composerDraftsAtom, next);
-  await persistenceQueue.run(() =>
-    writePersistedComposerState(next, appAtomRegistry.get(stickyComposerModelSelectionAtom)),
-  );
+  await persistComposerDraftsNow(next, cancelledScheduledPersist);
   await releaseUnusedComposerAttachmentFiles(removedAttachments);
 }
 
