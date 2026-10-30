@@ -7303,8 +7303,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           input.context.assistant.apiErrorFrame = null;
           if (
             apiErrorFrame !== null &&
-            input.failure?.message !==
-              makeProviderFailure({ message: apiErrorFrame.text }).message.slice(0, 500).trim()
+            (input.status !== "failed" ||
+              input.failure?.message !==
+                makeProviderFailure({ message: apiErrorFrame.text }).message.slice(0, 500).trim())
           ) {
             yield* emitAssistantTextArtifacts({ context: input.context, ...apiErrorFrame });
           }

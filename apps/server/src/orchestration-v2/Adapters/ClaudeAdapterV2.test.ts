@@ -5120,6 +5120,13 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       apiErrorStatus: 429,
       shown: true,
     },
+    {
+      name: "keeps the CLI's API error frame when the turn is interrupted",
+      text: "API Error: rejected",
+      apiErrorStatus: 400,
+      terminalReason: "aborted_streaming" as const,
+      shown: true,
+    },
   ])("$name", (input) =>
     Effect.gen(function* () {
       const harness = yield* makeWakeHarness;
@@ -5144,14 +5151,17 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           result: input.text,
           isError: true,
           apiErrorStatus: input.apiErrorStatus,
-          terminalReason: "api_error",
+          terminalReason: "terminalReason" in input ? input.terminalReason : "api_error",
         }),
       ]);
 
       const terminal = yield* Queue.take(harness.terminalReceipts);
-      assert.equal(terminal.status, "failed");
-      if (terminal.status !== "failed") return;
-      assert.equal(terminal.failure.message === input.text.slice(0, 500).trim(), !input.shown);
+      assert.equal(terminal.status, "terminalReason" in input ? "interrupted" : "failed");
+      if (terminal.status === "failed") {
+        assert.equal(terminal.failure.message === input.text.slice(0, 500).trim(), !input.shown);
+      } else {
+        assert.equal(terminal.failure, null);
+      }
       const assistantTexts = harness.events.flatMap((event) =>
         event.type === "message.updated" && event.message.role === "assistant"
           ? [event.message.text]
