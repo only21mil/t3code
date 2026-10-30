@@ -577,7 +577,21 @@ export function SourceControlWritingSettingsSection() {
                 <Switch
                   checked={usesDedicatedModel}
                   disabled={!usesDedicatedModel && !canEnableDedicatedModel}
-                  onCheckedChange={(checked) =>
+                  onCheckedChange={(checked) => {
+                    if (checked) {
+                      const reason = writerModelDisabledReason(
+                        defaultModelSelection.instanceId,
+                        defaultModelSelection.model,
+                      );
+                      if (reason) {
+                        toastManager.add({
+                          type: "error",
+                          title: "Writer model not saved",
+                          description: reason,
+                        });
+                        return;
+                      }
+                    }
                     updateSettings({
                       sourceControlWriterModelSelection: checked
                         ? createModelSelection(
@@ -586,8 +600,8 @@ export function SourceControlWritingSettingsSection() {
                             defaultModelSelection.options,
                           )
                         : null,
-                    })
-                  }
+                    });
+                  }}
                   aria-label="Use a separate source control writer model"
                 />
               </div>

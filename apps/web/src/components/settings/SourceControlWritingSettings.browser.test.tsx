@@ -32,6 +32,7 @@ vi.mock(import("./useScopedSettings"), async (original) => ({
   useScopedSettings: (() => ({
     ...DEFAULT_UNIFIED_SETTINGS,
     sourceControlWritingStyle: state.styles[0],
+    providerInstances: state.providerInstances,
   })) as never,
   useScopedSettingsMixed: (keys) =>
     !keys.includes("reviewGuidesEnabled") &&
@@ -42,8 +43,12 @@ vi.mock(import("./SettingsScopeContext"), async (original) => ({
   ...(await original()),
   useSettingsScope: (() => ({
     scope: { kind: "all", environmentIds: [] },
-    environment: null,
-    connectedEnvironments: [],
+    environment: { environmentId: EnvironmentId.make("representative"), serverConfig: {} },
+    connectedEnvironments: [...state.providers.keys()].map((environmentId) => ({
+      environmentId,
+      serverConfig: {},
+    })),
+    representative: { environmentId: EnvironmentId.make("representative") },
     targets: state.styles.map((style, index) => ({
       environmentId: EnvironmentId.make(`environment-${index}`),
       settings: {
@@ -138,6 +143,7 @@ describe("mixed source control instructions", () => {
 });
 
 it("rejects a scoped model when another environment requires extensions for it", async () => {
+  state.updateSettings.mockReset();
   state.styles = [DEFAULT_UNIFIED_SETTINGS.sourceControlWritingStyle];
   const instanceId = ProviderInstanceId.make("pi");
   state.providerInstances = {
@@ -157,6 +163,7 @@ it("rejects a scoped model when another environment requires extensions for it",
     models: [{ slug: "demo/model", name: "Demo", isCustom: false, capabilities: {} }],
   };
   state.providers = new Map([
+    [EnvironmentId.make("representative"), [provider]],
     [
       EnvironmentId.make("environment-0"),
       [
@@ -184,7 +191,18 @@ it("rejects a scoped model when another environment requires extensions for it",
       </>
     );
   }
-  await using screen = await render(<Availability />);
+  const availability = () => (
+    <>
+      <Availability />
+      <SourceControlWritingSettingsSection />
+    </>
+  );
+  await using screen = await render(availability());
+  await userEvent.click(screen.getByRole("button", { name: "Advanced" }));
+  await userEvent.click(
+    screen.getByRole("switch", { name: "Use a separate source control writer model" }),
+  );
+  expect(state.updateSettings).not.toHaveBeenCalled();
   await expect.element(screen.getByText("Available for threads")).toBeVisible();
   await expect
     .element(
@@ -193,4 +211,15 @@ it("rejects a scoped model when another environment requires extensions for it",
       ),
     )
     .toBeVisible();
+  state.providers = new Map([
+    [EnvironmentId.make("representative"), [provider]],
+    [EnvironmentId.make("environment-0"), [provider]],
+  ]);
+  await screen.rerender(availability());
+  await userEvent.click(
+    screen.getByRole("switch", { name: "Use a separate source control writer model" }),
+  );
+  expect(state.updateSettings).toHaveBeenCalledWith({
+    sourceControlWriterModelSelection: { instanceId, model: "demo/model" },
+  });
 });
