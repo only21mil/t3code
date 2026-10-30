@@ -21,7 +21,7 @@ vi.mock(import("~/state/session"), async (original) => ({
   readEnvironmentScope: (_environmentId: unknown, scope: unknown) =>
     scope === AuthOrchestrationOperateScope ? permissions.operate : permissions.checkout,
 }));
-vi.mock(import("~/lib/sourceControlActions"), async (original) => ({
+vi.mock(import("~/state/sourceControlActions"), async (original) => ({
   ...(await original()),
   usePreparePullRequestThreadAction: (() => ({
     isAllowed: permissions.checkout,
