@@ -2113,8 +2113,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             yield* emitToolArtifacts({
               active: tool,
               completed: true,
-              // A tool Cursor never completed will not get its result, so its
-              // outcome is unknown rather than successful.
+              // No completion event means the tool outcome is unknown.
               unfinishedStatus: input.status === "completed" ? "interrupted" : input.status,
             });
           }
