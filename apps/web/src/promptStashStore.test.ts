@@ -398,7 +398,7 @@ describe("promptStashStore", () => {
 
       let finalized: { attached: boolean } | undefined;
       const settling = loadingTab.writePromptStashStorageForTest(stashed);
-      // The encode finishes at settlement's next storage read, as a concurrent tab's can.
+      // Fires the encode after settlement has returned, as a finishing tab's finalize can.
       shared.afterNextRead = () => {
         finalized = encodingTab.getState().finalizeEntryImages("encoding", {
           attachments: [encodedImage],
@@ -420,6 +420,53 @@ describe("promptStashStore", () => {
         },
       });
       expect(loadingTab.usePromptStashStore.getState().takeEntry("encoding").entry).toMatchObject({
+        attachments: [encodedImage],
+        pendingImageCount: 0,
+      });
+
+      await loadingTab.writePromptStashStorageForTest(
+        shared.stored.get(PROMPT_STASH_STORAGE_KEY) ?? "",
+      );
+      expect(loadingTab.usePromptStashStore.getState().entries).toMatchObject([
+        { id: "orphan", pendingImageCount: 0, unreadableImageNames: [expect.any(String)] },
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("settling keeps images of an entry stashed while it acquired locks", async () => {
+    const shared = stubSharedStorage();
+    stubLockManager();
+    try {
+      const encodingTab = (await importTab()).usePromptStashStore;
+      const loadingTab = await importTab();
+      const orphan = { ...makeEntry({ id: "orphan" }), pendingImageCount: 1 };
+
+      const settling = loadingTab.writePromptStashStorageForTest(
+        JSON.stringify({ version: 2, state: { entries: [orphan] } }),
+      );
+      encodingTab.getState().stashEntry({ ...makeEntry({ id: "late" }), pendingImageCount: 1 });
+      let finalized: { attached: boolean } | undefined;
+      shared.afterNextRead = () => {
+        finalized = encodingTab.getState().finalizeEntryImages("late", {
+          attachments: [encodedImage],
+          droppedImageNames: [],
+          unreadableImageNames: [],
+        });
+      };
+      await settling;
+
+      expect(finalized?.attached).toBe(true);
+      expect(JSON.parse(shared.stored.get(PROMPT_STASH_STORAGE_KEY) ?? "null")).toMatchObject({
+        state: {
+          entries: [
+            { id: "late", attachments: [encodedImage], pendingImageCount: 0 },
+            { id: "orphan" },
+          ],
+        },
+      });
+      expect(loadingTab.usePromptStashStore.getState().takeEntry("late").entry).toMatchObject({
         attachments: [encodedImage],
         pendingImageCount: 0,
       });

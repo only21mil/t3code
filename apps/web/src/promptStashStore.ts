@@ -81,44 +81,64 @@ function orphanedPendingEntryIds(entries: ReadonlyArray<PromptStashEntry>): Read
 }
 
 /** Runs `critical` holding every named lock, or not at all when anyone holds or awaits one. */
-function withEveryLockIfAvailable(
+function withEveryLockIfAvailable<T>(
   locks: LockManager,
   names: ReadonlyArray<string>,
-  critical: () => void,
-): Promise<void> {
+  critical: () => T,
+): Promise<T | undefined> {
   const [name, ...rest] = names;
-  if (name === undefined) {
-    critical();
-    return Promise.resolve();
-  }
+  if (name === undefined) return Promise.resolve(critical());
   return locks.request(name, { ifAvailable: true }, (lock) =>
     lock ? withEveryLockIfAvailable(locks, rest, critical) : undefined,
   );
 }
 
+const pendingEntryIds = (entries: ReadonlyArray<PromptStashEntry>) =>
+  new Set(entries.filter((entry) => entry.pendingImageCount).map((entry) => entry.id));
+
+const SETTLE_LOCK_ATTEMPTS = 3;
+
 /**
  * Only the stashing tab's encode clears `pendingImageCount`, so an entry nobody encodes would
- * show "saving…" forever. Settling holds every pending entry's encode lock, which its encoder
- * frees only after finalizing, so no finalize lands between this read and write.
+ * show "saving…" forever. Settling writes only while holding the encode lock of every entry
+ * pending in its final read, and an encoder frees its lock only after finalizing.
  */
-function settleOrphanedPendingImages(loaded: ReadonlyArray<PromptStashEntry>): Promise<void> {
-  const pendingIds = loaded.filter((entry) => entry.pendingImageCount).map((entry) => entry.id);
-  if (pendingIds.length === 0) return Promise.resolve();
+async function settleOrphanedPendingImages(loaded: ReadonlyArray<PromptStashEntry>) {
+  let pendingIds = pendingEntryIds(loaded);
+  if (pendingIds.size === 0) return;
   const locks = encodeLocks();
   if (!locks) {
-    settlePendingImages(orphanedPendingEntryIds(loaded));
-    return Promise.resolve();
+    const orphanIds = orphanedPendingEntryIds(loaded);
+    const latest = orphanIds.size === 0 ? null : readPersistedEntries();
+    if (latest) settlePendingImages(latest, orphanIds);
+    return;
   }
-  // Any live encoder, this tab's included, defers settling to a later load.
-  return withEveryLockIfAvailable(locks, pendingIds.map(encodeLockName), () =>
-    settlePendingImages(new Set(pendingIds)),
-  ).catch(() => {});
+  try {
+    for (let attempt = 0; attempt < SETTLE_LOCK_ATTEMPTS; attempt += 1) {
+      const heldIds = pendingIds;
+      // Any live encoder, this tab's included, defers settling to a later load.
+      const settled = await withEveryLockIfAvailable(
+        locks,
+        [...heldIds].map(encodeLockName),
+        () => {
+          const latest = readPersistedEntries();
+          if (!latest) return true;
+          pendingIds = pendingEntryIds(latest);
+          // An entry stashed while this tab acquired its locks needs its own lock first.
+          if ([...pendingIds].some((id) => !heldIds.has(id))) return false;
+          settlePendingImages(latest, heldIds);
+          return true;
+        },
+      );
+      if (settled !== false) return;
+    }
+  } catch {}
 }
 
-function settlePendingImages(orphanIds: ReadonlySet<string>): void {
-  if (orphanIds.size === 0) return;
-  const latest = readPersistedEntries();
-  if (!latest) return;
+function settlePendingImages(
+  latest: ReadonlyArray<PromptStashEntry>,
+  orphanIds: ReadonlySet<string>,
+): void {
   let settledAny = false;
   const settled = latest.map((entry) => {
     if (!entry.pendingImageCount || !orphanIds.has(entry.id)) return entry;
