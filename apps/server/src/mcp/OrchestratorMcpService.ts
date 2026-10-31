@@ -1114,7 +1114,7 @@ const make = Effect.gen(function* () {
         limits: clientModeCeiling(scope.client),
       } as const;
     }
-    // Callers check only the caller's thread and runs, never its prompts.
+    // No loadCaller consumer reads the caller's own prompts.
     const parent = yield* loadProjection(scope.thread.threadId, false);
     return {
       parent,
