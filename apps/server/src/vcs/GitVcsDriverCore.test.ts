@@ -2600,6 +2600,13 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         assert.include(context.diffPatch, "Binary files /dev/null and b/binary.dat differ");
         assert.include(context.diffSummary, "notes.doc");
         assert.isFalse(yield* fileSystem.exists(`${cwd}/textconv-ran`));
+
+        yield* writeTextFile(cwd, "notes.doc", "updated source line\n");
+        const staged = yield* driver.prepareCommitContext(cwd, ["notes.doc"]);
+        assert.include(staged?.stagedPatch ?? "", "+updated source line");
+        assert.notInclude(staged?.stagedPatch ?? "", "converted");
+        assert.include(staged?.stagedSummary ?? "", "notes.doc");
+        assert.isFalse(yield* fileSystem.exists(`${cwd}/textconv-ran`));
       }),
     );
 
