@@ -18,18 +18,15 @@ export { ApnsJwtEncodingError, ApnsJwtSigningError } from "./apnsJwt.ts";
 const LIVE_ACTIVITY_NAME = "AgentActivity";
 // Bound sending and reading separately so neither stage can hold a batch open.
 const APNS_HTTP_STAGE_TIMEOUT = "10 seconds";
-// Updates only flow on domain events, so a healthy agent can be silent for
-// minutes (long tool calls, pending approvals).
+// Event-only updates can leave healthy agents silent for minutes.
 const STALE_AFTER_SECONDS = 10 * 60;
 const DISMISS_AFTER_SECONDS = 5 * 60;
-// An end without a final content-state leaves whatever the card last showed
-// frozen on the lock screen until dismissal — get it off quickly instead of
-// parading stale state for the full window.
+// Without final content, the card freezes at stale state; dismiss it promptly.
 const CONTENTLESS_DISMISS_AFTER_SECONDS = 15;
 const MAX_LIVE_ACTIVITY_PAYLOAD_BYTES = 4096;
 const MIN_FITTED_TEXT_LENGTH = 8;
 
-const ApnsLiveActivityEventSchema = Schema.Literals(["start", "update", "end"]);
+const ApnsLiveActivityEventSchema = Schema.Literals(["update", "end"]);
 export type ApnsLiveActivityEvent = typeof ApnsLiveActivityEventSchema.Type;
 
 const ApnsRequestKindSchema = Schema.Literals(["live-activity", "push-notification"]);
@@ -101,14 +98,12 @@ type MakeLiveActivityRequestInput =
       readonly alert?: ApnsLiveActivityAlert | null;
     })
   | (LiveActivityRequestBase & {
-      readonly event: "start" | "update";
+      readonly event: "update";
       readonly state: RelayAgentActivityAggregateState;
       readonly alert?: ApnsLiveActivityAlert | null;
     });
 
-// An alert dict on an update/end makes it an "alerting" update: iOS wakes the
-// screen and plays the haptic (the Apple Sports score-change behavior) instead
-// of silently redrawing the activity.
+// Alert dictionaries wake the iOS screen and trigger haptics instead of silently refreshing.
 function liveActivityAlertPayload(alert: ApnsLiveActivityAlert) {
   return {
     alert: {
@@ -201,17 +196,6 @@ function buildLiveActivityRequest(input: MakeLiveActivityRequestInput): ApnsLive
       aps: {
         timestamp,
         event: input.event,
-        ...(input.event === "start"
-          ? {
-              "attributes-type": "LiveActivityAttributes",
-              attributes: {},
-              "input-push-token": 1,
-              alert: {
-                title: state.title,
-                body: state.subtitle,
-              },
-            }
-          : {}),
         ...(input.event === "update" && input.alert ? liveActivityAlertPayload(input.alert) : {}),
         "content-state": contentState(state),
         "stale-date": timestamp + STALE_AFTER_SECONDS,
@@ -280,7 +264,7 @@ export class ApnsClient extends Context.Service<
   }
 >()("t3code-relay/agentActivity/ApnsClient") {}
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const httpClient = yield* HttpClient.HttpClient;
   const providerTokens = yield* ApnsProviderTokens.ApnsProviderTokens;
 
