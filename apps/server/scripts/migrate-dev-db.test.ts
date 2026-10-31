@@ -302,6 +302,10 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
         }),
       );
 
+      const destination = yield* createFixtureSource(destDir);
+      const sourceBefore = yield* fs.readFile(source);
+      const destinationBefore = yield* fs.readFile(destination);
+
       const error = yield* runMigrateDevDb(
         { baseDir: destDir, source, projects: 5, threadsPerProject: 2 },
         { sharedHome: sourceDir },
@@ -309,7 +313,10 @@ it.layer(NodeServices.layer)("migrate-dev-db", (it) => {
       assert.equal(error._tag, "MigrateDevDbPhaseError");
       if (error._tag === "MigrateDevDbPhaseError") {
         assert.equal(error.phase, "migrate");
+        assert.include(String(error.cause), "60_ThreadSnapshotWindowIndexes");
       }
+      assert.deepStrictEqual(yield* fs.readFile(source), sourceBefore);
+      assert.deepStrictEqual(yield* fs.readFile(destination), destinationBefore);
     }),
   );
 
