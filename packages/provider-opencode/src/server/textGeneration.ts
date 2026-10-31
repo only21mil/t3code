@@ -214,7 +214,7 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
         yield* Effect.addFinalizer(() =>
           OpenCodeRuntime.runOpenCodeSdk("session.delete", (signal) =>
             client.session.delete({ sessionID: session.data.id }, { signal }),
-          ).pipe(Effect.interruptible, Effect.timeout("5 seconds"), Effect.ignore({ log: "Warn" })),
+          ).pipe(Effect.timeout("5 seconds"), Effect.ignore({ log: "Warn" })),
         );
         const selectedAgent = getModelSelectionStringOptionValue(input.modelSelection, "agent");
         const selectedVariant = getModelSelectionStringOptionValue(input.modelSelection, "variant");
