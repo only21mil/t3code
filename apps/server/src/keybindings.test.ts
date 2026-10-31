@@ -461,10 +461,11 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
       const keybindings = yield* Keybindings.Keybindings;
       const persisted = Effect.map(fs.readFileString(keybindingsConfigPath), JSON.parse);
 
-      yield* keybindings.upsertKeybindingRule({
+      const saved = yield* keybindings.upsertKeybindingRule({
         key: "mod+shift+r",
         command: "script.run-tests.run",
       });
+      assert.equal(saved.issues.length, 2);
       assert.deepEqual(yield* persisted, [
         { key: "mod+r", command: "script.run-tests.run" },
         futureCommand,
@@ -472,13 +473,17 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
         { key: "mod+shift+r", command: "script.run-tests.run" },
       ]);
 
-      yield* keybindings.removeKeybindingRule({ key: "mod+r", command: "script.run-tests.run" });
+      const removed = yield* keybindings.removeKeybindingRule({
+        key: "mod+r",
+        command: "script.run-tests.run",
+      });
       assert.deepEqual(yield* persisted, [
         futureCommand,
         badShortcut,
         { key: "mod+shift+r", command: "script.run-tests.run" },
       ]);
       const { issues } = yield* keybindings.loadConfigState;
+      assert.deepEqual(removed.issues, issues);
       assert.deepEqual(
         issues.map((issue) => issue.kind === "keybindings.invalid-entry" && issue.index),
         [0, 1],

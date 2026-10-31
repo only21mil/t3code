@@ -233,11 +233,11 @@ export class Keybindings extends Context.Service<
      */
     readonly upsertKeybindingRule: (
       input: ServerUpsertKeybindingInput,
-    ) => Effect.Effect<ResolvedKeybindingsConfig, KeybindingsConfigError>;
+    ) => Effect.Effect<KeybindingsConfigState, KeybindingsConfigError>;
 
     readonly removeKeybindingRule: (
       input: ServerRemoveKeybindingInput,
-    ) => Effect.Effect<ResolvedKeybindingsConfig, KeybindingsConfigError>;
+    ) => Effect.Effect<KeybindingsConfigState, KeybindingsConfigError>;
   }
 >()("t3/keybindings") {}
 
@@ -436,7 +436,7 @@ const make = Effect.gen(function* () {
     yield* Cache.invalidate(resolvedConfigCache, resolvedConfigCacheKey);
     const configState = yield* loadConfigStateFromCacheOrDisk;
     yield* emitChange(configState);
-    return configState.keybindings;
+    return configState;
   });
 
   const revalidateAndEmit = upsertSemaphore.withPermits(1)(reloadAndEmit);
