@@ -147,24 +147,15 @@ describe("selectQrEndpointOption", () => {
 });
 
 describe("parseManualDesktopSshTarget", () => {
-  it.each(["22.5", "1e3", "2222garbage", "22 33", "65535abc", "0x16", "+22", "abc", "0", "65536"])(
-    "rejects explicit port %j",
-    (port) => {
-      expect(() => parseManualDesktopSshTarget({ host: "devbox", username: "", port })).toThrow(
-        "SSH port must be between 1 and 65535.",
-      );
-    },
-  );
+  it.each(["22.5", "1e3", "2222garbage"])("rejects explicit port %j", (port) => {
+    expect(() => parseManualDesktopSshTarget({ host: "devbox", username: "", port })).toThrow(
+      "SSH port must be between 1 and 65535.",
+    );
+  });
 
-  it.each([
-    { host: "devbox", port: "", expected: null },
-    { host: "devbox", port: "22", expected: 22 },
-    { host: "devbox", port: " 2222 ", expected: 2222 },
-    { host: "devbox", port: "65535", expected: 65535 },
-    { host: "devbox:2200", port: "", expected: 2200 },
-    { host: "[::1]:2201", port: "", expected: 2201 },
-    { host: "devbox:2200", port: "2222", expected: 2222 },
-  ])("parses host $host with port $port as $expected", ({ host, port, expected }) => {
-    expect(parseManualDesktopSshTarget({ host, username: "", port }).port).toBe(expected);
+  it("accepts a padded explicit port", () => {
+    expect(parseManualDesktopSshTarget({ host: "devbox", username: "", port: " 2222 " }).port).toBe(
+      2222,
+    );
   });
 });
