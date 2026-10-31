@@ -11,7 +11,7 @@ vi.mock("./useAvailableSettingsSearchItems", () => ({
   ],
 }));
 
-it("keeps composition Enter and Escape in the search from navigating or clearing", async () => {
+it("ignores composing keys in the search", async () => {
   await using screen = await render(
     <SidebarProvider defaultOpen>
       <SettingsSidebarNav pathname="/settings/general" />
@@ -27,6 +27,8 @@ it("keeps composition Enter and Escape in the search from navigating or clearing
     { key: "Enter", isComposing: false, keyCode: 229 },
     { key: "Escape", isComposing: true, keyCode: 27 },
     { key: "Escape", isComposing: false, keyCode: 229 },
+    { key: "ArrowDown", isComposing: true, keyCode: 40 },
+    { key: "ArrowUp", isComposing: true, keyCode: 38 },
   ]) {
     const event = new KeyboardEvent("keydown", { ...composition, bubbles: true, cancelable: true });
     await act(() => search.element().dispatchEvent(event));
