@@ -357,6 +357,34 @@ it.layer(layerOpenCodeTextGenerationTest)("OpenCodeTextGeneration", (it) => {
     ),
   );
 
+  it.effect("gives up and aborts the session when a prompt never settles", () =>
+    withOpenCodeTextGeneration(DEFAULT_OPENCODE_SETTINGS, (textGeneration) =>
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<AbortSignal | undefined>();
+        let sessionAborts = 0;
+        runtimeMock.state.onPrompt = (signal) => {
+          Deferred.doneUnsafe(started, Effect.succeed(signal));
+          return new Promise<never>(() => {});
+        };
+        runtimeMock.state.onAbort = () => {
+          sessionAborts += 1;
+          return Promise.reject(new Error("abort observed"));
+        };
+        const fiber = yield* textGeneration
+          .generateCommitMessage(DEFAULT_COMMIT_MESSAGE_INPUT)
+          .pipe(Effect.forkChild);
+        const signal = yield* Deferred.await(started);
+        yield* TestClock.adjust(Duration.minutes(3));
+
+        const error = yield* Fiber.join(fiber).pipe(Effect.flip);
+        expect(error).toBeInstanceOf(TextGenerationError);
+        expect(error.detail).toBe("OpenCode did not finish generating in time.");
+        expect(signal?.aborted).toBe(true);
+        expect(sessionAborts).toBe(1);
+      }),
+    ),
+  );
+
   it.effect("uses an environment-only password for a locally spawned server", () =>
     withOpenCodeTextGeneration(
       DEFAULT_OPENCODE_SETTINGS,
