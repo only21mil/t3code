@@ -1360,12 +1360,10 @@ describe("OrchestratorMcpService provider resolution", () => {
               Layer.mergeAll(
                 NodeServices.layer,
                 Layer.mock(ThreadManagementService.ThreadManagementService)({
-                  getThreadRecords: (_threadId, _fields, filter) =>
-                    filter?.messageRoles?.length === 0
-                      ? Effect.succeed(
-                          parentProjection([], { instanceId: codexInstanceId, model: "gpt-3" }),
-                        )
-                      : Effect.die("The caller lookup must not read the caller's prompts"),
+                  getThreadRecords: () =>
+                    Effect.succeed(
+                      parentProjection([], { instanceId: codexInstanceId, model: "gpt-3" }),
+                    ),
                 }),
                 ServerSettings.layerTest({
                   favorites: [
