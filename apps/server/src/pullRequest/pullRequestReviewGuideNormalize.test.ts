@@ -190,11 +190,8 @@ describe("normalizeReviewGuide", () => {
         "diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -0,0 +1,60 @@\n+added",
       ),
     );
-    expect(wide.stops[0]?.excerpts).toEqual([
-      { ...excerpt("src/a.ts", 1, 25), caption: "Second" },
-      { ...excerpt("src/a.ts", 26, 45), caption: "Second" },
-    ]);
-    expect(wide.stops[0]?.notes).toEqual([tailNote]);
+    expect(wide.stops[0]?.excerpts).toEqual([{ ...excerpt("src/a.ts", 1, 25), caption: "Second" }]);
+    expect(wide.stops[0]?.notes).toEqual([]);
   });
 
   it("drops notes outside the stop's remaining excerpts", () => {

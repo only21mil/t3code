@@ -111,17 +111,10 @@ function mergeExcerpts(
       other === first ? [combined] : touches(other) ? [] : [other],
     );
   }
-  return merged.flatMap((excerpt) => {
-    const chunks: Array<PullRequestReviewGuideExcerpt> = [];
-    for (let start = excerpt.start; start <= excerpt.end; start += MAX_EXCERPT_LINES) {
-      chunks.push({
-        ...excerpt,
-        start,
-        end: Math.min(excerpt.end, start + MAX_EXCERPT_LINES - 1),
-      });
-    }
-    return chunks;
-  });
+  return merged.map((excerpt) => ({
+    ...excerpt,
+    end: Math.min(excerpt.end, excerpt.start + MAX_EXCERPT_LINES - 1),
+  }));
 }
 
 const nonEmpty = (value: string) => value.trim() !== "";
