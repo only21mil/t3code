@@ -2822,6 +2822,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           modelSelection: ModelSelection,
         ) {
           const parentRules = openCodePermissionRules(policy);
+          let rootRules = parentRules;
           const agent =
             getModelSelectionStringOptionValue(modelSelection, "agent") ??
             (policy.interactionMode === "plan" ? "plan" : undefined);
@@ -2841,18 +2842,19 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               return yield* protocolError(`OpenCode agent '${agent}' is not available`);
             }
             // OpenCode takes the last matching rule; full access must not shadow agent denies.
-            parentRules.push(
+            rootRules = [
+              ...parentRules,
               ...selected.permission.map((rule) =>
                 rule.action === "ask" ? { ...rule, action: "allow" as const } : rule,
               ),
-            );
+            ];
           }
           const pending = [state];
           for (let target = pending.pop(); target !== undefined; target = pending.pop()) {
             const previous = target.permission;
             const permission =
               target.parentSubagent === null
-                ? parentRules
+                ? rootRules
                 : openCodeChildPermissionRules(policy, previous, target.inheritedPermission);
             if (
               permission.length > previous.length ||
@@ -3125,7 +3127,11 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               };
               const state = registerThread(nativeSession, providerThread, null);
               if (threadInput.runtimePolicy !== undefined) {
-                yield* applyPermissionRules(state, threadInput.runtimePolicy, input.modelSelection);
+                yield* applyPermissionRules(
+                  state,
+                  threadInput.runtimePolicy,
+                  threadInput.modelSelection ?? input.modelSelection,
+                );
               }
               return providerThread;
             },

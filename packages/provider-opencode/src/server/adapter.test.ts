@@ -402,32 +402,39 @@ describe("OpenCodeAdapterV2", () => {
         [child, [taskDeny]],
       ]);
       let failNextChildUpdate = false;
-      const harness = yield* makeOpenCodeRuntimeHarness("child-policy-change", root, {
-        event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
-        session: {
-          create: async () => ({ data: { id: root, time: { created: 1, updated: 1 } } }),
-          get: async ({ sessionID }: { sessionID: string }) => ({
-            data: {
-              id: sessionID,
-              ...(sessionID === child ? { parentID: root } : {}),
-              permission: nativePermissions.get(sessionID),
-              time: { created: 1, updated: 1 },
+      const harness = yield* makeOpenCodeRuntimeHarness(
+        "child-policy-change",
+        root,
+        {
+          event: { subscribe: async () => ({ stream: nativeEvents.stream }) },
+          app: { agents: async () => ({ data: [{ name: "review", permission: [taskDeny] }] }) },
+          session: {
+            create: async () => ({ data: { id: root, time: { created: 1, updated: 1 } } }),
+            get: async ({ sessionID }: { sessionID: string }) => ({
+              data: {
+                id: sessionID,
+                ...(sessionID === child ? { parentID: root } : {}),
+                permission: nativePermissions.get(sessionID),
+                time: { created: 1, updated: 1 },
+              },
+            }),
+            update: async (input: (typeof updates)[number]) => {
+              if (input.sessionID === child && failNextChildUpdate) {
+                failNextChildUpdate = false;
+                throw new Error("child update failed");
+              }
+              updates.push(input);
+              nativePermissions.set(input.sessionID, input.permission);
+              return { data: { id: input.sessionID, time: { created: 1, updated: 2 } } };
             },
-          }),
-          update: async (input: (typeof updates)[number]) => {
-            if (input.sessionID === child && failNextChildUpdate) {
-              failNextChildUpdate = false;
-              throw new Error("child update failed");
-            }
-            updates.push(input);
-            nativePermissions.set(input.sessionID, input.permission);
-            return { data: { id: input.sessionID, time: { created: 1, updated: 2 } } };
+            promptAsync: async () => ({ data: true }),
+            abort: async () => ({ data: true }),
+            children: async () => ({ data: [] }),
           },
-          promptAsync: async () => ({ data: true }),
-          abort: async () => ({ data: true }),
-          children: async () => ({ data: [] }),
         },
-      });
+        {},
+        [{ id: "agent", value: "review" }],
+      );
 
       yield* harness.startTurn("hello", harness.providerThread, fullAccess);
       yield* push({
@@ -2737,6 +2744,12 @@ describe("OpenCodeAdapterV2", () => {
       );
       assert(Exit.isFailure(result));
       assert.equal(prompts.length, beforeMissing);
+      yield* missing.runtime.resumeThread({
+        providerThread: missing.providerThread,
+        runtimePolicy: harness.policy,
+        modelSelection: { ...harness.modelSelection, options: [] },
+      });
+      assert.equal(permissionAction(sessions.get("native-review")!.permission!, "bash"), "allow");
     }).pipe(
       Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
       Effect.scoped,
