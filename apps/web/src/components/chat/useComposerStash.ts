@@ -488,7 +488,7 @@ export function useComposerStash(input: {
       toastManager.add({
         type: "info",
         title: "Still compressing a pasted image.",
-        description: "Stash again once its thumbnail appears.",
+        description: "Stash again once it finishes compressing.",
       });
       return;
     }
