@@ -7,6 +7,10 @@ import { expect, it, vi } from "vite-plus/test";
 const bridge = vi.hoisted(() => ({ ios: undefined as StackHeaderConfigProps["ios"] }));
 
 vi.mock("react-native", () => ({ StyleSheet: { flatten: (style: unknown) => style } }));
+vi.mock("react-native-keyboard-controller", () => ({
+  KeyboardController: { dismiss: vi.fn() },
+  useKeyboardState: () => false,
+}));
 vi.mock("../lib/useMobileNavigationTheme", () => ({
   useMobileNavigationTheme: () => ({ colors: { card: "white" } }),
 }));
