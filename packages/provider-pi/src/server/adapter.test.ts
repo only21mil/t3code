@@ -4266,8 +4266,12 @@ describe("PiAdapterV2", () => {
 describe("PiRpc framing", () => {
   it.effect("reassembles records and warns when dropping oversized records", () => {
     const warnings: Array<ReadonlyArray<unknown>> = [];
+    const warned = Deferred.makeUnsafe<void>();
     const logCapture = Logger.make<unknown, void>(({ logLevel, message }) => {
-      if (logLevel === "Warn" && Array.isArray(message)) warnings.push(message);
+      if (logLevel === "Warn" && Array.isArray(message)) {
+        warnings.push(message);
+        Deferred.doneUnsafe(warned, Effect.void);
+      }
     });
     return Effect.gen(function* () {
       const stdout = yield* Queue.unbounded<Uint8Array>();
@@ -4304,6 +4308,7 @@ describe("PiRpc framing", () => {
       yield* push(head);
       const chunk = new TextEncoder().encode("x".repeat(8 * 1024 * 1024));
       for (let index = 0; index < 32; index++) yield* Queue.offer(stdout, chunk);
+      yield* Deferred.await(warned);
       yield* push('"}\n{"type":"after_oversized"}\n');
 
       const first = yield* Queue.take(connection.events);
@@ -4316,7 +4321,10 @@ describe("PiRpc framing", () => {
       assert.lengthOf(warnings, 1);
       const [text, annotations] = warnings[0] ?? [];
       assert.equal(text, "Dropping oversized pi stdout record.");
-      assert.propertyVal(annotations, "recordLength", head.length + 32 * chunk.length + 2);
+      assert.deepEqual(annotations, {
+        recordLength: head.length + 28 * chunk.length,
+        maxRecordLength: 232084864,
+      });
     }).pipe(
       Effect.scoped,
       Effect.provide(

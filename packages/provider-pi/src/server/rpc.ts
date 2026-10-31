@@ -96,7 +96,6 @@ const MAX_PI_RECORD_CHARS =
 function makeJsonlFramer() {
   let buffer = "";
   let dropping = false;
-  let droppedLength = 0;
   return (chunk: string) => {
     const lines: string[] = [];
     const droppedLengths: number[] = [];
@@ -104,19 +103,17 @@ function makeJsonlFramer() {
     while (start < chunk.length) {
       const newline = chunk.indexOf("\n", start);
       const end = newline < 0 ? chunk.length : newline;
-      if (dropping) {
-        droppedLength += end - start;
-      } else if (buffer.length + end - start > MAX_PI_RECORD_CHARS) {
-        droppedLength = buffer.length + end - start;
-        buffer = "";
-        dropping = true;
-      } else {
-        buffer += chunk.slice(start, end);
+      if (!dropping) {
+        if (buffer.length + end - start > MAX_PI_RECORD_CHARS) {
+          droppedLengths.push(buffer.length + end - start);
+          buffer = "";
+          dropping = true;
+        } else {
+          buffer += chunk.slice(start, end);
+        }
       }
       if (newline < 0) break;
-      if (dropping) {
-        droppedLengths.push(droppedLength);
-      } else if (buffer.length > 0) {
+      if (!dropping && buffer.length > 0) {
         lines.push(buffer.endsWith("\r") ? buffer.slice(0, -1) : buffer);
       }
       buffer = "";
@@ -127,8 +124,7 @@ function makeJsonlFramer() {
   };
 }
 
-// A dropped `response` leaves its request to time out, so the drop must be
-// visible at the default log level. Lengths only: records carry prompt text.
+// Report the observed length before LF arrives; an unterminated response can time out first.
 const logDroppedPiRecords = (droppedLengths: ReadonlyArray<number>) =>
   Effect.forEach(
     droppedLengths,
