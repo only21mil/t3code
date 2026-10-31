@@ -28,6 +28,9 @@ describe("runOnce", () => {
     const home = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-render-metrics-"));
     vi.stubEnv("HOME", home);
     vi.stubEnv("TMPDIR", home);
+    vi.stubEnv("USERPROFILE", home);
+    vi.stubEnv("TEMP", home);
+    vi.stubEnv("TMP", home);
     try {
       expect(runOnce()).toEqual({ mount: mountReport });
       expect(NodeFS.readdirSync(home)).toEqual([]);
