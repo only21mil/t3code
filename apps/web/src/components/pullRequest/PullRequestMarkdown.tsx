@@ -23,6 +23,7 @@ import { remarkPullRequestAutolinks, splitPullRequestBody } from "./pullRequestM
 
 export const PullRequestMarkdownContext = createContext<{
   autolinks: ((text: string) => ReadonlyArray<ReferenceAutolink>) | null;
+  lineBreaks: boolean;
   threadRef: ScopedThreadRef | null;
 } | null>(null);
 
@@ -59,12 +60,14 @@ export function PullRequestMarkdown({
   cwd,
   environmentId,
   threadRef,
+  lineBreaks,
   className,
 }: {
   text: string;
   cwd: string;
   environmentId: EnvironmentId;
   threadRef?: ScopedThreadRef | null;
+  lineBreaks?: boolean;
   className?: string;
 }) {
   const segments = splitPullRequestBody(text);
@@ -93,6 +96,7 @@ export function PullRequestMarkdown({
               pullRequestPanelRef={resolvedThreadRef ?? PULL_REQUESTS_PANEL_REF}
               environmentId={environmentId}
               extraRemarkPlugins={extraRemarkPlugins}
+              lineBreaks={lineBreaks ?? context?.lineBreaks ?? false}
               sourceControlMedia
             />
           );
@@ -122,9 +126,7 @@ export function PullRequestMarkdown({
           );
         }
         return (
-          // A plain anchor rather than the page's openExternal button: the desktop window
-          // turns a blocked _blank into openExternal itself, and in a browser tab — where
-          // there is no shell to call — this is the only one of the two that goes anywhere.
+          // Desktop converts blocked _blank navigation to openExternal.
           <a
             key={segment.id}
             href={segment.url}
