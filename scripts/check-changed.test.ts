@@ -19,6 +19,7 @@ import {
   defaultConcurrency,
   gitLines,
   runSteps,
+  splitTests,
   type Step,
 } from "./check-changed.ts";
 
@@ -31,6 +32,24 @@ describe("check:changed", () => {
     assert.strictEqual(defaultConcurrency(4, 15 * GiB), 2);
     assert.strictEqual(defaultConcurrency(4, 2 * GiB), 1);
     assert.strictEqual(defaultConcurrency(1, 64 * GiB), 1);
+  });
+
+  it("runs the .github/scripts node:test files with node --test, not vitest", () => {
+    assert.deepStrictEqual(
+      splitTests([
+        "apps/server/src/ws.test.ts",
+        ".github/scripts/ci-changes.test.cjs",
+        ".github\\scripts\\thread-transfer-report.test.cjs",
+        "scripts/check-changed.test.ts",
+      ]),
+      {
+        vitestTests: ["apps/server/src/ws.test.ts", "scripts/check-changed.test.ts"],
+        nodeTests: [
+          ".github/scripts/ci-changes.test.cjs",
+          ".github\\scripts\\thread-transfer-report.test.cjs",
+        ],
+      },
+    );
   });
 
   it.effect(
