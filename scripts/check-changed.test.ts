@@ -17,6 +17,7 @@ import * as TestClock from "effect/testing/TestClock";
 import {
   comparisonBase,
   defaultConcurrency,
+  docReaderTests,
   gitLines,
   runSteps,
   type Step,
@@ -39,6 +40,9 @@ describe("check:changed", () => {
     assert.isTrue(
       decide(["docs/user/t3-connect-troubleshooting.md"], packages, false).outputs.test_server,
     );
+    assert.deepStrictEqual(docReaderTests(["docs/user/t3-connect-troubleshooting.md"]), [
+      "apps/server/src/cloud/ConnectReachability.test.ts",
+    ]);
     assert.deepStrictEqual(decide(["docs/user/install.md"], packages, false).affected, []);
   });
 
