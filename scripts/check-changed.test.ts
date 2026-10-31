@@ -14,6 +14,7 @@ import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as TestClock from "effect/testing/TestClock";
 
+import { decide, readWorkspace } from "../.github/scripts/ci-changes.cjs";
 import {
   comparisonBase,
   defaultConcurrency,
@@ -31,6 +32,13 @@ describe("check:changed", () => {
     assert.strictEqual(defaultConcurrency(4, 15 * GiB), 2);
     assert.strictEqual(defaultConcurrency(4, 2 * GiB), 1);
     assert.strictEqual(defaultConcurrency(1, 64 * GiB), 1);
+  });
+
+  it.each([
+    "packages/shared/src/testing/longTempDir.ts",
+    "packages/shared/src/testing/providerEnv.ts",
+  ])("tests every package when the shared test setup file %s changes", (file) => {
+    assert.strictEqual(decide([file], readWorkspace(), false).outputs.test_packages, "");
   });
 
   it.effect(
