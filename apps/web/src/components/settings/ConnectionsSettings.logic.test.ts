@@ -2,6 +2,7 @@ import type { DesktopWslState } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
   applyWslEnableSelection,
+  parseManualDesktopSshTarget,
   resolveTailscaleServeBaseUrl,
   selectQrEndpointOption,
   togglePairingScopeSelection,
@@ -142,5 +143,28 @@ describe("selectQrEndpointOption", () => {
     expect(selectQrEndpointOption(options, "tailscale-ip:gone", "nope")?.id).toBe(
       "tailscale-ip:http://100.84.12.7:4780",
     );
+  });
+});
+
+describe("parseManualDesktopSshTarget", () => {
+  it.each(["22.5", "1e3", "2222garbage", "22 33", "65535abc", "0x16", "+22", "abc", "0", "65536"])(
+    "rejects explicit port %j",
+    (port) => {
+      expect(() => parseManualDesktopSshTarget({ host: "devbox", username: "", port })).toThrow(
+        "SSH port must be between 1 and 65535.",
+      );
+    },
+  );
+
+  it.each([
+    { host: "devbox", port: "", expected: null },
+    { host: "devbox", port: "22", expected: 22 },
+    { host: "devbox", port: " 2222 ", expected: 2222 },
+    { host: "devbox", port: "65535", expected: 65535 },
+    { host: "devbox:2200", port: "", expected: 2200 },
+    { host: "[::1]:2201", port: "", expected: 2201 },
+    { host: "devbox:2200", port: "2222", expected: 2222 },
+  ])("parses host $host with port $port as $expected", ({ host, port, expected }) => {
+    expect(parseManualDesktopSshTarget({ host, username: "", port }).port).toBe(expected);
   });
 });
