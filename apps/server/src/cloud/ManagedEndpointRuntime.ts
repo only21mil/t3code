@@ -213,6 +213,8 @@ export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const relayClientLogPath = path.join(logsDir, RELAY_CLIENT_LOG_FILE);
   // Synchronous appends avoid a flush timer for this low-volume log.
+  const fallbackLoggers = yield* Effect.service(Logger.CurrentLoggers);
+  let writeFailureReported = false;
   const relayClientLog = yield* Effect.try(
     () =>
       new RotatingFileSink({
@@ -225,9 +227,28 @@ export const make = Effect.gen(function* () {
     Effect.map((sink) =>
       Logger.make((options) => {
         try {
-          sink.write(`${Logger.formatJson.log(options)}\n`);
+          const entry = Logger.formatJson.log(options);
+          const bytes = Buffer.byteLength(entry) + 1;
+          sink.write(
+            bytes <= 1024 * 1024
+              ? `${entry}\n`
+              : `${JSON.stringify({
+                  timestamp: options.date.toISOString(),
+                  level: options.logLevel.toUpperCase(),
+                  message: ["Relay client log entry omitted: exceeds 1 MiB", { bytes }],
+                })}\n`,
+          );
         } catch {
-          // A log file that stops taking writes must not fail the connector fibers.
+          if (!writeFailureReported) {
+            writeFailureReported = true;
+            for (const logger of fallbackLoggers) {
+              logger.log({
+                ...options,
+                logLevel: "Warn",
+                message: ["Relay client log unavailable", { filePath: relayClientLogPath }],
+              });
+            }
+          }
         }
       }),
     ),

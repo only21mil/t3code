@@ -450,6 +450,12 @@ describe("CloudManagedEndpointRuntime", () => {
           yield* fs.writeFileString(`${logPath}.2/blocked`, "blocks rotation");
           yield* fs.writeFileString(logPath, existingLog);
         }
+        const warnings: unknown[] = [];
+        const logger = Logger.make(({ message }) => {
+          if (Array.isArray(message) && message[0] === "Relay client log unavailable") {
+            warnings.push(message);
+          }
+        });
         const fixture = yield* makeTransportSpawner();
         yield* Effect.gen(function* () {
           const context = yield* Layer.build(
@@ -467,11 +473,12 @@ describe("CloudManagedEndpointRuntime", () => {
             0,
             '2026-10-16T20:29:40Z ERR Failed to serve tunnel connection error="rejected connector-secret" connIndex=0\n',
           );
-        }).pipe(Effect.scoped);
+        }).pipe(Effect.scoped, Effect.withLogger(logger));
 
         const log = yield* fs.readFileString(logPath);
         if (rotationBlocked) {
           expect(log.length).toBe(existingLog.length);
+          expect(warnings).toHaveLength(1);
           continue;
         }
         const entries = log
@@ -486,6 +493,37 @@ describe("CloudManagedEndpointRuntime", () => {
         ]);
         expect(log).toContain("rejected <redacted>");
         expect(log).not.toContain("connector-secret");
+        const oversizedFixture = yield* makeTransportSpawner();
+        yield* Effect.gen(function* () {
+          const context = yield* Layer.build(
+            ManagedEndpointRuntime.layer.pipe(
+              Layer.provide(ServerConfig.layerTest(process.cwd(), baseDir)),
+              Layer.provide(runtimeDependencies(oversizedFixture.spawner)),
+            ),
+          );
+          const runtime = yield* Effect.service(
+            ManagedEndpointRuntime.CloudManagedEndpointRuntime,
+          ).pipe(Effect.provide(context));
+          yield* runtime.applyConfig(tunnelConfig);
+          yield* oversizedFixture.observe(runtime, 0, "ERR " + "界".repeat(1024 * 1024) + "\n");
+        }).pipe(Effect.scoped);
+        const files = yield* fs.readDirectory(path.dirname(logPath));
+        const allEntries = [];
+        for (const file of files.filter((name) => name.startsWith("relay-client.ndjson"))) {
+          const contents = yield* fs.readFileString(path.join(path.dirname(logPath), file));
+          expect(Buffer.byteLength(contents)).toBeLessThanOrEqual(1024 * 1024);
+          allEntries.push(
+            ...contents
+              .trim()
+              .split("\n")
+              .map((line) => decodeLogEntry(line)),
+          );
+        }
+        expect(
+          allEntries.some(
+            (entry) => entry.message[0] === "Relay client log entry omitted: exceeds 1 MiB",
+          ),
+        ).toBe(true);
       }
     }).pipe(Effect.provide(NodeServices.layer)),
   );
