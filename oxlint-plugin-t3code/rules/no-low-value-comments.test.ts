@@ -46,6 +46,18 @@ describe("t3code/no-low-value-comments", () => {
   );
 
   rule.invalid(
+    "checks a name restated across a directive",
+    `
+      // The read count.
+      // @ts-expect-error untyped
+      const readCount: number = "text";
+    `,
+    (output) => {
+      assert.match(output, /only repeats the name below it/);
+    },
+  );
+
+  rule.invalid(
     "checks prose below a file-level directive",
     `// @effect-diagnostics nodeBuiltinImport:off
 // One.

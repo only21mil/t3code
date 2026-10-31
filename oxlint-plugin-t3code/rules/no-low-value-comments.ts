@@ -37,6 +37,11 @@ const words = (text: string) =>
 const identifierWords = (name: string) =>
   words(name.replace(/([a-z0-9])([A-Z])/gu, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/gu, "$1 $2"));
 
+const isDirectiveLine = (line = "") => {
+  const text = line.trimStart();
+  return text.startsWith("//") && DIRECTIVE_PATTERN.test(text.slice(2));
+};
+
 const commentLines = (comment: ESTree.Comment) =>
   comment.value
     .split("\n")
@@ -74,7 +79,9 @@ export default defineRule({
 
     const restatesNextName = (lastLine: number, lines: ReadonlyArray<string>) => {
       if (lines.some((line) => line.startsWith("@"))) return false;
-      const name = DECLARATION_PATTERN.exec(sourceCode.lines[lastLine] ?? "")?.[1];
+      let next = lastLine;
+      while (isDirectiveLine(sourceCode.lines[next])) next += 1;
+      const name = DECLARATION_PATTERN.exec(sourceCode.lines[next] ?? "")?.[1];
       if (name === undefined) return false;
       const content = words(lines.join(" "));
       if (content.length === 0 || content.length > 6) return false;
