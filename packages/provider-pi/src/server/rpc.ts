@@ -93,16 +93,11 @@ interface PendingPiRequest {
 const MAX_PI_RECORD_CHARS =
   2 * MAX_TOOL_OUTPUT_IMAGES * MAX_TOOL_OUTPUT_IMAGE_BASE64_LENGTH + 8 * 1024 * 1024;
 
-interface PiJsonlFrames {
-  readonly lines: ReadonlyArray<string>;
-  readonly droppedLengths: ReadonlyArray<number>;
-}
-
 function makeJsonlFramer() {
   let buffer = "";
   let dropping = false;
   let droppedLength = 0;
-  return (chunk: string): PiJsonlFrames => {
+  return (chunk: string) => {
     const lines: string[] = [];
     const droppedLengths: number[] = [];
     let start = 0;
