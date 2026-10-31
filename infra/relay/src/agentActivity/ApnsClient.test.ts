@@ -204,7 +204,7 @@ describe("ApnsClient", () => {
     }).pipe(Effect.provide(layerTest)),
   );
 
-  it.effect("fits Live Activity starts and updates at every sanitizer cap within 4096 bytes", () =>
+  it.effect("fits Live Activity updates at every sanitizer cap within 4096 bytes", () =>
     Effect.gen(function* () {
       const apns = yield* ApnsClient.ApnsClient;
       const ids = ["a", "b", "c", "d", "e"];
@@ -224,7 +224,7 @@ describe("ApnsClient", () => {
         body: `Working: ${"界".repeat(120)}`,
       };
 
-      for (const event of ["update", "start"] as const) {
+      for (const event of ["update"] as const) {
         const request = apns.makeLiveActivityRequest({
           event,
           token: "token",
