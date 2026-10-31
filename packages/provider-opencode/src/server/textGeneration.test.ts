@@ -413,6 +413,21 @@ it.layer(layerOpenCodeTextGenerationTest)("OpenCodeTextGeneration", (it) => {
     ),
   );
 
+  it.effect("deletes the session when the prompt request rejects", () =>
+    withOpenCodeTextGeneration(DEFAULT_OPENCODE_SETTINGS, (textGeneration) =>
+      Effect.gen(function* () {
+        runtimeMock.state.promptRequestError = new Error("prompt transport failed");
+
+        const error = yield* textGeneration
+          .generateCommitMessage(DEFAULT_COMMIT_MESSAGE_INPUT)
+          .pipe(Effect.flip);
+
+        expect(error.detail).toBe("OpenCode session.prompt request failed.");
+        expect(runtimeMock.state.sessionCalls).toEqual(["delete http://127.0.0.1:4301/session"]);
+      }),
+    ),
+  );
+
   it.effect("parses JSON returned as plain text output", () =>
     withOpenCodeTextGeneration(DEFAULT_OPENCODE_SETTINGS, (textGeneration) =>
       Effect.gen(function* () {
