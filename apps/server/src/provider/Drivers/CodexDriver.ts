@@ -151,9 +151,9 @@ export const CodexDriver: ProviderDriver<
     const modelCatalog = yield* ModelCatalog.ModelCatalog;
     const currentCatalog = modelCatalog.current(DRIVER_KIND);
     const processEnv = yield* mergeProviderInstanceEnvironment(environment);
-    const environmentHome = processEnv.CODEX_HOME?.trim();
+    const environmentHome = processEnv.CODEX_HOME;
     const homeLayout = yield* resolveCodexHomeLayout(
-      !config.homePath.trim() && !config.shadowHomePath.trim() && environmentHome
+      !config.homePath.trim() && !config.shadowHomePath.trim() && environmentHome?.trim()
         ? { ...config, homePath: environmentHome }
         : config,
     );

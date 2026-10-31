@@ -482,10 +482,10 @@ it.layer(layerTest)("CodexDriver", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-codex-driver-" });
-      for (const account of ["work", "personal"]) {
+      for (const [index, account] of ["work", "personal", "work "].entries()) {
         const codexHome = NodePath.join(tempDir, account);
         const instance = yield* CodexDriver.create({
-          instanceId: ProviderInstanceId.make(account),
+          instanceId: ProviderInstanceId.make(`account-${index}`),
           displayName: account,
           enabled: false,
           environment: [{ name: "CODEX_HOME", value: codexHome, sensitive: false }],
