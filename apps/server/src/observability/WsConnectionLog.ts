@@ -6,21 +6,19 @@ import * as Option from "effect/Option";
 import type * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as Socket from "effect/socket/Socket";
 
-// RFC 6455 caps a close reason at 123 bytes; anything longer came from a broken peer.
-const CLOSE_REASON_MAX_CHARS = 123;
 const ADDRESS_MAX_CHARS = 64;
 
 /** What the server saw of one `/ws` connection before it ended. */
 export interface WsConnectionObservation {
   closeCode: number | undefined;
-  closeReason: string | undefined;
+  closeReasonLength: number | undefined;
   lastInboundAtMs: number | undefined;
   invalidated: boolean;
 }
 
 export const makeObservation = (): WsConnectionObservation => ({
   closeCode: undefined,
-  closeReason: undefined,
+  closeReasonLength: undefined,
   lastInboundAtMs: undefined,
   invalidated: false,
 });
@@ -41,7 +39,7 @@ const observeSocket = (socket: Socket.Socket, observation: WsConnectionObservati
           Effect.sync(() => {
             if (error.reason._tag !== "SocketCloseError") return;
             observation.closeCode = error.reason.code;
-            observation.closeReason = error.reason.closeReason?.slice(0, CLOSE_REASON_MAX_CHARS);
+            observation.closeReasonLength = error.reason.closeReason?.length;
           }),
         ),
       ),
@@ -90,7 +88,7 @@ export const wsCloseAttributes = (input: {
   return {
     endedBy,
     ...(observation.closeCode === undefined ? {} : { closeCode: observation.closeCode }),
-    ...(observation.closeReason ? { closeReason: observation.closeReason } : {}),
+    ...(observation.closeReasonLength ? { closeReasonLength: observation.closeReasonLength } : {}),
     durationMs: closedAtMs - connectedAtMs,
     ...(observation.lastInboundAtMs === undefined
       ? {}

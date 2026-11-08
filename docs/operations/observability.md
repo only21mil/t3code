@@ -134,8 +134,8 @@ waiting. Read CPU together with page faults:
 ### WebSocket closes
 
 The server log records one `WebSocket closed` line per `/ws` connection: `endedBy`, the close code
-and reason, the connection's length, how long before the close the last frame arrived, and the
-client session, surface and address. `endedBy` is `connection_lost` (code 1006, no close frame: a
+and the length of its reason, the connection's length, how long before the close the last frame
+arrived, and the client session, surface and address. `endedBy` is `connection_lost` (code 1006, no close frame: a
 network drop or a killed client), `close_frame`, `session_invalidated`, `server_interrupted`,
 `server_error`, or `unknown` when the connection ended cleanly with no close code.
 

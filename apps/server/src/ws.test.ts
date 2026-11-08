@@ -540,7 +540,7 @@ it.effect(
     ),
 );
 
-it.effect("logs the close code and reason when a client closes /ws", () => {
+it.effect("logs the close code and reason length when a client closes /ws", () => {
   const messages: Array<unknown> = [];
   const captureLogs = Logger.make(({ message }) => {
     messages.push(message);
@@ -607,7 +607,7 @@ it.effect("logs the close code and reason when a client closes /ws", () => {
           {
             endedBy: "close_frame",
             closeCode: 4001,
-            closeReason: "client heartbeat timeout",
+            closeReasonLength: 24,
             durationMs: 0,
             sessionId: "close-test",
             surface: "desktop",
