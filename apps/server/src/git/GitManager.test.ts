@@ -4054,6 +4054,33 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       }),
   );
 
+  it.effect("fetches a same-repository head by name from a base remote that is not primary", () =>
+    Effect.gen(function* () {
+      const checkout = yield* makePullRequestCheckout({
+        forkHasHead: false,
+        pullRequest: {
+          isCrossRepository: false,
+          headRepositoryNameWithOwner: null,
+          headRepositoryOwnerLogin: null,
+        },
+      });
+      yield* checkout.remote("origin", checkoutForkUrl, checkout.forkDir);
+      yield* checkout.remote("upstream", checkoutBaseUrl, checkout.baseDir);
+      // The base publishes the head branch but no pull request ref.
+      yield* runGit(checkout.repoDir, [
+        "push",
+        checkout.baseDir,
+        ":refs/pull/64/head",
+        `${checkout.head}:refs/heads/feature/elsewhere`,
+      ]);
+      const result = yield* checkout.prepare();
+      expect(result).toMatchObject({ branch: "feature/elsewhere", isOnPullRequestHead: true });
+      expect(
+        (yield* runGit(result.worktreePath as string, ["rev-parse", "HEAD"])).stdout.trim(),
+      ).toBe(checkout.head);
+    }),
+  );
+
   it.effect(
     "accepts GitHub's SSH endpoint but refuses the same repository path on another host",
     () =>

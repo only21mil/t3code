@@ -1102,17 +1102,21 @@ export const make = Effect.gen(function* () {
           pullRequest.number,
           localBranch,
         ).pipe(
-          // Without the host's head ref, a head in the same repository is a branch on the
-          // primary remote, so it is fetched by name instead, but only when that remote is the
+          // Without the host's head ref, a head in the same repository is a branch on that same
+          // remote, so it is fetched by name instead, but only when that remote is the
           // pull request's own repository: a host can find a change request by number outside
           // the checkout's repository. Only while it is open, too: the branch of a closed one
           // may have moved on past the head it was closed with.
           Effect.catch((cause) =>
-            pullRequest.isCrossRepository === true || pullRequest.state !== "open"
+            pullRequest.isCrossRepository === true ||
+            pullRequest.state !== "open" ||
+            pullRequestRemote === null
               ? Effect.fail(cause)
               : Effect.gen(function* () {
-                  const remoteName = yield* gitCore.resolvePrimaryRemoteName(cwd);
-                  const remoteUrl = yield* gitCore.readConfigValue(cwd, `remote.${remoteName}.url`);
+                  const remoteUrl = yield* gitCore.readConfigValue(
+                    cwd,
+                    `remote.${pullRequestRemote}.url`,
+                  );
                   const pullRequestKey = pullRequestRepositoryKey(pullRequest.url);
                   if (
                     remoteUrl === null ||
@@ -1126,7 +1130,7 @@ export const make = Effect.gen(function* () {
                   }
                   yield* gitCore.fetchRemoteBranch({
                     cwd,
-                    remoteName,
+                    remoteName: pullRequestRemote,
                     remoteBranch: pullRequest.headBranch,
                     localBranch,
                   });
