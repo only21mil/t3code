@@ -26,6 +26,7 @@ const reactTests = [
   "src/native/NativeHeaderToolbar.test.tsx",
   "src/native/useRestingTopOffset.test.tsx",
   "src/native/useRetryingImageSource.test.tsx",
+  "src/features/pull-requests/PullRequestMarkdown.test.tsx",
   "src/state/queries.debounce.test.tsx",
   "src/state/use-selected-thread-git-actions.test.tsx",
   "src/features/terminal/useTerminalExitNavigation.test.tsx",

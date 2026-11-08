@@ -19,10 +19,8 @@ import {
   type ReferenceAutolink,
 } from "@t3tools/client-runtime/source-control-clients";
 import { SOURCE_CONTROL_MEDIA_ASSET } from "@t3tools/contracts";
-import { assetUrlStateFromResult } from "@t3tools/client-runtime/state/assets";
-import { assetEnvironment } from "../../state/assets";
+import { refreshAssetUrl } from "../../state/assets";
 import { usePreparedConnection } from "../../state/session";
-import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
 import { linkReferenceAutolinks } from "./pullRequestAutolinks";
 
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
@@ -81,21 +79,19 @@ function usePullRequestImageSource(resolve: (url: string) => string): MarkdownIm
   const context = useContext(PullRequestMediaContext);
   const connection = usePreparedConnection(context?.environmentId ?? null);
   const httpBaseUrl = connection._tag === "Some" ? connection.value.httpBaseUrl : null;
-  const createUrl = useAtomQueryRunner(assetEnvironment.createUrl, { reportFailure: false });
   return useCallback(
     async (image) => {
       const url = resolve(image.href);
       const fetchUrl = sourceControlClients.mediaUrl(url)?.fetchUrl;
-      if (!context || !fetchUrl) return /^https?:\/\//i.test(url) ? { uri: url } : null;
+      if (!fetchUrl) return /^https?:\/\//i.test(url) ? { uri: url } : null;
+      // Throwing keeps the image pending until a resolver with its project and connection retries it.
+      if (!context || httpBaseUrl === null) throw new Error("Pull request image is unavailable");
       const resource = { _tag: SOURCE_CONTROL_MEDIA_ASSET, cwd: context.cwd, url: fetchUrl };
-      const state = assetUrlStateFromResult(
-        await createUrl({ environmentId: context.environmentId, input: { resource } }),
-        httpBaseUrl,
-      );
-      if (state._tag !== "Success") throw new Error("Pull request image is unavailable");
-      return { uri: state.url };
+      const signedUrl = await refreshAssetUrl(context.environmentId, resource);
+      if (signedUrl === null) throw new Error("Pull request image is unavailable");
+      return { uri: signedUrl };
     },
-    [context, createUrl, httpBaseUrl, resolve],
+    [context, httpBaseUrl, resolve],
   );
 }
 
