@@ -84,6 +84,28 @@ describe("WsConnectionLog", () => {
           lastInboundAgeMs: 25_000,
         },
       );
+
+      // A socket already closed when its reader is acquired fails before any pull.
+      const closedSocket = Socket.make({
+        reader: Effect.fail(
+          new Socket.SocketError({
+            reason: new Socket.SocketCloseError({ code: 1001, closeReason: "going away" }),
+          }),
+        ),
+        writer: Effect.succeed({ write: () => Effect.void, writeAll: () => Effect.void }),
+      });
+      const closedRequest = Object.create(
+        HttpServerRequest.fromWeb(new Request("http://localhost/ws")),
+        { upgrade: { value: Effect.succeed(closedSocket) } },
+      ) as HttpServerRequest.HttpServerRequest;
+      const closedObservation = WsConnectionLog.makeObservation();
+      yield* Effect.flip(
+        (yield* WsConnectionLog.observeUpgrade(closedRequest, closedObservation).upgrade).reader,
+      );
+      assert.deepStrictEqual(
+        [closedObservation.closeCode, closedObservation.closeReasonLength],
+        [1001, 10],
+      );
     }).pipe(Effect.scoped),
   );
 });

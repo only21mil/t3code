@@ -23,29 +23,34 @@ export const makeObservation = (): WsConnectionObservation => ({
   invalidated: false,
 });
 
-const observeSocket = (socket: Socket.Socket, observation: WsConnectionObservation) =>
-  Socket.make({
-    reader: Effect.map(socket.reader, (reader) => ({
-      ...reader,
-      pull: reader.pull.pipe(
-        Effect.tap(() =>
-          Clock.currentTimeMillis.pipe(
-            Effect.map((now) => {
-              observation.lastInboundAtMs = now;
-            }),
+const observeSocket = (socket: Socket.Socket, observation: WsConnectionObservation) => {
+  const recordClose = (error: Socket.SocketError) =>
+    Effect.sync(() => {
+      if (error.reason._tag !== "SocketCloseError") return;
+      observation.closeCode = error.reason.code;
+      observation.closeReasonLength = error.reason.closeReason?.length;
+    });
+  return Socket.make({
+    // An already-closed socket fails while its reader is acquired, before any pull.
+    reader: socket.reader.pipe(
+      Effect.tapError(recordClose),
+      Effect.map((reader) => ({
+        ...reader,
+        pull: reader.pull.pipe(
+          Effect.tap(() =>
+            Clock.currentTimeMillis.pipe(
+              Effect.map((now) => {
+                observation.lastInboundAtMs = now;
+              }),
+            ),
           ),
+          Effect.tapError(recordClose),
         ),
-        Effect.tapError((error) =>
-          Effect.sync(() => {
-            if (error.reason._tag !== "SocketCloseError") return;
-            observation.closeCode = error.reason.code;
-            observation.closeReasonLength = error.reason.closeReason?.length;
-          }),
-        ),
-      ),
-    })),
+      })),
+    ),
     writer: socket.writer,
   });
+};
 
 /**
  * Effect's RPC server catches the close error its socket reader raises, so the close
