@@ -293,8 +293,22 @@ describe("change request media urls", () => {
     ["https://example.com/a.png", "https://example.com/a.png"],
     ["docs/a.png", "docs/a.png"],
   ])("resolves %s against the forge", (url, expected) => {
-    expect(resolveChangeRequestMediaUrl(url, "https://git.cafe/pingdotgg/t3code/pulls/31251")).toBe(
-      expected,
+    expect(
+      resolveChangeRequestMediaUrl(url, {
+        provider: "gitcafe",
+        url: "https://git.cafe/pingdotgg/t3code",
+      }),
+    ).toBe(expected);
+  });
+
+  it("lets a host mounted below a path resolve its own uploads", () => {
+    const upload = "/attachments/8e603325-bb2b-4e32-a9bc-f1fa20b6c40b";
+    const repository = { provider: "forgejo", url: "https://git.example.test/git/team/repo" };
+    expect(resolveChangeRequestMediaUrl(upload, repository)).toBe(
+      `https://git.example.test/git${upload}`,
+    );
+    expect(resolveChangeRequestMediaUrl("/team/repo/raw/a.png", repository)).toBe(
+      "https://git.example.test/team/repo/raw/a.png",
     );
   });
 });

@@ -49,7 +49,10 @@ const AutolinksContext = createContext<((text: string) => ReadonlyArray<Referenc
   null,
 );
 const LineBreaksContext = createContext(false);
-const ChangeRequestUrlContext = createContext<string | null>(null);
+const MediaRepositoryContext = createContext<{
+  readonly provider: string;
+  readonly url: string;
+} | null>(null);
 
 export function PullRequestMarkdownRepository(props: {
   /** The change request the markdown belongs to, whose host decides what its text links. */
@@ -64,6 +67,8 @@ export function PullRequestMarkdownRepository(props: {
       ? null
       : changeRequestReferenceAutolinker({ provider, url });
   const lineBreaks = sourceControlClients.find(provider ?? "")?.hardLineBreaks ?? false;
+  const repositoryUrl = url && sourceControlClients.parseChangeRequestUrl(url)?.link.repositoryUrl;
+  const mediaRepository = provider && repositoryUrl ? { provider, url: repositoryUrl } : null;
   const target = pullRequestTarget(props.params);
   const project = useProject({
     environmentId: target.environmentId,
@@ -76,9 +81,9 @@ export function PullRequestMarkdownRepository(props: {
   return (
     <AutolinksContext value={autolinks}>
       <LineBreaksContext value={lineBreaks}>
-        <ChangeRequestUrlContext value={url ?? null}>
+        <MediaRepositoryContext value={mediaRepository}>
           <PullRequestMediaContext value={media}>{props.children}</PullRequestMediaContext>
-        </ChangeRequestUrlContext>
+        </MediaRepositoryContext>
       </LineBreaksContext>
     </AutolinksContext>
   );
@@ -147,13 +152,13 @@ export function PullRequestMarkdown(props: {
   }) => boolean;
 }) {
   const mediaContext = useContext(PullRequestMediaContext);
-  const changeRequestUrl = useContext(ChangeRequestUrlContext);
+  const mediaRepository = useContext(MediaRepositoryContext);
   const segments = useMemo(() => splitPullRequestBody(props.markdown), [props.markdown]);
   const [undoneTicks, setUndoneTicks] = useState(0);
   const gallery: FilePreviewItem[] = markdownImageSources(
     props.imageGroupMarkdown ?? props.markdown,
   )
-    .map((href) => (changeRequestUrl ? resolveChangeRequestMediaUrl(href, changeRequestUrl) : href))
+    .map((href) => (mediaRepository ? resolveChangeRequestMediaUrl(href, mediaRepository) : href))
     .filter(
       (uri) =>
         /^https?:\/\//i.test(uri) &&
@@ -247,9 +252,9 @@ function PullRequestMarkdownContent(props: {
   const hostLineBreaks = useContext(LineBreaksContext);
   const autolinks = useContext(AutolinksContext);
   const mediaContext = useContext(PullRequestMediaContext);
-  const changeRequestUrl = useContext(ChangeRequestUrlContext);
+  const mediaRepository = useContext(MediaRepositoryContext);
   const resolveMediaUrl = (href: string) =>
-    changeRequestUrl ? resolveChangeRequestMediaUrl(href, changeRequestUrl) : href;
+    mediaRepository ? resolveChangeRequestMediaUrl(href, mediaRepository) : href;
   const markdown = linkReferenceAutolinks(props.markdown, autolinks);
   const openPullRequest = useOpenPullRequest();
   const openLink = (href: string) => {

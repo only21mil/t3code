@@ -15,8 +15,8 @@ const ATTACHMENT_PATH = new RegExp(`^(?:/[^/_][^/]*)*/attachments/(${UUID})$`, "
  */
 const RELATIVE_ATTACHMENT_URL = new RegExp(`^/?(attachments/${UUID})$`, "iu");
 
-/** The server's mount: everything in a change request's path before `/<owner>/<repo>/pulls/<n>`. */
-const REPOSITORY_PAGE_PATH = /^(.*?)\/[^/]+\/[^/]+\/(?:pulls|issues)\/\d+(?:\/.*)?$/u;
+/** The server's mount: everything in a repository's path before `/<owner>/<repo>`. */
+const REPOSITORY_PATH = /^(.*)\/[^/]+\/[^/]+\/?$/u;
 
 /** Forgejo serves an upload with the visibility of the repository it was posted in. */
 export function forgejoMediaUrl(url: URL): SourceControlMediaUrl | null {
@@ -25,10 +25,10 @@ export function forgejoMediaUrl(url: URL): SourceControlMediaUrl | null {
   return uuid === undefined ? null : { fetchUrl: `${url.origin}${url.pathname}`, fileName: uuid };
 }
 
-export function resolveForgejoAttachmentUrl(url: string, changeRequestUrl: string): string | null {
+export function resolveForgejoAttachmentUrl(url: string, repositoryUrl: string): string | null {
   const path = RELATIVE_ATTACHMENT_URL.exec(url)?.[1];
   if (path === undefined) return null;
-  const page = URL.parse(changeRequestUrl);
-  const mount = page ? REPOSITORY_PAGE_PATH.exec(page.pathname)?.[1] : undefined;
-  return page && mount !== undefined ? `${page.origin}${mount}/${path}` : null;
+  const repository = URL.parse(repositoryUrl);
+  const mount = repository ? REPOSITORY_PATH.exec(repository.pathname)?.[1] : undefined;
+  return repository && mount !== undefined ? `${repository.origin}${mount}/${path}` : null;
 }
