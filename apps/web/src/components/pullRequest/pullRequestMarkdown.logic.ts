@@ -61,12 +61,26 @@ export function remarkPullRequestAutolinks(options: {
   return (tree: MarkdownNode) => visit(tree);
 }
 
+const HTML_TAG = /<[a-z](?:[^>"']|"[^"]*"|'[^']*')*>/giu;
+const HTML_ATTRIBUTE = /([\w:-]+)(\s*=\s*)("[^"]*"|'[^']*'|[^\s>"']+)/gu;
+
 function remarkChangeRequestMediaUrls(options: {
   readonly repository: { readonly provider: string; readonly url: string };
 }) {
+  const resolve = (url: string) => resolveChangeRequestMediaUrl(url, options.repository);
   const visit = (node: MarkdownNode): void => {
     if ((node.type === "image" || node.type === "definition") && node.url !== undefined) {
-      node.url = resolveChangeRequestMediaUrl(node.url, options.repository);
+      node.url = resolve(node.url);
+    } else if (node.type === "html" && node.value !== undefined) {
+      // Forgejo writes an upload pasted from a high-density screen as a sized `<img>`.
+      node.value = node.value.replace(HTML_TAG, (tag) =>
+        tag.replace(HTML_ATTRIBUTE, (attribute, name: string, equals: string, value: string) => {
+          if (name.toLowerCase() !== "src") return attribute;
+          const quote = /^["']/u.test(value) ? value[0] : "";
+          const url = quote ? value.slice(1, -1) : value;
+          return `${name}${equals}${quote}${resolve(url)}${quote}`;
+        }),
+      );
     }
     node.children?.forEach(visit);
   };
