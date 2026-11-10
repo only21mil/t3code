@@ -176,11 +176,23 @@ export const antigravityAuthIssue = Effect.fn("antigravityAuthIssue")(function* 
     : "Agent Platform without an API key needs Google Cloud application default credentials. Run `gcloud auth application-default login`, or enter an API key in the Antigravity provider settings.";
 });
 
+class GoogleMetadataFetchError extends Schema.TaggedError<GoogleMetadataFetchError>()(
+  "GoogleMetadataFetchError",
+  { cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return "Could not create the Google Cloud metadata server client.";
+  }
+}
+
 // The Go client's metadata server check. Like Go's transport it never uses a proxy, which cannot
 // reach this host's link-local address. Unreachable link-local addresses can hang, so bound it.
 export const probeGoogleMetadataServer = (host = "169.254.169.254") =>
   Effect.acquireUseRelease(
-    Effect.try(makeDirectFetch),
+    Effect.try({
+      try: makeDirectFetch,
+      catch: (cause) => new GoogleMetadataFetchError({ cause }),
+    }),
     (direct) =>
       HttpClient.get(`http://${host}`).pipe(
         Effect.map((response) => response.headers["metadata-flavor"] === "Google"),
