@@ -1,4 +1,12 @@
-import type { ReferenceAutolink } from "@t3tools/client-runtime/source-control-clients";
+import {
+  changeRequestReferenceAutolinker,
+  resolveChangeRequestMediaUrl,
+} from "@t3tools/client-runtime/pull-request-markdown";
+import {
+  sourceControlClients,
+  type ReferenceAutolink,
+} from "@t3tools/client-runtime/source-control-clients";
+import type { PluggableList } from "unified";
 
 export {
   splitPullRequestBody,
@@ -53,26 +61,37 @@ export function remarkPullRequestAutolinks(options: {
   return (tree: MarkdownNode) => visit(tree);
 }
 
-const LINKED_TYPES = new Set(["image", "link", "definition"]);
-const HTML_SOURCE = /(<[a-z][^<>]*?\bsrc\s*=\s*["'])([^"'<>]*)/giu;
-
-/**
- * Resolves the link destinations the host writes relative to its server. It runs on the parsed
- * tree because code is never a link, so a destination written inside code keeps its text.
- */
-export function remarkPullRequestRelativeUrls(options: {
-  readonly resolveUrl: (url: string) => string;
-}) {
+function remarkChangeRequestMediaUrls(options: { readonly changeRequestUrl: string }) {
   const visit = (node: MarkdownNode): void => {
-    if (LINKED_TYPES.has(node.type) && node.url !== undefined) {
-      node.url = options.resolveUrl(node.url);
-    } else if (node.type === "html" && node.value !== undefined) {
-      node.value = node.value.replace(
-        HTML_SOURCE,
-        (_tag, prefix: string, url: string) => `${prefix}${options.resolveUrl(url)}`,
-      );
+    if ((node.type === "image" || node.type === "definition") && node.url !== undefined) {
+      node.url = resolveChangeRequestMediaUrl(node.url, options.changeRequestUrl);
     }
     node.children?.forEach(visit);
   };
   return (tree: MarkdownNode) => visit(tree);
+}
+
+const NO_PLUGINS: PluggableList = [];
+const markdownPlugins = new Map<string, PluggableList>();
+
+/**
+ * One plugin list per repository, so every comment of a pull request shares one markdown
+ * renderer and its parse cache instead of parsing again on each render.
+ */
+export function pullRequestMarkdownPlugins(
+  changeRequest: { readonly provider: string; readonly url: string } | null,
+): PluggableList {
+  if (changeRequest === null) return NO_PLUGINS;
+  const repositoryUrl = sourceControlClients.parseChangeRequestUrl(changeRequest.url)?.link
+    .repositoryUrl;
+  if (repositoryUrl === undefined) return NO_PLUGINS;
+  const key = `${changeRequest.provider}\u0000${repositoryUrl}`;
+  let plugins = markdownPlugins.get(key);
+  if (plugins === undefined) {
+    const autolinks = changeRequestReferenceAutolinker(changeRequest);
+    plugins = [[remarkChangeRequestMediaUrls, { changeRequestUrl: repositoryUrl }]];
+    if (autolinks) plugins.push([remarkPullRequestAutolinks, { autolinks }]);
+    markdownPlugins.set(key, plugins);
+  }
+  return plugins;
 }

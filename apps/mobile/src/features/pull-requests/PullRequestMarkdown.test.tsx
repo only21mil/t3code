@@ -45,11 +45,11 @@ vi.mock("../../native/SelectableMarkdownText", () => ({
   },
 }));
 vi.mock("../files/FileMarkdownPreview", () => ({ useMarkdownPreviewStyles: () => ({}) }));
-vi.mock("../../components/FilePreviewGallery", () => ({
+vi.mock("../../components/ui/FilePreviewGallery", () => ({
   FilePreviewGallery: mocks.Passthrough,
   useFilePreviewGallery: () => (source: unknown) => source,
 }));
-vi.mock("../../components/FilePreviewModal", () => ({ FilePreviewModal: () => null }));
+vi.mock("../../components/ui/FilePreviewModal", () => ({ FilePreviewModal: () => null }));
 vi.mock("../threads/ThreadMarkdownImage", () => ({ ThreadMarkdownImageView: () => null }));
 
 import { PullRequestMarkdown, PullRequestMarkdownRepository } from "./PullRequestMarkdown";
