@@ -2031,7 +2031,7 @@ describe("CursorAdapterV2", () => {
           authorizationHeader: "Bearer synthetic-cursor-token",
           browserToolsAvailable: false,
         });
-        let openedWith: CursorAgentSdk.CursorAgentSdkOpenInput["options"] | undefined;
+        const opened: Array<CursorAgentSdk.CursorAgentSdkOpenInput> = [];
         let sentWith: CursorAgentSdk.CursorAgentSdkOpenInput["options"]["mcpServers"];
         const adapter = yield* makeCursorAdapterV2({
           instanceId,
@@ -2046,7 +2046,7 @@ describe("CursorAdapterV2", () => {
             assertComplete: Effect.void,
             open: (input) =>
               Effect.sync(() => {
-                openedWith = input.options;
+                opened.push(input);
                 return {
                   agentId: "native-cursor-mcp",
                   listMessages: Effect.succeed([]),
@@ -2073,49 +2073,59 @@ describe("CursorAdapterV2", () => {
             Effect.provideService(HostProcess.Environment, {}),
           );
         const now = yield* DateTime.now;
-        yield* Effect.exit(
-          runtime.startTurn({
-            threadId,
-            providerThread,
-            modelSelection,
-            runtimePolicy,
-            runId: RunId.make("cursor-mcp-run"),
-            runOrdinal: 1,
-            providerTurnOrdinal: 1,
-            attemptId: RunAttemptId.make("cursor-mcp-attempt"),
-            rootNodeId: NodeId.make("cursor-mcp-root"),
-            appThread: {
-              id: threadId,
-              projectId: ProjectId.make("cursor-mcp-project"),
-              createdBy: "user",
-              creationSource: "web",
-              title: "Cursor MCP",
-              providerInstanceId: instanceId,
+        const sendTurn = (ordinal: number) =>
+          runtime
+            .startTurn({
+              threadId,
+              providerThread,
               modelSelection,
-              runtimeMode: "full-access",
-              interactionMode: "default",
-              branch: null,
-              worktreePath: null,
-              activeProviderThreadId: providerThread.id,
-              lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: threadId },
-              forkedFrom: null,
-              createdAt: now,
-              updatedAt: now,
-              archivedAt: null,
-              settledOverride: null,
-              settledAt: null,
-              lastVisitedAt: null,
-              deletedAt: null,
-            },
-            message: {
-              messageId: MessageId.make("cursor-mcp-message"),
-              createdBy: "user",
-              creationSource: "web",
-              text: "Hello.",
-              attachments: [],
-            },
-          }),
-        );
+              runtimePolicy,
+              runId: RunId.make(`cursor-mcp-run-${ordinal}`),
+              runOrdinal: ordinal,
+              providerTurnOrdinal: ordinal,
+              attemptId: RunAttemptId.make(`cursor-mcp-attempt-${ordinal}`),
+              rootNodeId: NodeId.make(`cursor-mcp-root-${ordinal}`),
+              appThread: {
+                id: threadId,
+                projectId: ProjectId.make("cursor-mcp-project"),
+                createdBy: "user",
+                creationSource: "web",
+                title: "Cursor MCP",
+                providerInstanceId: instanceId,
+                modelSelection,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                branch: null,
+                worktreePath: null,
+                activeProviderThreadId: providerThread.id,
+                lineage: {
+                  parentThreadId: null,
+                  relationshipToParent: null,
+                  rootThreadId: threadId,
+                },
+                forkedFrom: null,
+                createdAt: now,
+                updatedAt: now,
+                archivedAt: null,
+                settledOverride: null,
+                settledAt: null,
+                lastVisitedAt: null,
+                deletedAt: null,
+              },
+              message: {
+                messageId: MessageId.make(`cursor-mcp-message-${ordinal}`),
+                createdBy: "user",
+                creationSource: "web",
+                text: "Hello.",
+                attachments: [],
+              },
+            })
+            .pipe(
+              Effect.exit,
+              Effect.provideService(HostProcess.HomeDirectory, home),
+              Effect.provideService(HostProcess.Environment, {}),
+            );
+        yield* sendTurn(1);
 
         const expectedServers = {
           repro: {
@@ -2144,8 +2154,22 @@ describe("CursorAdapterV2", () => {
           },
         };
         const t3Servers = cursorMcpServers(yield* mcpSessions.read(threadId));
-        assert.deepEqual(openedWith?.mcpServers, { ...expectedServers, ...t3Servers });
+        assert.equal(opened.length, 1);
+        assert.deepEqual(opened[0]?.options.mcpServers, { ...expectedServers, ...t3Servers });
         assert.deepEqual(sentWith, { ...expectedServers, ...t3Servers });
+
+        yield* fileSystem.writeFileString(
+          path.join(home, ".cursor", "projects", projectDirectory, "mcp-disabled.json"),
+          JSON.stringify(["off", "repro"]),
+        );
+        yield* sendTurn(2);
+        const { repro: _disabled, ...stillEnabled } = expectedServers;
+        assert.deepEqual(
+          opened.map((input) => input.operation),
+          ["create", "resume"],
+        );
+        assert.deepEqual(opened[1]?.options.mcpServers, { ...stillEnabled, ...t3Servers });
+        assert.deepEqual(sentWith, { ...stillEnabled, ...t3Servers });
         for (const disabledState of ["[", '{"off": true}', '["off",]']) {
           yield* fileSystem.writeFileString(
             path.join(home, ".cursor", "projects", projectDirectory, "mcp-disabled.json"),

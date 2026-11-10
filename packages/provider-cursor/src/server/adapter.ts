@@ -1,3 +1,5 @@
+import * as NodeUtil from "node:util";
+
 import type {
   AgentMessage,
   AgentOptions,
@@ -2241,18 +2243,34 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
           }
         };
 
+        const resolveWorkspaceMcpServers = (cwd: string | null) =>
+          cwd === null
+            ? Effect.succeed({})
+            : cursorWorkspaceMcpServers(cwd, adapterOptions.environment).pipe(
+                Effect.provideService(FileSystem.FileSystem, fileSystem),
+                Effect.provideService(Path.Path, path),
+                Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+              );
+
         const openAgent = Effect.fnUntraced(function* (openInput: {
           readonly operation: "create" | "resume";
           readonly threadId: ThreadId;
           readonly modelSelection: ModelSelection;
           readonly runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
           readonly agentId?: string;
+          readonly workspaceMcpServers?: Record<string, McpServerConfig>;
         }) {
           const existing = yield* Ref.get(liveAgent);
+          // The SDK never checks mcp-disabled.json for agent-level servers, so a changed set reopens.
           if (
             existing !== null &&
             openInput.operation === "resume" &&
-            existing.nativeThreadId === openInput.agentId
+            existing.nativeThreadId === openInput.agentId &&
+            (openInput.workspaceMcpServers === undefined ||
+              NodeUtil.isDeepStrictEqual(
+                existing.workspaceMcpServers,
+                openInput.workspaceMcpServers,
+              ))
           ) {
             return existing;
           }
@@ -2261,16 +2279,8 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             yield* Ref.set(liveAgent, null);
           }
           const workspaceMcpServers =
-            openInput.runtimePolicy.cwd === null
-              ? {}
-              : yield* cursorWorkspaceMcpServers(
-                  openInput.runtimePolicy.cwd,
-                  adapterOptions.environment,
-                ).pipe(
-                  Effect.provideService(FileSystem.FileSystem, fileSystem),
-                  Effect.provideService(Path.Path, path),
-                  Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-                );
+            openInput.workspaceMcpServers ??
+            (yield* resolveWorkspaceMcpServers(openInput.runtimePolicy.cwd));
           const options = makeCursorAgentOptions({
             ...(apiKey === undefined ? {} : { apiKey }),
             modelSelection: openInput.modelSelection,
@@ -2413,6 +2423,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               threadId: turnInput.threadId,
               modelSelection: turnInput.modelSelection,
               runtimePolicy: turnInput.runtimePolicy,
+              workspaceMcpServers: yield* resolveWorkspaceMcpServers(turnInput.runtimePolicy.cwd),
             });
             const mcpSession = yield* mcpSessions.read(turnInput.threadId);
             const mcpServers = cursorMcpServers(mcpSession);
