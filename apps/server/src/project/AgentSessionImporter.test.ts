@@ -489,8 +489,10 @@ it.effect(
                         providerThread,
                         providerTurns: [],
                         runtimeRequests: [],
+                        reasoningMessageIds: [replayed("assistant", "Check the build log").id],
                         messages: [
                           replayed("user", "Fix the build"),
+                          replayed("assistant", "Check the build log"),
                           replayed("assistant", "Fixed it"),
                           replayed("assistant", " "),
                         ],
@@ -524,7 +526,7 @@ it.effect(
       ).toBeUndefined();
 
       failRead = false;
-      expect(yield* importHistory).toBe(2);
+      expect(yield* importHistory).toBe(3);
       expect(resolved).toEqual([
         CODEX_MODEL_SELECTION.instanceId,
         CODEX_MODEL_SELECTION.instanceId,
@@ -551,6 +553,16 @@ it.effect(
         ["user_message", null, "Fix the build"],
         ["assistant_message", null, "Fixed it"],
       ]);
+      // Replayed thinking is a reasoning item, not an assistant reply.
+      const activity = yield* projections.getTimelinePage(threadId, {
+        view: "activity",
+        limit: 10,
+      });
+      expect(
+        activity.items.flatMap(({ item }) =>
+          item.type === "reasoning" ? [[item.runId, item.text]] : [],
+        ),
+      ).toEqual([[null, "Check the build log"]]);
     }).pipe(Effect.scoped, Effect.provide(persistence)),
 );
 

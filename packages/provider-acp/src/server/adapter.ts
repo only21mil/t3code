@@ -1641,6 +1641,8 @@ type PendingRuntimeRequest = {
 interface SnapshotMessageState {
   readonly order: Array<string>;
   readonly messages: Map<string, OrchestrationV2ConversationMessage>;
+  /** Keys of `messages` loaded from thought chunks; they are stored as assistant text. */
+  readonly reasoningKeys?: ReadonlySet<string>;
   loadingRole: "user" | "assistant" | "thought" | null;
   loadingMessageId: string | null;
   loadingIndex: number;
@@ -4548,6 +4550,11 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               return {
                 order: current.order.includes(key) ? current.order : [...current.order, key],
                 messages,
+                ...(role === "thought"
+                  ? { reasoningKeys: new Set([...(current.reasoningKeys ?? []), key]) }
+                  : current.reasoningKeys === undefined
+                    ? {}
+                    : { reasoningKeys: current.reasoningKeys }),
                 loadingRole: role,
                 loadingMessageId: sourceMessageId ?? (startsNew ? null : current.loadingMessageId),
                 loadingIndex,
@@ -9278,6 +9285,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     messages: state.order.flatMap((key) => {
                       const message = state.messages.get(key);
                       return message === undefined ? [] : [message];
+                    }),
+                    reasoningMessageIds: state.order.flatMap((key) => {
+                      const message = state.messages.get(key);
+                      return message !== undefined && state.reasoningKeys?.has(key) === true
+                        ? [message.id]
+                        : [];
                     }),
                     runtimeRequests: [],
                     providerPayload: { protocol: ACP_PROTOCOL, sessionId },

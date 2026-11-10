@@ -107,10 +107,17 @@ function dateTime(value: string): DateTime.Utc {
   return DateTime.makeUnsafe(value);
 }
 
+/** A native-history entry; `reasoning` is the agent's thinking, shown apart from its replies. */
+interface NativeHistoryMessage {
+  readonly role: AgentSessionScanner.AgentSessionThreadMessage["role"] | "reasoning";
+  readonly text: string;
+  readonly createdAt: string;
+}
+
 function messageEvents(input: {
   readonly threadId: ThreadId;
   readonly index: number;
-  readonly message: AgentSessionScanner.AgentSessionThreadMessage;
+  readonly message: NativeHistoryMessage;
 }): ReadonlyArray<OrchestrationV2DomainEvent> {
   const ordinal = input.index + 1;
   const suffix = String(input.index).padStart(6, "0");
@@ -119,6 +126,36 @@ function messageEvents(input: {
     `${IMPORT_EVENT_PREFIX}:turn-item:${input.threadId}:${suffix}`,
   );
   const at = dateTime(input.message.createdAt);
+  if (input.message.role === "reasoning") {
+    const reasoning: OrchestrationV2TurnItem = {
+      id: turnItemId,
+      threadId: input.threadId,
+      runId: null,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      ordinal,
+      status: "completed",
+      title: null,
+      startedAt: at,
+      completedAt: at,
+      updatedAt: at,
+      type: "reasoning",
+      text: input.message.text,
+      streaming: false,
+    };
+    return [
+      {
+        id: EventId.make(`${IMPORT_EVENT_PREFIX}:turn-item:${input.threadId}:${suffix}`),
+        type: "turn-item.updated",
+        threadId: input.threadId,
+        occurredAt: at,
+        payload: reasoning,
+      },
+    ];
+  }
   const message: OrchestrationV2ConversationMessage = {
     createdBy: input.message.role === "user" ? "user" : "agent",
     creationSource: "server",
@@ -494,7 +531,7 @@ const make = Effect.gen(function* () {
     );
     // Thread commands write whole thread rows, so hold their lock from the
     // re-read through the write to keep both this marker and their changes.
-    const commit = (messages: ReadonlyArray<AgentSessionScanner.AgentSessionThreadMessage>) =>
+    const commit = (messages: ReadonlyArray<NativeHistoryMessage>) =>
       threadCommands.withLock(
         input.threadId,
         Effect.gen(function* () {
@@ -554,11 +591,12 @@ const make = Effect.gen(function* () {
         Effect.timeout(NATIVE_HISTORY_READ_TIMEOUT),
         Effect.scoped,
       );
+    const reasoningIds = new Set(snapshot.reasoningMessageIds ?? []);
     const messages = snapshot.messages.flatMap((message) =>
       (message.role === "user" || message.role === "assistant") && message.text.trim() !== ""
         ? [
             {
-              role: message.role,
+              role: reasoningIds.has(message.id) ? ("reasoning" as const) : message.role,
               text: message.text,
               createdAt: DateTime.formatIso(message.createdAt),
             },
