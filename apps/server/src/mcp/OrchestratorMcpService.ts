@@ -1717,6 +1717,12 @@ const make = Effect.gen(function* () {
       task.result === null && task.remoteChild !== undefined
         ? yield* remoteDelegation.readRun(scope, task.remoteChild).pipe(
             Effect.timeout(REMOTE_RUN_READ_TIMEOUT),
+            Effect.tapError((error) =>
+              Effect.logDebug("orchestrator-mcp.remote-run-read-failed", {
+                taskId: task.id,
+                error,
+              }),
+            ),
             Effect.orElseSucceed(() => undefined),
           )
         : undefined;

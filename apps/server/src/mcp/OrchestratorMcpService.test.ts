@@ -39,6 +39,7 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
 import * as CommandReceiptStore from "../orchestration-v2/CommandReceiptStore.ts";
@@ -393,7 +394,7 @@ describe("OrchestratorMcpService", () => {
         ],
       } as unknown as OrchestrationV2ThreadProjection;
       let providerStarted = false;
-      let remoteReachable = true;
+      let remoteAnswers: "now" | "never" | "with-error" = "now";
       const childProjection = () =>
         ({
           thread: { id: childThreadId, title: "Child task" },
@@ -430,17 +431,19 @@ describe("OrchestratorMcpService", () => {
         Layer.mock(SecretRequests.SecretRequests)({}),
         Layer.mock(RemoteDelegation.RemoteDelegation)({
           readRun: () =>
-            remoteReachable
-              ? Effect.succeed({
-                  runId: remoteRunId,
-                  status: providerStarted ? "running" : "starting",
-                } as unknown as OrchestratorMcpThreadRun)
-              : Effect.fail(
-                  new OrchestratorMcpFailure({
-                    code: "orchestration_error",
-                    message: "The linked environment did not answer.",
-                  }),
-                ),
+            remoteAnswers === "never"
+              ? Effect.never
+              : remoteAnswers === "with-error"
+                ? Effect.fail(
+                    new OrchestratorMcpFailure({
+                      code: "orchestration_error",
+                      message: "The linked environment did not answer.",
+                    }),
+                  )
+                : Effect.succeed({
+                    runId: remoteRunId,
+                    status: providerStarted ? "running" : "starting",
+                  } as unknown as OrchestratorMcpThreadRun),
         }),
         Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
       );
@@ -470,9 +473,16 @@ describe("OrchestratorMcpService", () => {
         const started = yield* service.taskStatus(scope, taskId);
         assert.equal(started.status, "running");
         assert.equal(started.workState, "working");
-        assert.equal((yield* service.taskStatus(scope, remoteTaskId)).status, "running");
-        remoteReachable = false;
-        assert.equal((yield* service.taskStatus(scope, remoteTaskId)).status, "running");
+        const remoteStarted = yield* service.taskStatus(scope, remoteTaskId);
+        assert.equal(remoteStarted.status, "running");
+        providerStarted = false;
+        remoteAnswers = "with-error";
+        const remoteFailed = yield* service.taskStatus(scope, remoteTaskId);
+        assert.equal(remoteFailed.status, "running");
+        remoteAnswers = "never";
+        const silent = yield* service.taskStatus(scope, remoteTaskId).pipe(Effect.forkChild);
+        yield* TestClock.adjust("5 seconds");
+        assert.equal((yield* Fiber.join(silent)).status, "running");
       }).pipe(Effect.provide(layerOrchestratorService.pipe(Layer.provide(layerDependencies))));
     }),
   );
