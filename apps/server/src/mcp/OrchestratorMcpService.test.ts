@@ -10,6 +10,8 @@ import {
   NodeId,
   ORCHESTRATOR_MCP_RUNNING_TASK_NEXT,
   type OrchestratorMcpCapabilitiesResult,
+  OrchestratorMcpFailure,
+  type OrchestratorMcpThreadRun,
   OrchestratorMcpTarget,
   type OrchestrationV2ThreadShell,
   type ScheduledTask,
@@ -352,6 +354,8 @@ describe("OrchestratorMcpService", () => {
       const childThreadId = ThreadId.make("thread:mcp-starting-child");
       const childRunId = RunId.make("run:mcp-starting-child");
       const taskId = NodeId.make("node:mcp-starting-task");
+      const remoteTaskId = NodeId.make("node:mcp-starting-remote-task");
+      const remoteRunId = RunId.make("run:mcp-starting-remote-child");
       const parentProjection = {
         thread: { id: parentThreadId },
         runs: [],
@@ -368,9 +372,28 @@ describe("OrchestratorMcpService", () => {
             result: null,
             completionDelivery: null,
           },
+          {
+            id: remoteTaskId,
+            threadId: parentThreadId,
+            origin: "app_owned",
+            childThreadId: null,
+            remoteChild: {
+              environmentId: EnvironmentId.make("environment:mcp-starting-remote"),
+              threadId: ThreadId.make("thread:mcp-starting-remote-child"),
+              label: "Test machine",
+              title: "Remote task",
+              runId: remoteRunId,
+            },
+            driver: "remote",
+            model: "gpt-5.6-terra",
+            status: "running",
+            result: null,
+            completionDelivery: null,
+          },
         ],
       } as unknown as OrchestrationV2ThreadProjection;
       let providerStarted = false;
+      let remoteReachable = true;
       const childProjection = () =>
         ({
           thread: { id: childThreadId, title: "Child task" },
@@ -405,7 +428,20 @@ describe("OrchestratorMcpService", () => {
         }),
         Layer.mock(ProjectService.ProjectService)({}),
         Layer.mock(SecretRequests.SecretRequests)({}),
-        Layer.mock(RemoteDelegation.RemoteDelegation)({}),
+        Layer.mock(RemoteDelegation.RemoteDelegation)({
+          readRun: () =>
+            remoteReachable
+              ? Effect.succeed({
+                  runId: remoteRunId,
+                  status: providerStarted ? "running" : "starting",
+                } as unknown as OrchestratorMcpThreadRun)
+              : Effect.fail(
+                  new OrchestratorMcpFailure({
+                    code: "orchestration_error",
+                    message: "The linked environment did not answer.",
+                  }),
+                ),
+        }),
         Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
       );
       const scope: McpInvocationScope = {
@@ -427,10 +463,16 @@ describe("OrchestratorMcpService", () => {
         assert.equal(waiting.status, "starting");
         assert.equal(waiting.workState, "working");
         assert.equal(waiting.childRunId, childRunId);
+        const remoteWaiting = yield* service.taskStatus(scope, remoteTaskId);
+        assert.equal(remoteWaiting.status, "starting");
+        assert.equal(remoteWaiting.workState, "working");
         providerStarted = true;
         const started = yield* service.taskStatus(scope, taskId);
         assert.equal(started.status, "running");
         assert.equal(started.workState, "working");
+        assert.equal((yield* service.taskStatus(scope, remoteTaskId)).status, "running");
+        remoteReachable = false;
+        assert.equal((yield* service.taskStatus(scope, remoteTaskId)).status, "running");
       }).pipe(Effect.provide(layerOrchestratorService.pipe(Layer.provide(layerDependencies))));
     }),
   );

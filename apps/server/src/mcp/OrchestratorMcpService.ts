@@ -132,6 +132,7 @@ import * as RemoteDelegation from "../peer/RemoteDelegation.ts";
 
 const DEFAULT_WAIT_TIMEOUT_MS = 10 * 60 * 1_000;
 const MAX_WAIT_TIMEOUT_MS = 60 * 60 * 1_000;
+const REMOTE_RUN_READ_TIMEOUT = Duration.seconds(5);
 const TASK_WAKE_EVENTS = [
   { thread: "parent", eventType: "subagent.updated" },
   { thread: "child", eventType: "run.updated" },
@@ -445,6 +446,13 @@ function taskStatusForRun(
     case undefined:
       return "running";
   }
+}
+
+/** A task without its result: its run's status while it has not started, else running. */
+function unfinishedTaskStatus(
+  status: OrchestratorMcpDelegateTaskResult["status"],
+): OrchestratorMcpDelegateTaskResult["status"] {
+  return status === "queued" || status === "starting" ? status : "running";
 }
 
 function delegatedTaskRun(
@@ -1441,13 +1449,10 @@ const make = Effect.gen(function* () {
   const requestKey = (clientRequestId: string | undefined): Effect.Effect<string> =>
     clientRequestId === undefined ? random.uuidV4() : Effect.succeed(clientRequestId);
 
-  const readTask = Effect.fn("OrchestratorMcpService.readTask")(function* (
+  const ownedTask = Effect.fn("OrchestratorMcpService.ownedTask")(function* (
     scope: McpThreadInvocationScope,
     taskId: NodeId,
-    waitTimedOut = false,
-    acknowledgeTerminal = false,
-    acknowledgementOperation = "task-status-acknowledge",
-  ): Effect.fn.Return<OrchestratorMcpDelegateTaskResult, OrchestratorMcpFailure> {
+  ) {
     yield* requireCapability(scope);
     const task = (yield* loadTasks(scope.thread.threadId, [taskId])).find(
       (candidate) =>
@@ -1461,6 +1466,17 @@ const make = Effect.gen(function* () {
         `Delegated task ${taskId} does not belong to thread ${scope.thread.threadId}.`,
       );
     }
+    return task;
+  });
+
+  const readTask = Effect.fn("OrchestratorMcpService.readTask")(function* (
+    scope: McpThreadInvocationScope,
+    taskId: NodeId,
+    waitTimedOut = false,
+    acknowledgeTerminal = false,
+    acknowledgementOperation = "task-status-acknowledge",
+  ): Effect.fn.Return<OrchestratorMcpDelegateTaskResult, OrchestratorMcpFailure> {
+    const task = yield* ownedTask(scope, taskId);
     if (task.childThreadId === null) {
       return yield* readRemoteTask(scope, task, waitTimedOut, acknowledgeTerminal);
     }
@@ -1536,9 +1552,7 @@ const make = Effect.gen(function* () {
             task.cancelledRunId !== undefined && runStatus === "completed"
             ? "interrupted"
             : runStatus
-          : runStatus === "queued" || runStatus === "starting"
-            ? runStatus
-            : "running";
+          : unfinishedTaskStatus(runStatus);
     const derivedResult =
       task.result !== null
         ? task.result
@@ -1698,9 +1712,17 @@ const make = Effect.gen(function* () {
     waitTimedOut: boolean,
     acknowledgeTerminal: boolean,
   ): Effect.fn.Return<OrchestratorMcpDelegateTaskResult, OrchestratorMcpFailure> {
+    // A linked environment that does not answer in time leaves the task running.
+    const run =
+      task.result === null && task.remoteChild !== undefined
+        ? yield* remoteDelegation.readRun(scope, task.remoteChild).pipe(
+            Effect.timeout(REMOTE_RUN_READ_TIMEOUT),
+            Effect.orElseSucceed(() => undefined),
+          )
+        : undefined;
     const status: OrchestratorMcpDelegateTaskResult["status"] =
       task.result === null
-        ? "running"
+        ? unfinishedTaskStatus(taskStatusForRun(run))
         : task.status === "completed" ||
             task.status === "failed" ||
             task.status === "cancelled" ||
@@ -2567,25 +2589,13 @@ const make = Effect.gen(function* () {
     }),
     cancelTask: Effect.fn("OrchestratorMcpService.cancelTask")(function* (callerScope, input) {
       const scope = yield* requireThreadScope(callerScope, "task_cancel");
-      const current = yield* readTask(scope, input.taskId);
-      const childThreadId = current.childThreadId;
-      if (childThreadId === null) {
-        // The task runs in a linked environment: its thread there is stopped through the link.
-        const subagents = yield* loadTasks(scope.thread.threadId, [input.taskId]);
-        const remoteTask = subagents.find(
-          (task) =>
-            task.id === input.taskId &&
-            task.origin === "app_owned" &&
-            task.remoteChild !== undefined,
-        );
-        if (remoteTask === undefined) {
-          return yield* failure(
-            "task_not_found",
-            `Delegated task ${input.taskId} does not belong to thread ${scope.thread.threadId}.`,
-          );
-        }
-        return yield* remoteDelegation.cancel(scope, remoteTask, input);
+      const task = yield* ownedTask(scope, input.taskId);
+      // A task in a linked environment is stopped there through the link, without a status read.
+      if (task.childThreadId === null) {
+        return yield* remoteDelegation.cancel(scope, task, input);
       }
+      const childThreadId = task.childThreadId;
+      const current = yield* readTask(scope, input.taskId);
       const key = yield* requestKey(input.clientRequestId);
       const parentProjection = yield* loadThreadRecords(scope.thread.threadId, []);
       // Cancelling stops the child and every task under it, each a write to a

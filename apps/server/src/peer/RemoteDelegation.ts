@@ -92,6 +92,11 @@ export class RemoteDelegation extends Context.Service<
         readonly clientRequestId?: string | undefined;
       },
     ) => Effect.Effect<OrchestratorMcpTaskCancelResult, OrchestratorMcpFailure>;
+    /** The task's run there as it reads now; nothing once a later run followed it there. */
+    readonly readRun: (
+      scope: ThreadScope,
+      remote: OrchestrationV2RemoteTaskChild,
+    ) => Effect.Effect<OrchestratorMcpThreadRun | undefined, OrchestratorMcpFailure>;
     /**
      * Follows every open remote task until it ends, including after a
      * restart, and a finished one again when a Stop here owes it a stop there.
@@ -767,6 +772,18 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const readRun: RemoteDelegation["Service"]["readRun"] = Effect.fn("RemoteDelegation.readRun")(
+    function* (scope, remote) {
+      const read = yield* forwarding.readThread(
+        followScope(scope.thread, remote),
+        remote.environmentId,
+        { threadId: remote.threadId, limit: 1, runLimit: 1 },
+      );
+      const run = read.recentRuns[0];
+      return remote.runId === undefined || run?.runId === remote.runId ? run : undefined;
+    },
+  );
+
   const start: RemoteDelegation["Service"]["start"] = () =>
     forkParked(
       Effect.gen(function* () {
@@ -793,7 +810,7 @@ const make = Effect.gen(function* () {
       }).pipe(Effect.ignoreCause({ log: true })),
     );
 
-  return RemoteDelegation.of({ delegate, cancel, start });
+  return RemoteDelegation.of({ delegate, cancel, readRun, start });
 });
 
 const isTerminal = (status: string) =>

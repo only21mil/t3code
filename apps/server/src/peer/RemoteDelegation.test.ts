@@ -817,12 +817,15 @@ it.effect("a task delegated to the box wakes the laptop's parent when it ends th
       yield* linkTo(a.links, b, "full-access");
       yield* seedParent(a);
 
+      // Its run there has not started: the task says so, as a child here would.
+      yield* Ref.set(thread.status, "starting");
       const delegated = yield* delegateToBox(a);
       expect(delegated).toMatchObject({
-        status: "running",
+        status: "starting",
         childThreadId: null,
         remoteChild: { environmentId: box.environmentId, label: "Box" },
       });
+      yield* Ref.set(thread.status, "running");
       // The box launched it in the project with the same repository.
       expect(yield* Ref.get(thread.launched)).toBe(delegated.remoteChild.threadId);
       // Its link opens the thread there, so the parent can mention it like any other.
