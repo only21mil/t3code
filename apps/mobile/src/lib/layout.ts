@@ -103,6 +103,8 @@ export function deriveLayout(input: {
   readonly height: number;
   readonly nativeMetrics?: NativeLayoutMetrics | null;
   readonly nativeWorkspace?: boolean;
+  /** The Android shell: a medium window floats its sidebar over the page. */
+  readonly floatsSidebar?: boolean;
 }): Layout {
   const { width, height } = input;
   const metrics = input.nativeMetrics;
@@ -131,7 +133,7 @@ export function deriveLayout(input: {
         : width >= EXPANDED_LAYOUT_MIN_WIDTH
           ? "expanded"
           : // Only the Android shell floats a sidebar over a page; iOS keeps its phone stack.
-            metrics
+            metrics && !input.floatsSidebar
             ? "compact"
             : "medium";
 

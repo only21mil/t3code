@@ -129,6 +129,27 @@ describe("width classes", () => {
   ] as const)("classes a window without native columns by size: %j", ({ variant, ...size }) => {
     expect(deriveLayout(size).variant).toBe(variant);
   });
+
+  // Each Android window reports its own metrics; side by side they differ, and a medium one
+  // still floats the sidebar as it did without metrics.
+  it.each([
+    { width: 420, variant: "compact" },
+    { width: 680, variant: "medium" },
+    { width: 900, variant: "expanded" },
+  ] as const)("classes an Android window by its own metrics: %j", ({ width, variant }) => {
+    const nativeMetrics = {
+      width,
+      height: 900,
+      hasHinge: false,
+      horizontalSizeClass: width >= 600 ? ("regular" as const) : ("compact" as const),
+      verticalBarEdge: "none" as const,
+      safeArea: { top: 24, bottom: 0, left: 0, right: 0 },
+      reservedRegions: [],
+    };
+    expect(deriveLayout({ width, height: 900, nativeMetrics, floatsSidebar: true }).variant).toBe(
+      variant,
+    );
+  });
 });
 
 describe("isPrimarySidebarPinned", () => {

@@ -917,9 +917,16 @@ registerPresentedRoutes(
 );
 
 export const RootStack = RootStackConfig.with(function AdaptiveRootStack({ Navigator }) {
-  const { width, height } = useWindowDimensions();
+  const windowDimensions = useWindowDimensions();
   const nativeMetrics = useNativeLayoutMetrics();
-  const usesSplitView = deriveLayout({ width, height, nativeMetrics }).usesSplitView;
+  // Side by side on Android, React Native's window size is another window's.
+  const { width, height } = nativeMetrics ?? windowDimensions;
+  const usesSplitView = deriveLayout({
+    width,
+    height,
+    nativeMetrics,
+    floatsSidebar: Platform.OS === "android",
+  }).usesSplitView;
   const resolve = useMessages();
 
   /* oxlint-disable react/no-unstable-nested-components -- React Navigation invokes screenLayout as a render callback. */

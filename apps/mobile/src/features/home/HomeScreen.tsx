@@ -223,7 +223,8 @@ export function HomeScreen(props: HomeScreenProps) {
     ? (columnMetrics ?? screenMetrics)?.safeArea
     : undefined;
   // Wide Android lists need reading-width gutters to clear edges and camera cutouts.
-  const { width: windowWidth } = useWindowDimensions();
+  const windowDimensions = useWindowDimensions();
+  const windowWidth = (screenMetrics ?? windowDimensions).width;
   const androidListGutter =
     Platform.OS === "android"
       ? deriveCenteredContentHorizontalPadding({

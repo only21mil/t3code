@@ -301,7 +301,14 @@ function AdaptiveWorkspaceLayoutContent(
   // re-renders on any layout state change, and the inspector registration then loops: each
   // re-register re-renders its screen, which hands over a new inspector renderer.
   const baseLayout = useMemo(
-    () => deriveLayout({ width: viewportWidth, height, nativeMetrics, nativeWorkspace }),
+    () =>
+      deriveLayout({
+        width: viewportWidth,
+        height,
+        nativeMetrics,
+        nativeWorkspace,
+        floatsSidebar: Platform.OS === "android",
+      }),
     [height, viewportWidth, nativeMetrics, nativeWorkspace],
   );
   // The overlay sidebar closes when a page opens from it, and stays open on a list or on the

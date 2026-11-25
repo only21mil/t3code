@@ -135,6 +135,7 @@ export function workspaceHasColumns(metrics = currentNativeLayoutMetrics()) {
     height,
     nativeMetrics: metrics,
     nativeWorkspace: nativeWorkspaceColumnsSupportedFor(metrics),
+    floatsSidebar: Platform.OS === "android",
   }).usesSplitView;
 }
 
