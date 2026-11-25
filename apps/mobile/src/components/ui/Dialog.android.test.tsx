@@ -40,22 +40,31 @@ vi.mock("../../features/settings/appearance/useScaledTextRole", () => ({
 }));
 vi.mock("../../lib/mobileTheme", () => ({ themeColorWithContrast: () => "#ffffff" }));
 
+import { activateAppWindow, AppWindowContext, closeAppWindow } from "../../lib/appWindows";
 import * as Dialog from "./Dialog.android";
 
 const roots: Root[] = [];
 
-function mountHost() {
+// A window's root: Hosts mounted without a window share the default id.
+function mountHost(windowId = 0) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
   roots.push(root);
-  act(() => root.render(<Dialog.Host />));
+  act(() =>
+    root.render(
+      <AppWindowContext value={windowId}>
+        <Dialog.Host />
+      </AppWindowContext>,
+    ),
+  );
   return { root, container };
 }
 
 afterEach(() => {
   for (const root of roots.splice(0)) act(() => root.unmount());
+  for (const windowId of [1, 2]) act(() => closeAppWindow(windowId));
   renderedClicks.length = 0;
   document.body.innerHTML = "";
 });
@@ -157,4 +166,55 @@ it("ignores a late action from a dialog that a newer one replaced", () => {
 
   expect(olderAction).toHaveBeenCalledOnce();
   expect(container.textContent).toContain("Newer");
+});
+
+it("presents a dialog only in the window it was raised in", () => {
+  const left = mountHost(1);
+  const right = mountHost(2);
+  act(() => activateAppWindow(2));
+  act(() => activateAppWindow(1));
+
+  act(() => Dialog.confirm({ title: "Delete thread", confirmText: "Delete", onConfirm: () => {} }));
+  // The other window coming into use leaves the dialog where it was raised.
+  act(() => activateAppWindow(2));
+
+  expect(left.container.textContent).toContain("Delete thread");
+  expect(right.container.textContent).not.toContain("Delete thread");
+});
+
+it("replaces a dialog raised in one window with one raised in the other", () => {
+  const left = mountHost(1);
+  const right = mountHost(2);
+  act(() => activateAppWindow(1));
+  const onCancel = vi.fn();
+  act(() =>
+    Dialog.confirm({
+      title: "Delete thread",
+      confirmText: "Delete",
+      onConfirm: () => {},
+      onCancel,
+    }),
+  );
+
+  act(() => activateAppWindow(2));
+  act(() => Dialog.alert("Copied", undefined, [{ text: "OK" }]));
+
+  expect(onCancel).toHaveBeenCalledOnce();
+  expect(left.container.textContent).toBe("");
+  expect(right.container.textContent).toContain("Copied");
+});
+
+it("moves a dialog to the window in use once its own window closes", () => {
+  const replaced = mountHost(1);
+  act(() => activateAppWindow(1));
+  act(() => Dialog.alert("Shared content imported", undefined, [{ text: "OK" }]));
+  const replacement = mountHost(2);
+  act(() => activateAppWindow(2));
+  expect(replacement.container.textContent).toBe("");
+
+  roots.splice(roots.indexOf(replaced.root), 1);
+  act(() => replaced.root.unmount());
+  act(() => closeAppWindow(1));
+
+  expect(replacement.container.textContent).toContain("Shared content imported");
 });

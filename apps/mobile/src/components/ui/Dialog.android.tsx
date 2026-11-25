@@ -18,6 +18,13 @@ import { useScaledTextRole } from "../../features/settings/appearance/useScaledT
 import { msg, useGT } from "gt-react-native";
 import { useSyncExternalStore } from "react";
 import { m } from "../../i18n/messages";
+import {
+  activeAppWindowId,
+  isAppWindowOpen,
+  subscribeAppWindows,
+  useAppWindowId,
+  type AppWindowId,
+} from "../../lib/appWindows";
 import { themeColorWithContrast } from "../../lib/mobileTheme";
 import type { Alert, AlertButton } from "react-native";
 import type { ConfirmDialogRequest, TextInputDialogRequest } from "./Dialog.types";
@@ -36,11 +43,15 @@ type DialogRequest =
   | { readonly kind: "confirm"; readonly request: ConfirmDialogRequest }
   | { readonly kind: "text-input"; readonly request: TextInputDialogRequest };
 
-type PresentedDialog = DialogRequest & { readonly id: number };
+// `windowId` is the window in use when the dialog was raised, which is where the person asked.
+type PresentedDialog = DialogRequest & {
+  readonly id: number;
+  readonly windowId: AppWindowId | null;
+};
 
 // App services raise dialogs before the root mounts, so the request lives in
-// the module and the Host renders whatever is current. One dialog shows at a
-// time: a new request replaces the presented one.
+// the module and the window's Host renders whatever is current. One dialog
+// shows at a time: a new request replaces the presented one.
 let presented: PresentedDialog | null = null;
 let nextPresentationId = 0;
 const listeners = new Set<() => void>();
@@ -52,7 +63,7 @@ function setPresented(next: PresentedDialog | null) {
 
 function submitRequest(dialog: DialogRequest) {
   const replaced = presented;
-  setPresented({ ...dialog, id: ++nextPresentationId });
+  setPresented({ ...dialog, id: ++nextPresentationId, windowId: activeAppWindowId() });
   // A replaced dialog closed without an answer, which its owner hears as a dismissal.
   if (replaced) closeUnanswered(replaced);
 }
@@ -71,13 +82,24 @@ function dismiss(id: number) {
 
 function subscribe(listener: () => void) {
   listeners.add(listener);
+  const unsubscribeWindows = subscribeAppWindows(listener);
   return () => {
     listeners.delete(listener);
+    unsubscribeWindows();
   };
 }
 
-function getPresented() {
-  return presented;
+/**
+ * The dialog this window presents. Once its own window closed, as when Android replaces the
+ * activity, the window in use takes it over; before any window is in use, every Host shows it.
+ */
+function presentedIn(windowId: AppWindowId) {
+  if (!presented) return null;
+  const owner =
+    presented.windowId !== null && isAppWindowOpen(presented.windowId)
+      ? presented.windowId
+      : activeAppWindowId();
+  return owner === null || owner === windowId ? presented : null;
 }
 
 export function alert(...[title, message, buttons, options]: Parameters<typeof Alert.alert>): void {
@@ -101,7 +123,12 @@ export function prompt(request: TextInputDialogRequest): void {
 
 export function Host() {
   const gt = useGT();
-  const presented = useSyncExternalStore(subscribe, getPresented, getPresented);
+  const windowId = useAppWindowId();
+  const presented = useSyncExternalStore(
+    subscribe,
+    () => presentedIn(windowId),
+    () => presentedIn(windowId),
+  );
 
   const handleCancel = () => {
     if (!presented || !dismiss(presented.id)) return;

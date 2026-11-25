@@ -1,6 +1,8 @@
 import { type ReactNode, useEffect, useState, useSyncExternalStore } from "react";
 import { View } from "react-native";
 
+import { useAppWindowId, type AppWindowId } from "../../lib/appWindows";
+
 // RN Modals move native window focus and close the keyboard. Keep composer menus in-window.
 type Entries = ReadonlyMap<number, ReactNode>;
 
@@ -9,12 +11,19 @@ let nextKey = 0;
 function allocateKey() {
   return nextKey++;
 }
-const entries = new Map<number, ReactNode>();
+// Each overlay shows in the window whose root rendered it; every window has its own host.
+const entries = new Map<number, { readonly windowId: AppWindowId; readonly node: ReactNode }>();
 const listeners = new Set<() => void>();
-let snapshot: Entries = new Map();
+const snapshots = new Map<AppWindowId, Entries>();
+const NO_ENTRIES: Entries = new Map();
 
-function emit() {
-  snapshot = new Map(entries);
+function emit(windowId: AppWindowId) {
+  const next = new Map<number, ReactNode>();
+  for (const [key, entry] of entries) {
+    if (entry.windowId === windowId) next.set(key, entry.node);
+  }
+  if (next.size === 0) snapshots.delete(windowId);
+  else snapshots.set(windowId, next);
   for (const listener of listeners) {
     listener();
   }
@@ -27,12 +36,13 @@ function subscribe(listener: () => void) {
   };
 }
 
-function getSnapshot() {
-  return snapshot;
+function windowSnapshot(windowId: AppWindowId) {
+  return snapshots.get(windowId) ?? NO_ENTRIES;
 }
 
 export function OverlayPortal(props: { readonly children: ReactNode }) {
   const [key] = useState(allocateKey);
+  const windowId = useAppWindowId();
 
   // RN has no createPortal, so projecting into the out-of-tree host has to
   // happen after commit. No dependency array: re-project after every render so
@@ -40,8 +50,8 @@ export function OverlayPortal(props: { readonly children: ReactNode }) {
   // drill-in, theme).
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- projects children into the out-of-tree overlay host store after every commit
   useEffect(() => {
-    entries.set(key, props.children);
-    emit();
+    entries.set(key, { windowId, node: props.children });
+    emit(windowId);
   });
 
   // Removal is unmount-only: deleting on every re-projection would move the
@@ -50,16 +60,21 @@ export function OverlayPortal(props: { readonly children: ReactNode }) {
   useEffect(
     () => () => {
       entries.delete(key);
-      emit();
+      emit(windowId);
     },
-    [key],
+    [key, windowId],
   );
 
   return null;
 }
 
 export function OverlayPortalHost() {
-  const current = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const windowId = useAppWindowId();
+  const current = useSyncExternalStore(
+    subscribe,
+    () => windowSnapshot(windowId),
+    () => windowSnapshot(windowId),
+  );
 
   if (current.size === 0) {
     return null;

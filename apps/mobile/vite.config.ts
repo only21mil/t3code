@@ -28,6 +28,7 @@ const reactTests = [
   "src/features/pull-requests/usePullRequestDiff.test.tsx",
   "src/components/ProjectFavicon.test.tsx",
   "src/components/ui/Dialog.android.test.tsx",
+  "src/components/ui/OverlayPortal.test.tsx",
   "src/components/ui/ListToggleRow.test.tsx",
   "src/features/pull-requests/usePullRequestList.test.tsx",
   "src/components/ui/AppBar.android.test.tsx",
