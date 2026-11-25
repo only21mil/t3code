@@ -13,8 +13,9 @@ class T3WindowStateModule : Module() {
 
     View(T3WindowStateView::class) {
       Events("onWindowStateChange")
+      // NativeWindowObserver.android hears T3WindowInUse before any root mounts.
       Prop("windowId") { view: T3WindowStateView, id: Int ->
-        view.context.hostActivity()?.let { T3Windows.appWindowIds[it] = id }
+        view.context.hostActivity()?.let { T3Windows.lifecycle.listening(it, id.takeIf { id > 0 }) }
       }
     }
   }

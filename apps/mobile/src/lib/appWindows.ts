@@ -1,10 +1,9 @@
 import { createContext, use } from "react";
 
 /**
- * iOS mounts the app once per window (iPad, iPhone Duo): each window scene gets a React root of
- * its own on the one JS runtime. Module state is therefore shared by every window, and whatever
- * belongs to one window (its navigation container, its layout metrics, a sheet it presents) is
- * keyed by the id its root allocates here. Android and a one-window iPhone only ever have one.
+ * Each iOS window scene and each Android activity gets a React root on the one JS runtime. Module
+ * state is therefore shared by every window, and whatever belongs to one window (its navigation
+ * container, its layout metrics, a sheet it presents) is keyed by the id its root allocates here.
  */
 export type AppWindowId = number;
 

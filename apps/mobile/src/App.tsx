@@ -160,12 +160,20 @@ function getAppStateFromPath(
 // app remembers; Android's replacement activity still reads the link that started it.
 let launchLinkTaken = false;
 
-async function initialWindowURL(windowId: AppWindowId) {
+/**
+ * `ownLaunchURL` is the link this window's Android activity started with (null without one).
+ * getInitialURL reads whichever activity React Native serves, which can be another window.
+ */
+async function initialWindowURL(windowId: AppWindowId, ownLaunchURL: string | null | undefined) {
   const readsLaunchLink = !launchLinkTaken || Platform.OS !== "ios";
   launchLinkTaken = true;
-  return (
-    (readsLaunchLink ? await Linking.getInitialURL() : null) ?? (await launchWorkspaceURL(windowId))
-  );
+  const launchURL =
+    ownLaunchURL !== undefined
+      ? ownLaunchURL
+      : readsLaunchLink
+        ? await Linking.getInitialURL()
+        : null;
+  return launchURL ?? (await launchWorkspaceURL(windowId));
 }
 
 const appLinking = {
@@ -205,10 +213,10 @@ function linkToAppPath(href: string): void {
 }
 
 /** Every window's container hears an opened link; it belongs to the window in use. */
-function windowLinking(windowId: AppWindowId) {
+function windowLinking(windowId: AppWindowId, launchURL: string | null | undefined) {
   return {
     ...appLinking,
-    getInitialURL: () => initialWindowURL(windowId),
+    getInitialURL: () => initialWindowURL(windowId, launchURL),
     getStateFromPath: (path: string, options: Parameters<typeof getStateFromPath>[1]) =>
       getAppStateFromPath(path, options, windowId),
     subscribe: (listener: (url: string) => void) => {
@@ -338,8 +346,9 @@ function QuickActionsLanguage() {
   return null;
 }
 
-// iOS mounts this once per window, on one JS runtime: see lib/appWindows.
-export default function App() {
+// Mounted once per window (an iOS window scene or an Android activity), on one JS runtime: see
+// lib/appWindows.
+export default function App(props: { readonly launchURL?: string | null }) {
   const [windowId] = useState(allocateAppWindowId);
   return (
     <AppWindowContext value={windowId}>
@@ -347,7 +356,7 @@ export default function App() {
         <CloudAuthProvider>
           <AppearancePreferencesProvider>
             <I18nProvider>
-              <AppContent />
+              <AppContent launchURL={props.launchURL} />
             </I18nProvider>
           </AppearancePreferencesProvider>
         </CloudAuthProvider>
@@ -356,11 +365,12 @@ export default function App() {
   );
 }
 
-function AppContent() {
+function AppContent(props: { readonly launchURL: string | null | undefined }) {
   const windowId = useAppWindowId();
   const { themeAppearance } = useAppearancePreferences();
   const navigationTheme = useMobileNavigationTheme();
-  const linking = useMemo(() => windowLinking(windowId), [windowId]);
+  const launchURL = props.launchURL;
+  const linking = useMemo(() => windowLinking(windowId, launchURL), [windowId, launchURL]);
   const attachNavigation = useCallback(
     (navigation: NavigationContainerRef<ReactNavigation.RootParamList> | null) =>
       attachRootNavigation(windowId, navigation),
