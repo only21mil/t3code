@@ -14,7 +14,7 @@ import {
 import { msg } from "gt-react-native";
 import { Atom } from "effect/reactivity";
 import { useSyncExternalStore } from "react";
-import { Platform } from "react-native";
+import { Linking, Platform } from "react-native";
 import { CommonActions } from "@react-navigation/native";
 
 import {
@@ -327,12 +327,20 @@ export function presentPendingIncomingShare(): void {
   );
 }
 
-/** App-lifetime: loads the inbox and re-ingests native handoffs on every resume. */
+/** App-lifetime: loads the inbox and re-ingests native handoffs on every resume and handoff. */
 export function startIncomingShareInbox(): () => void {
   void refreshIncomingShares();
-  return receiveSharingEnabled()
-    ? subscribeAppActive(() => void refreshIncomingShares())
-    : () => {};
+  if (!receiveSharingEnabled()) return () => {};
+  const stopOnActive = subscribeAppActive(() => void refreshIncomingShares());
+  // expo-sharing hands a share to a running Android window as a `<scheme>://expo-sharing` link.
+  // Beside another resumed window the app never leaves the foreground, so the link ingests it.
+  const handoffs = Linking.addEventListener("url", ({ url }) => {
+    if (/^[\w+.-]+:\/\/expo-sharing\b/.test(url)) void refreshIncomingShares();
+  });
+  return () => {
+    stopOnActive();
+    handoffs.remove();
+  };
 }
 
 async function consumeShare(shareId: string) {
