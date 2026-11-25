@@ -512,6 +512,30 @@ export default defineConfig({
         rules: { "t3code/no-ambiguous-detail-navigation": "error" },
       },
       {
+        files: ["apps/mobile/src/**"],
+        excludeFiles: [
+          "apps/mobile/src/lib/backHandler.ts",
+          "apps/mobile/src/native/NativeWindowObserver.android.tsx",
+        ],
+        rules: {
+          "eslint/no-restricted-imports": [
+            "error",
+            {
+              paths: [
+                ...RESTRICTED_IMPORT_PATHS,
+                RESTRICTED_PULL_REQUEST_GLYPH_IMPORTS,
+                {
+                  name: "react-native",
+                  importNames: ["BackHandler"],
+                  message:
+                    "Android windows share one BackHandler list. Use useHardwareBack or addWindowBackListener from lib/backHandler, which act only on Back pressed in their own window.",
+                },
+              ],
+            },
+          ],
+        },
+      },
+      {
         // Raw ResizeObserver state commits miss the paint; observeResize flushes derived layout together.
         files: ["apps/web/src/**"],
         excludeFiles: [

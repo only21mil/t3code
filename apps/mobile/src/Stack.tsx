@@ -919,7 +919,7 @@ registerPresentedRoutes(
 export const RootStack = RootStackConfig.with(function AdaptiveRootStack({ Navigator }) {
   const windowDimensions = useWindowDimensions();
   const nativeMetrics = useNativeLayoutMetrics();
-  // Side by side on Android, React Native's window size is another window's.
+  // With several windows, React Native's one window size can be another window's.
   const { width, height } = nativeMetrics ?? windowDimensions;
   const usesSplitView = deriveLayout({
     width,
