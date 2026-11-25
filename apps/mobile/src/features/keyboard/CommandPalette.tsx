@@ -25,10 +25,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   Text as NativeText,
   TextInput,
-  useWindowDimensions,
   View,
   type TextInputInstance,
 } from "react-native";
@@ -43,7 +43,7 @@ import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { cn } from "../../lib/cn";
 import { deriveBottomControlInsets } from "../../lib/reserved-regions";
 import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
-import { useNativeLayoutMetrics } from "../../native/native-layout-metrics";
+import { useNativeLayoutMetrics, useWindowSize } from "../../native/native-layout-metrics";
 import { T3KeyboardCommands } from "../../native/T3KeyboardCommands";
 import {
   useDelegatedUnderParent,
@@ -249,10 +249,11 @@ export function CommandPalette(props: {
   const closing = useRef(false);
   const inputRef = useRef<TextInputInstance>(null);
   const listRef = useRef<LegendListRef>(null);
-  const { width, height } = useWindowDimensions();
+  const { width, height } = useWindowSize();
   // The palette floats above every column, so it keeps itself inside the window's side insets
-  // and to one side of a book fold.
-  const bounds = deriveBottomControlInsets(useNativeLayoutMetrics());
+  // and to one side of a book fold. Android keeps its placement from before multiple windows.
+  const windowMetrics = useNativeLayoutMetrics();
+  const bounds = deriveBottomControlInsets(Platform.OS === "android" ? null : windowMetrics);
   const searchEnvironmentIds = useMemo(
     () =>
       environments

@@ -9,7 +9,6 @@ import { CommonActions, useNavigation } from "@react-navigation/native";
 import {
   Keyboard,
   processColor,
-  useWindowDimensions,
   View,
   type NativeSyntheticEvent,
   type ViewProps,
@@ -32,6 +31,7 @@ import { useAndroidWorkspaceRoot } from "./AndroidWorkspaceTabsProvider";
 import { useNavigationTabOrder, useHiddenNavigationTabs } from "./navigation-tabs";
 import { useWorkspaceTabs } from "./WorkspaceTabsContext";
 import { FLOATING_TABS, floatingTabsMetrics } from "./floating-workspace-tabs";
+import { useWindowSize } from "../../../native/native-layout-metrics";
 
 // Matches RAIL_WIDTH in the native rail.
 export const ANDROID_WORKSPACE_RAIL_WIDTH = 72;
@@ -100,7 +100,7 @@ export function AndroidWorkspaceNavigation(props: {
   const { layout } = useAdaptiveWorkspaceLayout();
   const { themeAppearance, themeVariables: colors } = useAppearancePreferences();
   const { scale, fabSize } = useAndroidControlSizing();
-  const window = useWindowDimensions();
+  const window = useWindowSize();
   const rail = Boolean(props.rail);
   const floating = !rail && Boolean(props.floating);
   const tabs = [...visibleNavigationTabs(order, hidden, rail ? 5 : 4), "settings" as const];

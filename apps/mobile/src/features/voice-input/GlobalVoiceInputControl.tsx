@@ -1,7 +1,7 @@
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { useGT, useMessages } from "gt-react-native";
 import { useState, type ReactNode } from "react";
-import { Linking, Platform, Pressable, useWindowDimensions, View } from "react-native";
+import { Linking, Platform, Pressable, View } from "react-native";
 import Animated, {
   Easing,
   Extrapolation,
@@ -22,6 +22,7 @@ import { cn } from "../../lib/cn";
 import { CompactVoiceWaveform, DictationElapsedTime } from "./ComposerDictationControl";
 import { useGlobalVoiceInput } from "./VoiceInputProvider";
 import { resolveVoiceComposerPresentation } from "./voiceInputPresentation";
+import { useWindowSize } from "../../native/native-layout-metrics";
 
 const PILL_HEIGHT = 36;
 const COLLAPSED_WIDTH = 64;
@@ -73,7 +74,7 @@ function EdgeDictationPill(props: {
 }) {
   const voice = useGlobalVoiceInput();
   const insets = useSafeAreaInsets();
-  const { width } = useWindowDimensions();
+  const { width } = useWindowSize();
   const { fabSize } = useAndroidControlSizing();
   const { expanded, onExpandedChange: setExpanded } = props;
   const progress = useDerivedValue(() => withTiming(expanded ? 1 : 0, MORPH_TIMING));

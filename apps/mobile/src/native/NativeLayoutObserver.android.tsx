@@ -12,8 +12,16 @@ const Observer = requireOptionalNativeModule("T3LayoutMetrics")
   ? requireNativeView<ObserverProps>("T3LayoutMetrics")
   : null;
 
+// A screen's own observer reports nothing on Android, as before multiple windows: screens size
+// from the window's metrics (native-layout-metrics) or their own layout.
+export function NativeLayoutObserver(_props: {
+  readonly onChange?: (metrics: NativeLayoutMetrics) => void;
+}) {
+  return null;
+}
+
 /** The React root's own size and safe area: side by side, each window has its own. */
-export function NativeLayoutObserver(props: {
+export function NativeWindowLayoutObserver(props: {
   readonly onChange?: (metrics: NativeLayoutMetrics) => void;
 }) {
   return Observer ? (

@@ -4,7 +4,7 @@ import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
 import { getRecordingPermissionsAsync, requestRecordingPermissionsAsync } from "expo-audio";
 import { useState } from "react";
-import { Linking, Platform, useWindowDimensions, View } from "react-native";
+import { Linking, Platform, View } from "react-native";
 import Reanimated, { ReduceMotion, useAnimatedStyle, withTiming } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -45,6 +45,7 @@ import {
   deviceMicrophoneOrder,
   localVoiceTranscriberAtom,
 } from "../voice-input/VoiceInputProvider";
+import { useWindowSize } from "../../native/native-layout-metrics";
 
 type MicrophonePermission = "checking" | "granted" | "ask" | "denied";
 
@@ -430,7 +431,7 @@ function MicrophoneRow(props: {
   const { lifted, offset, entry, onForget } = props;
   const kind = KINDS[entry.kind];
   const title = isMicrophoneDevice(entry) ? entry.name : m(kind.row);
-  const { width: windowWidth } = useWindowDimensions();
+  const { width: windowWidth } = useWindowSize();
   const style = useAnimatedStyle(() => ({
     transform: [
       {

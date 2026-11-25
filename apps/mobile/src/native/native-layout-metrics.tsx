@@ -1,9 +1,9 @@
 import { createContext, use, useEffect, useState, type ReactNode } from "react";
-import { Platform } from "react-native";
+import { Platform, useWindowDimensions } from "react-native";
 import { activeAppWindowId, useAppWindowId, type AppWindowId } from "../lib/appWindows";
 import { deriveDeviceType, isDuoDevice, type DeviceType } from "../lib/device-type";
 import type { NativeLayoutMetrics } from "../lib/reserved-regions";
-import { NativeLayoutObserver } from "./NativeLayoutObserver";
+import { NativeWindowLayoutObserver } from "./NativeLayoutObserver";
 
 const IS_PAD = Platform.OS === "ios" && Platform.isPad;
 
@@ -72,7 +72,7 @@ export function NativeLayoutMetricsProvider(props: { readonly children: ReactNod
     <NativeLayoutMetricsDeadlineContext value={metricsDeadline}>
       <NativeLayoutContext value={metrics}>
         <DeviceTypeContext value={deviceType}>
-          <NativeLayoutObserver onChange={publish} />
+          <NativeWindowLayoutObserver onChange={publish} />
           {props.children}
         </DeviceTypeContext>
       </NativeLayoutContext>
@@ -82,6 +82,12 @@ export function NativeLayoutMetricsProvider(props: { readonly children: ReactNod
 
 export function useNativeLayoutMetrics() {
   return use(NativeLayoutContext);
+}
+
+/** This window's size. Side by side on Android, React Native's one window size is another's. */
+export function useWindowSize(): { readonly width: number; readonly height: number } {
+  const dimensions = useWindowDimensions();
+  return use(NativeLayoutContext) ?? dimensions;
 }
 
 /** Epoch ms after which a consumer still waiting for the first metrics gives up. */

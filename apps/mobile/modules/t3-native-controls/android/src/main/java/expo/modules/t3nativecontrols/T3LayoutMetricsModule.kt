@@ -44,7 +44,6 @@ class T3LayoutMetricsView(
     super.onAttachedToWindow()
     lastMetrics = null
     observedRoot = rootView.also { it.addOnLayoutChangeListener(windowLayoutListener) }
-    requestApplyInsets()
     publishMetrics()
   }
 

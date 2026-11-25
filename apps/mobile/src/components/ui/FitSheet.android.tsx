@@ -1,10 +1,11 @@
 import type { ReactNode } from "react";
-import { ScrollView, useWindowDimensions, View } from "react-native";
+import { ScrollView, View } from "react-native";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { fitSheetBottomInset, type FitSheetProps } from "./FitSheet.types";
 import { ScreenContent } from "./ScreenContent";
+import { useWindowSize } from "../../native/native-layout-metrics";
 export type { FitSheetProps } from "./FitSheet.types";
 
 /** The route sizes the sheet to this content, so the column shrinks to fit and stops short of the top. */
@@ -54,7 +55,7 @@ function SheetContainer(props: {
   readonly avoidsKeyboard?: boolean;
   readonly children: ReactNode;
 }) {
-  const { height } = useWindowDimensions();
+  const { height } = useWindowSize();
   const style = { maxHeight: height * 0.92 };
   return props.avoidsKeyboard ? (
     <KeyboardAvoidingView

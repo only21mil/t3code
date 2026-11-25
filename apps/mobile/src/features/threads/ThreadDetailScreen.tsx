@@ -95,7 +95,6 @@ import {
   AppState,
   Keyboard,
   Platform,
-  useWindowDimensions,
   View,
   type GestureResponderEvent,
   type LayoutChangeEvent,
@@ -125,7 +124,11 @@ import {
   useWorkspaceSettledContentWidth,
 } from "../layout/workspace-content-width";
 import { useNativeWorkspaceColumnsSupported } from "../../native/NativeWorkspaceColumns";
-import { useDeviceType, useNativeColumnLayoutMetrics } from "../../native/native-layout-metrics";
+import {
+  useDeviceType,
+  useNativeColumnLayoutMetrics,
+  useWindowSize,
+} from "../../native/native-layout-metrics";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { collectProviderUsageLimits } from "@t3tools/shared/usageLimits";
 import type { ComposerEditorHandle } from "../../components/ComposerEditor";
@@ -500,7 +503,7 @@ function ThreadDetailBody(
       setKeyboardStateSuspect(false);
     }
   };
-  const windowHeight = useWindowDimensions().height;
+  const windowHeight = useWindowSize().height;
   const navigationHeaderHeight = useBarOverlap();
   const [screenMetrics, setScreenMetrics] = useState<NativeLayoutMetrics | null>(null);
   const columnMetrics = useNativeColumnLayoutMetrics();

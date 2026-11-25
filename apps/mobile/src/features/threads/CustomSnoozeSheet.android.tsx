@@ -29,7 +29,7 @@ import {
 import { requireNativeModule } from "expo";
 import { msg, useGT, useMessages } from "gt-react-native";
 import { useEffect, useState } from "react";
-import { AppState, useWindowDimensions } from "react-native";
+import { AppState } from "react-native";
 
 import { OverlayPortal } from "../../components/ui/OverlayPortal";
 import { useFormattingLocale } from "../../i18n/I18nProvider";
@@ -41,6 +41,7 @@ import {
   snoozeDateToPickerDate,
   snoozePickerLabels,
 } from "./customSnoozeDate";
+import { useWindowSize } from "../../native/native-layout-metrics";
 
 type Props = {
   readonly onClose: () => void;
@@ -78,7 +79,7 @@ export function CustomSnoozeSheet(props: Props) {
   }, []);
   const titleTypography = useScaledTextRole("title");
   const bodyTypography = useScaledTextRole("footnote");
-  const { width: windowWidth } = useWindowDimensions();
+  const { width: windowWidth } = useWindowSize();
   const [mode, setMode] = useState<CustomSnoozeInput["mode"]>("date");
   const [date, setDate] = useState(() => new Date(Date.now() + 3_600_000));
   const [picker, setPicker] = useState<"date" | "time">("date");

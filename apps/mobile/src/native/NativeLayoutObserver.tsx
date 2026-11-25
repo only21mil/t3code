@@ -5,3 +5,5 @@ export function NativeLayoutObserver(_props: {
 }) {
   return null;
 }
+
+export const NativeWindowLayoutObserver = NativeLayoutObserver;

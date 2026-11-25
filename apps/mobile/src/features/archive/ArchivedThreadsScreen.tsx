@@ -16,8 +16,8 @@ import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { AppBar } from "../../components/ui/AppBar";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { T, useGT } from "gt-react-native";
-import { useMemo, useRef, type ComponentProps } from "react";
-import { useWindowDimensions, View } from "react-native";
+import { useMemo, useRef, useState, type ComponentProps } from "react";
+import { View } from "react-native";
 import { RefreshControl } from "../../components/ui/RefreshControl";
 import { GestureDetector, useNativeGesture } from "react-native-gesture-handler";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
@@ -33,6 +33,7 @@ import { useEnvironmentScope } from "../../state/session";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
 import type { ArchivedThreadGroup, ArchivedThreadSortOrder } from "./archivedThreadList";
 import { SettingsScreenContent } from "../settings/components/SettingsScreen";
+import { useWindowSize } from "../../native/native-layout-metrics";
 
 export interface ArchivedThreadsHeaderEnvironment {
   readonly environmentId: EnvironmentId;
@@ -51,7 +52,7 @@ function ArchivedThreadsHeader(props: {
 }) {
   const navigation = useNavigation();
   const gt = useGT();
-  const { width } = useWindowDimensions();
+  const { width } = useWindowSize();
   const hasCustomFilter = props.selectedEnvironmentId !== null || props.sortOrder !== "newest";
   return (
     <AppBar
@@ -185,7 +186,9 @@ function ArchivedThreadRow(props: {
   readonly onUnarchive: () => void;
   readonly thread: EnvironmentThreadShell;
 }) {
-  const { width: windowWidth } = useWindowDimensions();
+  const { width: windowWidth } = useWindowSize();
+  // The full-swipe threshold follows the row, which a split pane or window narrows.
+  const [rowWidth, setRowWidth] = useState<number | null>(null);
   const gt = useGT();
   const cardColor = useUniwindTheme()["--color-grouped-card"];
   const canOperateThread = useEnvironmentScope(
@@ -198,6 +201,7 @@ function ArchivedThreadRow(props: {
   const rowContent = (
     <View
       className={`flex-row items-center gap-3 bg-grouped-card px-4 py-3 ${props.isLast ? "" : "border-b border-separator"}`}
+      onLayout={(event) => setRowWidth(event.nativeEvent.layout.width)}
     >
       <View className="h-[34px] w-[34px] items-center justify-center rounded-[11px] bg-subtle">
         <SymbolView
@@ -254,7 +258,7 @@ function ArchivedThreadRow(props: {
       threadKey={`${props.thread.environmentId}:${props.thread.id}`}
       backgroundColor={cardColor}
       containerStyle={containerStyle}
-      fullSwipeWidth={windowWidth - 32}
+      fullSwipeWidth={rowWidth ?? windowWidth - 32}
       onDelete={props.onDelete}
       onSwipeableClose={props.onSwipeableClose}
       onSwipeableWillOpen={props.onSwipeableWillOpen}

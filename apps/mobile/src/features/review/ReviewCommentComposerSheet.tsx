@@ -3,7 +3,7 @@ import { TextInputWrapper } from "expo-paste-input";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { T, useGT } from "gt-react-native";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ScrollView, View, useWindowDimensions } from "react-native";
+import { ScrollView, View } from "react-native";
 import * as Dialog from "../../components/ui/Dialog";
 import { FilePreviewModal, type FilePreviewSource } from "../../components/ui/FilePreviewModal";
 
@@ -30,6 +30,7 @@ import { useAppearanceCodeSurface } from "../settings/appearance/useAppearanceCo
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { changeTone, DiffTokenText, ReviewChangeBar } from "./reviewDiffRendering";
 import { highlightReviewSelectedLines } from "./highlightReviewSelectedLines";
+import { useWindowSize } from "../../native/native-layout-metrics";
 
 const REVIEW_COMMENT_PREVIEW_MAX_LINES = 5;
 const NO_LINES: ReturnType<typeof getSelectedReviewCommentLines> = [];
@@ -43,7 +44,7 @@ type ReviewCommentComposerSheetProps = StaticScreenProps<{
 export function ReviewCommentComposerSheet(props: ReviewCommentComposerSheetProps) {
   const navigation = useNavigation();
   const gt = useGT();
-  const { width } = useWindowDimensions();
+  const { width } = useWindowSize();
   const { themeAppearance: selectedTheme } = useAppearancePreferences();
   const target = useReviewCommentTarget();
   const { codeSurface } = useAppearanceCodeSurface();

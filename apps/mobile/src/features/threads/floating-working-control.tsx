@@ -2,7 +2,7 @@ import type { SubagentPillSegment } from "@t3tools/client-runtime/state/thread-s
 import { GlassContainer, GlassView } from "expo-glass-effect";
 import { useGT } from "gt-react-native";
 import { Fragment, type ReactNode, useEffect, useRef, useState } from "react";
-import { type LayoutChangeEvent, Pressable, useWindowDimensions, View } from "react-native";
+import { type LayoutChangeEvent, Pressable, View } from "react-native";
 import Animated, {
   Easing,
   FadeIn,
@@ -25,6 +25,7 @@ import { BrowserPreviewButton } from "../browser/browser-preview-button";
 import { DevicePreviewButton } from "../devices/device-preview-button";
 import type { FloatingStatusAction, FloatingWorkingStatus } from "./floating-working-status";
 import { ShimmeringWorkContent } from "./thread-work-log";
+import { useWindowSize } from "../../native/native-layout-metrics";
 
 const CONTROL_HEIGHT = 38.5;
 const CONTROL_GAP = 8;
@@ -74,7 +75,7 @@ export function FloatingWorkingControl(props: {
   readonly lift?: SharedValue<number>;
 }) {
   const gt = useGT();
-  const { width: windowWidth } = useWindowDimensions();
+  const { width: windowWidth } = useWindowSize();
   const reducedMotion = useReducedMotion();
   const [overlayWidth, setOverlayWidth] = useState(windowWidth);
   const [queueWidth, setQueueWidth] = useState(0);

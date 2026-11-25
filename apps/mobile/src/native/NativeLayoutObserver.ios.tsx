@@ -30,3 +30,6 @@ export function NativeLayoutObserver(props: {
     />
   ) : null;
 }
+
+/** The window's root observer is the same view as a screen's. */
+export const NativeWindowLayoutObserver = NativeLayoutObserver;
