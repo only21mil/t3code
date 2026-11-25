@@ -107,6 +107,7 @@ import {
   allocateAppWindowId,
   AppWindowContext,
   closeAppWindow,
+  registerAppWindow,
   subscribeAppWindows,
   useAppWindowId,
   type AppWindowId,
@@ -213,7 +214,11 @@ function linkToAppPath(href: string): void {
 }
 
 /** Every window's container hears an opened link; it belongs to the window in use. */
-function windowLinking(windowId: AppWindowId, launchURL: string | null | undefined) {
+function windowLinking(
+  windowId: AppWindowId,
+  launchURL: string | null | undefined,
+  onHearsLinks: (hearsLinks: boolean) => void,
+) {
   return {
     ...appLinking,
     getInitialURL: () => initialWindowURL(windowId, launchURL),
@@ -223,7 +228,11 @@ function windowLinking(windowId: AppWindowId, launchURL: string | null | undefin
       const subscription = Linking.addEventListener("url", ({ url }) => {
         if (rootNavigationWindowStatus(windowId) === "current") listener(url);
       });
-      return () => subscription.remove();
+      onHearsLinks(true);
+      return () => {
+        onHearsLinks(false);
+        subscription.remove();
+      };
     },
   };
 }
@@ -370,16 +379,21 @@ function AppContent(props: { readonly launchURL: string | null | undefined }) {
   const { themeAppearance } = useAppearancePreferences();
   const navigationTheme = useMobileNavigationTheme();
   const launchURL = props.launchURL;
-  const linking = useMemo(() => windowLinking(windowId, launchURL), [windowId, launchURL]);
+  const [hearsLinks, setHearsLinks] = useState(false);
+  const linking = useMemo(
+    () => windowLinking(windowId, launchURL, setHearsLinks),
+    [windowId, launchURL],
+  );
   const attachNavigation = useCallback(
     (navigation: NavigationContainerRef<ReactNavigation.RootParamList> | null) =>
       attachRootNavigation(windowId, navigation),
     [windowId],
   );
 
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- registers this root's window with the store the app's services read outside React; a new window opens in use
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- registers this root's window with the store the app's services read outside React; a new window opens in use on iOS
   useEffect(() => {
-    activateAppWindow(windowId);
+    // Android activates a window once native code serves it, which may be another window by now.
+    (Platform.OS === "android" ? registerAppWindow : activateAppWindow)(windowId);
     return () => closeAppWindow(windowId);
   }, [windowId]);
 
@@ -395,6 +409,7 @@ function AppContent(props: { readonly launchURL: string | null | undefined }) {
     <>
       <SplashScreenCoordinator />
       <NativeWindowObserver
+        hearsLinks={hearsLinks}
         onChange={(state) =>
           state === "active" ? activateAppWindow(windowId) : closeAppWindow(windowId)
         }

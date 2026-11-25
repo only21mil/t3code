@@ -7,7 +7,7 @@ package expo.modules.t3nativecontrols
  * app for every window. Here the host stays resumed while any window is, serves the window in
  * use, and is destroyed only with the last window.
  */
-class T3WindowLifecycle<W : Any>(private val isGone: (W) -> Boolean) {
+class T3WindowLifecycle<W : Any, L : Any>(private val isGone: (W) -> Boolean) {
   sealed interface Step<out W> {
     /** Pass the callback on to React Native unchanged. */
     data object Forward : Step<Nothing>
@@ -41,11 +41,11 @@ class T3WindowLifecycle<W : Any>(private val isGone: (W) -> Boolean) {
   // Counts focus gains, so a loss posted before a newer gain is dropped.
   private var focusGains = 0
 
-  // Each window's id in JS (lib/appWindows), once its JS hears T3WindowInUse.
+  // Each window's id in JS (lib/appWindows), once its JS hears T3WindowInUse and its links.
   private val jsIds = mutableMapOf<W, Int>()
 
-  // The window Back was last pressed in; React Native's default Back acts on it.
-  private var backWindow: W? = null
+  // A link that reached a window before its JS could take it.
+  private val heldLinks = mutableMapOf<W, L>()
 
   val windows: List<W>
     get() = open.filterNot(isGone)
@@ -83,8 +83,8 @@ class T3WindowLifecycle<W : Any>(private val isGone: (W) -> Boolean) {
    * gain it; focus moving between windows, as a tap on the other one does, is no change.
    */
   fun focusGained(window: W): Boolean {
-    focusGains++
     if (window !== current || window !in resumed || isGone(window)) return false
+    focusGains++
     val changed = focusedWindow == null
     focusedWindow = window
     return changed
@@ -109,42 +109,58 @@ class T3WindowLifecycle<W : Any>(private val isGone: (W) -> Boolean) {
     return Step.Follow(window)
   }
 
-  /** This window's JS now hears which window Back and links came from; null when it stops. */
-  fun listening(window: W, jsId: Int?) {
-    if (jsId == null) jsIds.remove(window) else jsIds[window] = jsId
+  /**
+   * This window's JS now hears which window Back and links came from; null when it stops. Returns
+   * the link the window held meanwhile, to deliver once.
+   */
+  fun listening(window: W, jsId: Int?): L? {
+    if (jsId == null) {
+      jsIds.remove(window)
+      return null
+    }
+    jsIds[window] = jsId
+    return heldLinks.remove(window)
   }
 
   /** The window's id in JS, or null while its JS cannot tell yet that Back or a link is its own. */
   fun jsId(window: W): Int? = jsIds[window]
 
-  /** Back was pressed in this window: its [jsId]. */
-  fun backPressed(window: W): Int? {
-    backWindow = window
-    return jsId(window)
+  /** The [jsId] of a window React Native serves, which its JS then makes the active window. */
+  fun inUse(window: W): Int? = jsIds[window]?.takeIf { window === current }
+
+  /** Whether the window holds this link because its JS cannot take it yet; the latest one wins. */
+  fun holdsLink(window: W, link: L): Boolean {
+    if (window in jsIds || !isOpen(window)) return false
+    heldLinks[window] = link
+    return true
   }
 
-  /** Where React Native's default Back acts once JS declines it. */
-  fun defaultBackWindow(): W? = backWindow?.takeIf(::isOpen) ?: current
+  /** Back was pressed in this window: its [jsId]. */
+  fun backPressed(window: W): Int? = jsId(window)
+
+  /** Where React Native's default Back acts once JS declines a press from [jsId]; null once closed. */
+  fun defaultBackWindow(jsId: Int): W? =
+    jsIds.entries.firstOrNull { it.value == jsId }?.key?.takeIf(::isOpen)
 
   fun paused(window: W): Step<W> {
-    prune()
+    val lostInUse = prune()
     resumed.remove(window)
-    if (window !== current) return pauseIfNoneResumed()
-    return followLastResumed() ?: Step.Forward.also { hostResumed = false }
+    if (window === current) return followLastResumed() ?: Step.Forward.also { hostResumed = false }
+    return (if (lostInUse) followLastResumed() else null) ?: pauseIfNoneResumed()
   }
 
   /** The caller unloads this window's React root whatever the step. */
   fun destroyed(window: W): Step<W> {
     forget(window)
     val wasCurrent = window === current
-    prune()
+    val lostInUse = prune()
     return when {
       open.isEmpty() -> {
         current = null
         hostResumed = false
         Step.Forward
       }
-      wasCurrent -> {
+      wasCurrent || lostInUse -> {
         current = null
         // With no window in use, the host stays paused until another window resumes.
         followLastResumed() ?: pauseIfNoneResumed()
@@ -165,15 +181,18 @@ class T3WindowLifecycle<W : Any>(private val isGone: (W) -> Boolean) {
     open.remove(window)
     resumed.remove(window)
     jsIds.remove(window)
+    heldLinks.remove(window)
     if (focusedWindow === window) focusedWindow = null
-    if (backWindow === window) backWindow = null
   }
 
-  // A window can be gone before its own callback arrives, as when several close at once.
-  private fun prune() {
+  // A window can be gone before its own callback arrives, as when several close at once. Returns
+  // whether that cleared the window in use, which a resumed window then takes over.
+  private fun prune(): Boolean {
     open.filter(isGone).forEach(::forget)
     resumed.removeAll(isGone)
-    if (current?.let(isGone) == true) current = null
+    if (current?.let(isGone) != true) return false
+    current = null
+    return true
   }
 
   private fun followLastResumed(): Step<W>? {

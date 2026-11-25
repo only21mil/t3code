@@ -2,6 +2,7 @@ package expo.modules.t3nativecontrols
 
 import android.content.Context
 import expo.modules.kotlin.AppContext
+import expo.modules.kotlin.functions.Queues
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import expo.modules.kotlin.viewevent.EventDispatcher
@@ -11,36 +12,29 @@ class T3WindowStateModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("T3WindowState")
 
+    // NativeWindowObserver.android runs React Native's default Back in the window a press came
+    // from, which JS names by the id T3WindowInUse gave it.
+    AsyncFunction("runDefaultBack") { jsId: Int ->
+      T3Windows.runDefaultBack(jsId)
+    }.runOnQueue(Queues.MAIN)
+
     View(T3WindowStateView::class) {
       Events("onWindowStateChange")
-      // NativeWindowObserver.android hears T3WindowInUse before any root mounts.
+      // NativeWindowObserver.android hears T3WindowInUse before any root mounts, and sets the id
+      // once this window's navigation hears links.
       Prop("windowId") { view: T3WindowStateView, id: Int ->
-        view.context.hostActivity()?.let { T3Windows.lifecycle.listening(it, id.takeIf { id > 0 }) }
+        view.context.hostActivity()?.let { T3Windows.listening(it, id.takeIf { id > 0 }) }
       }
     }
   }
 }
 
-/**
- * Tells a React root about the window (activity) it is in: in use when the window gains focus,
- * as a tap does side by side, and closed once the activity is destroyed.
- */
+/** Tells a React root that the window (activity) it is in closed, once the activity is destroyed. */
 class T3WindowStateView(
   context: Context,
   appContext: AppContext
 ) : ExpoView(context, appContext) {
   private val onWindowStateChange by EventDispatcher()
-
-  override fun onAttachedToWindow() {
-    super.onAttachedToWindow()
-    // A window opens in use, as its React root assumes when it mounts.
-    onWindowStateChange(mapOf("state" to "active"))
-  }
-
-  override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
-    super.onWindowFocusChanged(hasWindowFocus)
-    if (hasWindowFocus) onWindowStateChange(mapOf("state" to "active"))
-  }
 
   override fun onDetachedFromWindow() {
     // The activity removes its views as it is destroyed, before its React root unloads.

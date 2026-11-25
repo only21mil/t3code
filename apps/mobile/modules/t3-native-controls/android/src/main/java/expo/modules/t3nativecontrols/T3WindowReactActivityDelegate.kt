@@ -10,6 +10,8 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import com.facebook.react.ReactActivity
+import com.facebook.react.ReactApplication
+import com.facebook.react.ReactHost
 import com.facebook.react.bridge.ReactContext
 import com.facebook.react.common.LifecycleState
 import com.facebook.react.defaults.DefaultReactActivityDelegate
@@ -18,16 +20,27 @@ import java.lang.ref.WeakReference
 
 /** The T3 Code windows (activities) open on the one React host, oldest first. */
 object T3Windows {
-  internal val lifecycle = T3WindowLifecycle<Activity> { it.isDestroyed }
-
-  // React Native runs its default Back once JS declines a press. It acts on the window the press
-  // came from, not the one the host serves by then.
-  internal val defaultBack = DefaultHardwareBackBtnHandler {
-    (lifecycle.defaultBackWindow() as? DefaultHardwareBackBtnHandler)?.invokeDefaultOnBackPressed()
-  }
+  internal val lifecycle = T3WindowLifecycle<Activity, Intent> { it.isDestroyed }
 
   val activities: List<Activity>
     get() = lifecycle.windows
+
+  /** A window's JS id arrived (T3WindowState); a link it held meanwhile reaches it now. */
+  internal fun listening(window: Activity, jsId: Int?) {
+    val host = (window.application as? ReactApplication)?.reactHost ?: return
+    val held = lifecycle.listening(window, jsId)
+    if (held != null) {
+      host.deliverLink(window, held)
+    } else {
+      lifecycle.inUse(window)?.let(host::announceWindowInUse)
+    }
+  }
+
+  /** JS declined a Back press from the window with this JS id; it closed if none has it now. */
+  internal fun runDefaultBack(jsId: Int) {
+    val window = lifecycle.defaultBackWindow(jsId) as? DefaultHardwareBackBtnHandler
+    window?.invokeDefaultOnBackPressed()
+  }
 }
 
 /**
@@ -57,6 +70,8 @@ open class T3WindowReactActivityDelegate(
     if (hasFocus) {
       cancelFocusLoss()
       follow(T3Windows.lifecycle.focused(window))
+      // JS activates a window only once the gate serves it, not on every native focus.
+      reactHost?.let { host -> T3Windows.lifecycle.inUse(window)?.let(host::announceWindowInUse) }
       if (T3Windows.lifecycle.focusGained(window)) super.onWindowFocusChanged(true)
       return
     }
@@ -77,21 +92,26 @@ open class T3WindowReactActivityDelegate(
   override fun onBackPressed(): Boolean {
     val id = T3Windows.lifecycle.backPressed(window) ?: return false
     follow(T3Windows.lifecycle.focused(window))
-    announceWindowInUse(id)
+    reactHost?.announceWindowInUse(id)
     return super.onBackPressed()
   }
 
   /**
    * React Native hands the link to the activity it serves, and JS opens it in the active window.
-   * Both move to this window first, even when it is paused beside a resumed one.
+   * Both move to this window first, even when it is paused beside a resumed one. Before this
+   * window's JS can take a link, the window holds it (T3Windows.listening delivers it).
    */
   override fun onNewIntent(intent: Intent?): Boolean {
-    follow(T3Windows.lifecycle.intentArrived(window))
-    T3Windows.lifecycle.jsId(window)?.let(::announceWindowInUse)
-    val handled = super.onNewIntent(intent)
-    // A paused host keeps the window it paused with, and gave ReactContext that window just now.
-    if (reactHost?.lifecycleState != LifecycleState.RESUMED) serveFromContext(window)
-    return handled
+    val host = reactHost
+    if (host == null || intent == null) return super.onNewIntent(intent)
+    val link = launchURL(intent.action, intent.dataString)
+    if (link != null && T3Windows.lifecycle.holdsLink(window, intent)) {
+      // Other listeners still hear the intent; only its link waits for this window's JS.
+      host.currentReactContext?.onNewIntent(window, intent)
+    } else {
+      host.deliverLink(window, intent)
+    }
+    return true
   }
 
   override fun onPause() {
@@ -121,28 +141,39 @@ open class T3WindowReactActivityDelegate(
     pendingFocusLoss = null
   }
 
-  // Back and opened links reach JS app-wide; JS hears their window first, on the same channel.
-  private fun announceWindowInUse(id: Int) {
-    reactHost?.currentReactContext?.emitDeviceEvent(WINDOW_IN_USE_EVENT, id)
-  }
-
   private fun follow(step: T3WindowLifecycle.Step<Activity>) {
-    val next = (step as? T3WindowLifecycle.Step.Follow)?.window ?: return
-    val host = reactHost ?: return
-    // Already resumed, the host only moves its activity to the window.
-    host.onHostResume(next, T3Windows.defaultBack)
-    // The host sets ReactContext's activity, which modules present from, only when it resumes
-    // from paused.
-    serveFromContext(next)
+    reactHost?.follow(step)
   }
+}
 
-  private fun serveFromContext(activity: Activity) {
-    val context = reactHost?.currentReactContext ?: return
-    try {
-      reactContextActivity?.set(context, WeakReference(activity))
-    } catch (error: ReflectiveOperationException) {
-      Log.w(TAG, "Could not move React Native to the window in use", error)
-    }
+// Back and opened links reach JS app-wide; JS hears their window first, on the same channel.
+private fun ReactHost.announceWindowInUse(id: Int) {
+  currentReactContext?.emitDeviceEvent(WINDOW_IN_USE_EVENT, id)
+}
+
+private fun ReactHost.follow(step: T3WindowLifecycle.Step<Activity>) {
+  val next = (step as? T3WindowLifecycle.Step.Follow)?.window ?: return
+  // Already resumed, the host only moves its activity to the window.
+  onHostResume(next, next as? DefaultHardwareBackBtnHandler)
+  // The host sets ReactContext's activity, which modules present from, only when it resumes
+  // from paused.
+  serveFromContext(next)
+}
+
+private fun ReactHost.deliverLink(window: Activity, intent: Intent) {
+  follow(T3Windows.lifecycle.intentArrived(window))
+  T3Windows.lifecycle.jsId(window)?.let(::announceWindowInUse)
+  onNewIntent(intent)
+  // A paused host keeps the window it paused with, and gave ReactContext that window just now.
+  if (lifecycleState != LifecycleState.RESUMED) serveFromContext(window)
+}
+
+private fun ReactHost.serveFromContext(activity: Activity) {
+  val context = currentReactContext ?: return
+  try {
+    reactContextActivity?.set(context, WeakReference(activity))
+  } catch (error: ReflectiveOperationException) {
+    Log.w(TAG, "Could not move React Native to the window in use", error)
   }
 }
 

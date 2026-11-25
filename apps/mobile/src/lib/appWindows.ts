@@ -27,6 +27,14 @@ export function activateAppWindow(id: AppWindowId): void {
   setWindows([...windows.filter((open) => open !== id), id]);
 }
 
+/**
+ * The window's root mounted. It is the active window only if no other window is open, until the
+ * platform reports it in use (Android's T3WindowInUse).
+ */
+export function registerAppWindow(id: AppWindowId): void {
+  if (!windows.includes(id)) setWindows([id, ...windows]);
+}
+
 /** The window closed, or its root unmounted. */
 export function closeAppWindow(id: AppWindowId): void {
   if (windows.includes(id)) setWindows(windows.filter((open) => open !== id));

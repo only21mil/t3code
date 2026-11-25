@@ -9,7 +9,7 @@ import org.junit.Test
 
 class T3WindowLifecycleTest {
   private val gone = mutableSetOf<String>()
-  private val lifecycle = T3WindowLifecycle<String> { it in gone }
+  private val lifecycle = T3WindowLifecycle<String, String> { it in gone }
 
   @Test
   fun forwardsEveryCallbackOfASingleWindow() {
@@ -282,18 +282,112 @@ class T3WindowLifecycleTest {
     assertEquals(2, lifecycle.backPressed("b"))
   }
 
-  // S7
+  // S7, T6: JS names the window each declined press came from.
   @Test
-  fun runsTheDefaultBackInTheWindowBackWasPressedIn() {
+  fun runsEachDefaultBackInTheWindowItsPressCameFrom() {
+    lifecycle.resumed("a")
+    lifecycle.listening("a", 1)
+    lifecycle.resumed("b")
+    lifecycle.listening("b", 2)
+
+    // Two presses in flight: a's, then b's, before JS declines either.
+    lifecycle.focused("a")
+    assertEquals(1, lifecycle.backPressed("a"))
+    lifecycle.focused("b")
+    assertEquals(2, lifecycle.backPressed("b"))
+    assertEquals("a", lifecycle.defaultBackWindow(1))
+    assertEquals("b", lifecycle.defaultBackWindow(2))
+
+    // a closes before JS declines its press: that default Back is dropped, not run in b.
+    lifecycle.destroyed("a")
+    assertNull(lifecycle.defaultBackWindow(1))
+    assertEquals("b", lifecycle.defaultBackWindow(2))
+  }
+
+  // T4
+  @Test
+  fun aRejectedFocusGainLeavesAPendingBlurInPlace() {
     lifecycle.resumed("a")
     lifecycle.resumed("b")
+    lifecycle.paused("b")
     lifecycle.focused("a")
-    lifecycle.backPressed("a")
+    assertTrue(lifecycle.focusGained("a"))
 
-    // b takes the host over while JS decides; the default Back still belongs to a.
+    // a loses focus; paused b claims it before the posted loss runs, and is refused.
+    val loss = lifecycle.focusToken
+    assertFalse(lifecycle.focusGained("b"))
+    assertTrue(lifecycle.focusLossLands("a", loss))
+  }
+
+  // T4
+  @Test
+  fun aWindowsJsBecomesActiveOnlyWhileTheHostServesIt() {
+    lifecycle.resumed("a")
+    lifecycle.listening("a", 1)
+    assertEquals(1, lifecycle.inUse("a"))
+    // b opens in use, but the person goes back to a before b's root mounts.
+    lifecycle.resumed("b")
+    lifecycle.focused("a")
+    lifecycle.listening("b", 2)
+
+    assertNull(lifecycle.inUse("b"))
+    assertEquals(1, lifecycle.inUse("a"))
     lifecycle.focused("b")
-    assertEquals("a", lifecycle.defaultBackWindow())
-    lifecycle.destroyed("a")
-    assertEquals("b", lifecycle.defaultBackWindow())
+    assertEquals(2, lifecycle.inUse("b"))
+    assertNull(lifecycle.inUse("a"))
+  }
+
+  // T7
+  @Test
+  fun holdsALinkUntilItsWindowsJsTakesIt() {
+    lifecycle.resumed("a")
+    lifecycle.listening("a", 1)
+    lifecycle.resumed("b")
+
+    // A link reaches b before b's JS listens: b keeps it, a never sees it.
+    assertTrue(lifecycle.holdsLink("b", "t3code://first"))
+    assertTrue(lifecycle.holdsLink("b", "t3code://second"))
+    assertFalse(lifecycle.holdsLink("a", "t3code://other"))
+    assertNull(lifecycle.listening("a", 1))
+    // Delivered once, the latest, when b's JS listens.
+    assertEquals("t3code://second", lifecycle.listening("b", 2))
+    assertNull(lifecycle.listening("b", 2))
+    assertFalse(lifecycle.holdsLink("b", "t3code://third"))
+
+    // A window that closes drops what it held.
+    lifecycle.resumed("c")
+    assertTrue(lifecycle.holdsLink("c", "t3code://lost"))
+    lifecycle.destroyed("c")
+    assertNull(lifecycle.listening("c", 3))
+  }
+
+  // T10
+  @Test
+  fun followsAResumedWindowWhenTheOneInUseIsPrunedAway() {
+    lifecycle.resumed("a")
+    lifecycle.resumed("b")
+    lifecycle.resumed("c")
+    lifecycle.paused("c")
+    assertEquals("b", lifecycle.current)
+    gone += "b"
+
+    // c's callback prunes b first: a is still resumed and takes the host over.
+    assertEquals(Step.Follow("a"), lifecycle.destroyed("c"))
+    assertEquals("a", lifecycle.current)
+  }
+
+  // T10
+  @Test
+  fun followsAResumedWindowWhenAPausePrunesTheOneInUse() {
+    lifecycle.resumed("a")
+    lifecycle.resumed("b")
+    lifecycle.resumed("c")
+    lifecycle.paused("c")
+    lifecycle.resumed("c")
+    lifecycle.focused("b")
+    gone += "b"
+
+    assertEquals(Step.Follow("a"), lifecycle.paused("c"))
+    assertEquals("a", lifecycle.current)
   }
 }
