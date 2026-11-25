@@ -1,3 +1,22 @@
+diff --git a/android/src/main/java/expo/modules/kotlin/activityresult/AppContextActivityResultRegistry.kt b/android/src/main/java/expo/modules/kotlin/activityresult/AppContextActivityResultRegistry.kt
+index 4955e93..3bbb62f 100644
+--- a/android/src/main/java/expo/modules/kotlin/activityresult/AppContextActivityResultRegistry.kt
++++ b/android/src/main/java/expo/modules/kotlin/activityresult/AppContextActivityResultRegistry.kt
+@@ -311,11 +311,13 @@ class AppContextActivityResultRegistry(
+    */
+   @MainThread
+   fun unregister(key: String) {
++    // A launch in flight keeps its callback too: another activity of the app (a second window)
++    // may have launched it, and its result still arrives through dispatchResult.
+     if (!launchedKeys.contains(key)) {
+       // Only remove the key -> requestCode mapping if there isn't a launch in flight
+       keyToRequestCode.remove(key)?.let { requestCodeToKey.remove(it) }
++      keyToCallbacksAndContract.remove(key)
+     }
+-    keyToCallbacksAndContract.remove(key)
+     if (pendingResults.containsKey(key)) {
+       Log.w(TAG, "Dropping pending result for request $key : ${pendingResults.safeGetParcelable<ActivityResult>(key)}")
+       pendingResults.remove(key)
 diff --git a/android/src/main/java/expo/modules/kotlin/views/ExpoView.kt b/android/src/main/java/expo/modules/kotlin/views/ExpoView.kt
 index c732ab419395526d42a51df664e63afe88a79302..2e3f40e1f966167584ceb853faad8f84889a9b74 100644
 --- a/android/src/main/java/expo/modules/kotlin/views/ExpoView.kt
