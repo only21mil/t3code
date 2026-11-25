@@ -1,17 +1,22 @@
+import { providerClients } from "@t3tools/client-runtime/provider-clients";
 import { normalizeProviderAccentColor } from "@t3tools/client-runtime/state/provider-instance-display";
+import type { ProviderDriverKind } from "@t3tools/contracts";
 import {
   collectLimitAccounts,
   collectLimitPools,
+  displayLimitWindows,
+  providersWithLimits,
   remainingPercent,
   type LimitAccount,
   type LimitPoolWindow,
   type LimitPresentations,
 } from "@t3tools/shared/usageLimits";
+import { cursorUsageWindowDetails } from "@t3tools/shared/usageLimitsCopy";
 import { msg } from "gt-react-native";
 
 import { m, type MessageResolver } from "../i18n/messages";
 
-import { providerColors } from "../features/usage/providerColors";
+import { providerColors, usageProviderKind } from "../features/usage/providerColors";
 import type { WidgetTheme } from "./widgetTheme";
 
 /**
@@ -146,6 +151,16 @@ function widgetAccounts(window: LimitPoolWindow, resolve: MessageResolver): Widg
 const isUpcoming = (reset: LimitPoolWindow["resets"][number]) =>
   reset.at > Date.parse(reset.member.account.limits.checkedAt);
 
+// Two-part labels that share a leading part truncate to the same text, so lead with the other part.
+function windowLabel(label: string, labels: readonly string[]) {
+  const [lead, rest, ...extra] = label.split(" · ");
+  return rest !== undefined &&
+    extra.length === 0 &&
+    labels.filter((other) => other.split(" · ")[0] === lead).length > 1
+    ? `${rest} · ${lead}`
+    : label;
+}
+
 const resetTime = (at: number) =>
   new Date(at).toLocaleString(undefined, {
     month: "short",
@@ -204,44 +219,47 @@ function subscriptionUsageText(
 function subscriptionUsageProps(
   accounts: readonly LimitAccount[],
   now: number,
-  configuredDrivers: ReadonlySet<string>,
+  configuredDrivers: ReadonlySet<ProviderDriverKind>,
   maxWindowsPerProvider: number,
   resolve: MessageResolver,
 ): SubscriptionUsageSnapshot {
   const pools = collectLimitPools(accounts, now);
-  const checked = accounts
-    .filter((account) => account.driver === "codex" || account.driver === "claudeAgent")
-    .map((account) => Date.parse(account.limits.checkedAt));
+  const checked = accounts.map((account) => Date.parse(account.limits.checkedAt));
+  const order = (driver: ProviderDriverKind) => {
+    const index = providerClients.definitions.findIndex((client) => client.driverKind === driver);
+    return index === -1 ? providerClients.definitions.length : index;
+  };
   return {
     checkedAt: checked.length > 0 && checked.every(Number.isFinite) ? Math.min(...checked) : 0,
-    providers: (["codex", "claudeAgent"] as const)
-      .filter(
-        (driver) =>
-          configuredDrivers.has(driver) || accounts.some((account) => account.driver === driver),
-      )
+    providers: [...new Set([...pools.map((pool) => pool.driver), ...configuredDrivers])]
+      .sort((a, b) => order(a) - order(b))
       .map((driver) => {
         const pool = pools.find((candidate) => candidate.driver === driver);
-        const name = driver === "codex" ? "Codex" : "Claude";
-        const kind = driver === "codex" ? "codex" : "claude";
-        const colors = { light: providerColors("light")[kind], dark: providerColors("dark")[kind] };
+        const name = providerClients.get(driver)?.label ?? driver;
+        const kind = usageProviderKind(driver);
+        // expo-widgets cannot convert an explicit undefined into a Kotlin value.
+        const colors = kind && {
+          colors: { light: providerColors("light")[kind], dark: providerColors("dark")[kind] },
+        };
         if (!pool)
           return {
             name,
-            colors,
+            ...colors,
             detail: resolve(msg("No limits available")),
             windows: [],
             expiresAt: 0,
             totalWindows: 0,
           };
         const checkedAt = Math.min(...pool.accounts.map((a) => Date.parse(a.limits.checkedAt)));
+        const poolWindows = displayLimitWindows(pool);
         const expiresAt = Math.min(
           checkedAt + SNAPSHOT_MAX_AGE,
-          ...pool.windows.flatMap((window) =>
+          ...poolWindows.flatMap((window) =>
             window.resets.filter(isUpcoming).map((reset) => reset.at),
           ),
         );
         const fresh = Number.isFinite(expiresAt) && expiresAt > now;
-        const sortedWindows = [...pool.windows].sort(
+        const sortedWindows = [...poolWindows].sort(
           (a, b) => a.remainingPercent - b.remainingPercent,
         );
         const selectedWindows = [
@@ -254,9 +272,14 @@ function subscriptionUsageProps(
           .filter((window) => window !== undefined)
           .slice(0, maxWindowsPerProvider)
           .sort((a, b) => a.remainingPercent - b.remainingPercent);
+        const labelOf = (window: LimitPoolWindow) =>
+          (pool.driver === "cursor"
+            ? cursorUsageWindowDetails(window.id, pool, resolve)?.label
+            : undefined) ?? window.label;
+        const selectedLabels = selectedWindows.map(labelOf);
         return {
           name,
-          colors,
+          ...colors,
           detail: !fresh
             ? resolve(msg("Open {app} to refresh", { app: "T3" }))
             : pool.accounts.length > 1
@@ -270,11 +293,11 @@ function subscriptionUsageProps(
                 )
               : resolve(msg("Subscription remaining")),
           expiresAt: fresh ? expiresAt : 0,
-          totalWindows: fresh ? pool.windows.length : 0,
+          totalWindows: fresh ? poolWindows.length : 0,
           windows: fresh
             ? selectedWindows.map((window) => ({
                 kind: window.kind,
-                label: window.label,
+                label: windowLabel(labelOf(window), selectedLabels),
                 remaining: Math.round(window.remainingPercent),
                 reset: window.resets[0]
                   ? isUpcoming(window.resets[0])
@@ -297,14 +320,8 @@ export function buildSubscriptionUsageSnapshot(
 ): SubscriptionUsageSnapshot {
   const configuredDrivers = new Set(
     [...presentations.values()].flatMap((presentation) =>
-      (presentation.serverConfig?.providers ?? [])
-        // Servers report default-enabled drivers even when their CLI is missing.
-        .filter(
-          (provider) =>
-            provider.enabled &&
-            provider.installed &&
-            provider.usageLimits?.unavailable?.reason !== "unsupported",
-        )
+      providersWithLimits(presentation.serverConfig?.providers ?? [])
+        .filter((provider) => provider.usageLimits?.unavailable?.reason !== "unsupported")
         .map((provider) => provider.driver),
     ),
   );

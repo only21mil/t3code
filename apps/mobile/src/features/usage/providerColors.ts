@@ -1,4 +1,12 @@
-import type { UsageProviderKind } from "@t3tools/contracts";
+import { UsageProviderKind } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
+
+const isUsageProviderKind = Schema.is(UsageProviderKind);
+
+export function usageProviderKind(driver: string): UsageProviderKind | null {
+  if (driver === "claudeAgent") return "claude";
+  return isUsageProviderKind(driver) ? driver : null;
+}
 
 export function providerColors(scheme: "light" | "dark"): Record<UsageProviderKind, string> {
   return {

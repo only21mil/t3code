@@ -34,7 +34,8 @@ import type { MessageResolver } from "../../i18n/messages";
 import { SettingsScreen } from "../settings/components/SettingsScreen";
 import { environmentPresentations } from "../../state/presentation";
 import { refillLabel, ResetCredits, resetLabels } from "./UsageLimitsSection";
-import { usageProviderKind, useProviderColors } from "./usageProviders";
+import { usageProviderKind } from "./providerColors";
+import { useProviderColors } from "./usageProviders";
 
 const PACE_LABEL = {
   ahead: msg("Ahead of pace"),

@@ -39,7 +39,8 @@ import {
   limitsRefreshFailuresAtom,
   refreshEnvironmentLimits,
 } from "./usageLimitsRefresh";
-import { usageProviderKind, useProviderColors } from "./usageProviders";
+import { usageProviderKind } from "./providerColors";
+import { useProviderColors } from "./usageProviders";
 
 const PACE_LABEL = {
   ahead: msg("ahead of pace"),

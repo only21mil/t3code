@@ -5,12 +5,15 @@ import {
   UsageLimitSourceId,
   type ServerProvider,
 } from "@t3tools/contracts";
+import { collectLimitAccounts, collectLimitPools } from "@t3tools/shared/usageLimits";
+import { cursorUsageWindowDetails } from "@t3tools/shared/usageLimitsCopy";
 import { describe, expect, it, vi } from "vite-plus/test";
 import {
   buildSubscriptionUsageSnapshot,
   createWidgetRefresher,
   WIDGET_REFRESH_INTERVAL,
 } from "./subscriptionUsageSnapshot";
+import { m } from "../i18n/messages";
 
 const checkedAt = "2026-09-05T12:00:00.000Z";
 const now = Date.parse(checkedAt);
@@ -182,6 +185,122 @@ describe("subscription widget snapshots", () => {
     const snapshot = buildSubscriptionUsageSnapshot(input, deepLink);
     expect(snapshot.providers[0]?.detail).toBe("Subscription remaining");
     expect(snapshot.providers[0]?.windows[0]?.remaining).toBe(20);
+  });
+  it("shows every provider that reports limits, Codex and Claude first", () => {
+    const driver = (id: string, overrides: Partial<ServerProvider> = {}) =>
+      provider({
+        instanceId: ProviderInstanceId.make(id),
+        driver: ProviderDriverKind.make(id),
+        auth: { status: "authenticated", email: `${id}@example.com` },
+        ...overrides,
+      });
+    const antigravity = driver("antigravity", {
+      usageLimits: {
+        checkedAt: "2026-09-05T11:00:00.000Z",
+        windows: [{ ...window, id: "gemini", label: "Gemini Pro", usedPercent: 70 }],
+      },
+    });
+    const claude = driver("claudeAgent");
+
+    const withoutCodex = buildSubscriptionUsageSnapshot(
+      presentations([claude, antigravity]),
+      deepLink,
+    );
+    expect(withoutCodex.providers.map((p) => p.name)).toStrictEqual(["Claude", "Antigravity"]);
+    expect(withoutCodex.providers[1]).toMatchObject({
+      colors: { light: "#8c7bd1", dark: "#8c7bd1" },
+      windows: [{ label: "Gemini Pro", remaining: 30 }],
+    });
+
+    const all = buildSubscriptionUsageSnapshot(
+      presentations([driver("newAgent"), antigravity, claude, provider()]),
+      deepLink,
+    );
+    expect(all.providers.map((p) => p.name)).toStrictEqual([
+      "Codex",
+      "Claude",
+      "Antigravity",
+      "newAgent",
+    ]);
+    expect(Object.hasOwn(all.providers[3]!, "colors")).toBe(false);
+    expect(all.checkedAt).toBe(Date.parse("2026-09-05T11:00:00.000Z"));
+  });
+  it("leaves out a configured provider that never reports limits or is unavailable", () => {
+    const snapshot = buildSubscriptionUsageSnapshot(
+      presentations([
+        provider(),
+        provider({
+          instanceId: ProviderInstanceId.make("opencode"),
+          driver: ProviderDriverKind.make("opencode"),
+          usageLimits: undefined,
+        }),
+        provider({
+          instanceId: ProviderInstanceId.make("cursor"),
+          driver: ProviderDriverKind.make("cursor"),
+          availability: "unavailable",
+        }),
+      ]),
+      deepLink,
+    );
+    expect(snapshot.providers.map((p) => p.name)).toStrictEqual(["Codex"]);
+  });
+  it("hides Cursor's duplicate overall window and labels windows as Limits does", () => {
+    const cursor = presentations([
+      provider({
+        instanceId: ProviderInstanceId.make("cursor"),
+        driver: ProviderDriverKind.make("cursor"),
+        usageLimits: {
+          checkedAt,
+          windows: ["totalPercentUsed", "autoPercentUsed", "apiPercentUsed"].map((id) => ({
+            ...window,
+            id,
+            kind: "monthly" as const,
+            label: id,
+          })),
+        },
+      }),
+    ]);
+    const snapshot = buildSubscriptionUsageSnapshot(cursor, deepLink);
+    const [pool] = collectLimitPools(collectLimitAccounts(cursor), 0);
+    expect(snapshot.providers[0]?.windows.map((w) => w.label)).toStrictEqual(
+      ["autoPercentUsed", "apiPercentUsed"].map(
+        (id) => cursorUsageWindowDetails(id, pool!, m)?.label,
+      ),
+    );
+    expect(snapshot.providers[0]?.totalWindows).toBe(2);
+  });
+  it("leads with the part that tells windows of one provider apart", () => {
+    const labels = (driver: string, windowLabels: readonly string[]) =>
+      buildSubscriptionUsageSnapshot(
+        presentations([
+          provider({
+            instanceId: ProviderInstanceId.make(driver),
+            driver: ProviderDriverKind.make(driver),
+            usageLimits: {
+              checkedAt,
+              windows: windowLabels.map((label, index) => ({
+                ...window,
+                id: `${index}`,
+                label,
+                usedPercent: 90 - index * 10,
+              })),
+            },
+          }),
+        ]),
+        deepLink,
+      ).providers[0]?.windows.map((w) => w.label);
+    expect(
+      labels("antigravity", [
+        "Gemini · 5-hour",
+        "Gemini · Weekly",
+        "Claude & GPT (shared) · Weekly",
+      ]),
+    ).toStrictEqual(["5-hour · Gemini", "Weekly · Gemini", "Claude & GPT (shared) · Weekly"]);
+    expect(labels("claudeAgent", ["Session", "Weekly · Sonnet", "Weekly · Opus"])).toStrictEqual([
+      "Session",
+      "Sonnet · Weekly",
+      "Opus · Weekly",
+    ]);
   });
 });
 

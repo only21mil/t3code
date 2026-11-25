@@ -78,12 +78,29 @@ function SubscriptionUsage(
     // oxlint-disable-next-line t3code/no-untranslated-copy -- widget fallback until the app publishes translated text
     { name: "Claude", detail: "Open T3 to connect", windows: [], expiresAt: 0 },
   ];
-  const columns = providers.map((provider) => {
+  const crowded = providers.length > 2;
+  const captionRows =
+    accessory || (crowded && (family !== "systemExtraLarge" || providers.length > 4));
+  const cap = accessory ? 3 : family === "systemLarge" || family === "systemExtraLarge" ? 8 : 4;
+  // Past the cap, the "more in T3" line takes the last row's place.
+  const listed = captionRows
+    ? providers.slice(0, accessory || providers.length <= cap ? cap : cap - 1)
+    : providers;
+  const unlisted = providers.length - listed.length;
+  const moreInApp = (count: number) => text.moreInApp[String(count)] ?? `${count} more in T3`;
+  const percentColor = (remaining: number) =>
+    remaining <= 10 && !monochrome
+      ? (palette?.danger ?? (widgetEnvironment.colorScheme === "light" ? "#dc2626" : "#fca5a5"))
+      : primary;
+  const columns = listed.map((provider) => {
     const stale = provider.windows.length > 0 && now >= provider.expiresAt;
-    const period =
-      widgetEnvironment.configuration?.[
-        provider.name === "Claude" ? "claudePeriod" : "codexPeriod"
-      ] ?? "auto";
+    const periodSetting =
+      provider.name === "Claude"
+        ? "claudePeriod"
+        : provider.name === "Codex"
+          ? "codexPeriod"
+          : undefined;
+    const period = (periodSetting && widgetEnvironment.configuration?.[periodSetting]) ?? "auto";
     const windows = stale
       ? []
       : provider.windows.filter((window) => period === "auto" || window.kind === period);
@@ -122,7 +139,7 @@ function SubscriptionUsage(
       frame({ height: 4 }),
       ...(monochrome ? [] : [tint(provider.name === "Claude" ? "#d97757" : "#8e8e93")]),
     ];
-    if (accessory) {
+    if (captionRows) {
       return (
         <VStack
           key={provider.name}
@@ -153,7 +170,7 @@ function SubscriptionUsage(
               ]}
             >
               {provider.name}
-              {tightest ? ` · ${tightest.label}` : ""}
+              {tightest && family !== "systemSmall" ? ` · ${tightest.label}` : ""}
             </Text>
             <Spacer />
             <Text
@@ -161,7 +178,7 @@ function SubscriptionUsage(
                 font({ textStyle: "caption", weight: "semibold" }),
                 lineLimit(1),
                 layoutPriority(1),
-                foregroundStyle(primary),
+                foregroundStyle(tightest ? percentColor(tightest.remaining) : primary),
               ]}
             >
               {tightest
@@ -171,7 +188,7 @@ function SubscriptionUsage(
                   : text.openApp}
             </Text>
           </HStack>
-          {tightest ? (
+          {tightest && !(accessory && crowded) ? (
             <ProgressView value={tightest.remaining / 100} modifiers={barModifiers} />
           ) : null}
         </VStack>
@@ -239,12 +256,7 @@ function SubscriptionUsage(
                   }),
                   lineLimit(1),
                   layoutPriority(1),
-                  foregroundStyle(
-                    window.remaining <= 10 && !monochrome
-                      ? (palette?.danger ??
-                          (widgetEnvironment.colorScheme === "light" ? "#dc2626" : "#fca5a5"))
-                      : primary,
-                  ),
+                  foregroundStyle(percentColor(window.remaining)),
                 ]}
               >
                 {text.percentLeft.replace("{remaining}", String(window.remaining))}
@@ -262,8 +274,7 @@ function SubscriptionUsage(
           <Text
             modifiers={[font({ textStyle: "caption2" }), foregroundStyle(secondary), lineLimit(1)]}
           >
-            {/* oxlint-disable-next-line t3code/no-untranslated-copy -- widget fallback until the app publishes translated text */}
-            {text.moreInApp[String(hiddenCount)] ?? `${hiddenCount} more in T3`}
+            {moreInApp(hiddenCount)}
           </Text>
         ) : null}
       </VStack>
@@ -287,9 +298,20 @@ function SubscriptionUsage(
         <Text modifiers={[font({ textStyle: "caption" }), foregroundStyle(secondary)]}>
           {text.noLimits}
         </Text>
-      ) : compact ? (
+      ) : compact || captionRows ? (
         <VStack alignment="leading" spacing={accessory || dense ? 4 : 8}>
           {columns}
+          {!accessory && unlisted > 0 ? (
+            <Text
+              modifiers={[
+                font({ textStyle: "caption2" }),
+                foregroundStyle(secondary),
+                lineLimit(1),
+              ]}
+            >
+              {moreInApp(unlisted)}
+            </Text>
+          ) : null}
         </VStack>
       ) : (
         <HStack alignment="top" spacing={16}>
