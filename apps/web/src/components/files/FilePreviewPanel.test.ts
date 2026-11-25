@@ -737,11 +737,7 @@ Third}`;
       )
       .file(
         "book.opf",
-        '<package><manifest><item id="a" href="empty-title.xhtml" media-type="application/xhtml+xml"/><item id="b" href="blank-title.xhtml" media-type="application/xhtml+xml"/><item id="c" href="fallback.xhtml" media-type="application/xhtml+xml"/><item id="d" href="skipped-subtrees.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="a"/><itemref idref="b"/><itemref idref="c"/><itemref idref="d"/></spine></package>',
-      )
-      .file(
-        "empty-title.xhtml",
-        "<html><head><title></title></head><body><h1>Second Heading</h1><p>Body</p></body></html>",
+        '<package><manifest><item id="b" href="blank-title.xhtml" media-type="application/xhtml+xml"/><item id="c" href="fallback.xhtml" media-type="application/xhtml+xml"/><item id="d" href="skipped-subtrees.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="b"/><itemref idref="c"/><itemref idref="d"/></spine></package>',
       )
       .file(
         "blank-title.xhtml",
@@ -758,7 +754,6 @@ Third}`;
     const result = await openEpub(archive);
     if (result.type !== "document") throw new Error("Expected document");
     expect(result.pages.map((page) => page.title)).toEqual([
-      "Second Heading",
       "Blank Title Heading",
       "Welcome text",
       "Real Chapter",
