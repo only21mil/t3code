@@ -3,6 +3,19 @@ const { AndroidConfig, withAndroidManifest, withMainActivity } = require("expo/c
 // FULL_USER respects rotation lock. Foldables change smallestScreenWidthDp without recreating the activity.
 // A split-screen pane is unlocked too: Android letterboxes a portrait lock in a landscape-shaped pane.
 
+const MULTI_WINDOW_METHOD = `
+  override fun onMultiWindowModeChanged(isInMultiWindowMode: Boolean, newConfig: Configuration) {
+    super.onMultiWindowModeChanged(isInMultiWindowMode, newConfig)
+    applyTabletOrientation()
+  }
+`;
+
+const ORIENTATION_CONDITION =
+  "requestedOrientation = if (isInMultiWindowMode || resources.configuration.smallestScreenWidthDp >= 600)";
+// Native projects prebuilt before split-screen panes were unlocked.
+const PHONE_ONLY_CONDITION =
+  "requestedOrientation = if (resources.configuration.smallestScreenWidthDp >= 600)";
+
 const ORIENTATION_METHODS = `
   // Applied in onCreate and re-applied on fold/unfold; added by
   // withAndroidTabletOrientation.
@@ -10,14 +23,9 @@ const ORIENTATION_METHODS = `
     super.onConfigurationChanged(newConfig)
     applyTabletOrientation()
   }
-
-  override fun onMultiWindowModeChanged(isInMultiWindowMode: Boolean, newConfig: Configuration) {
-    super.onMultiWindowModeChanged(isInMultiWindowMode, newConfig)
-    applyTabletOrientation()
-  }
-
+${MULTI_WINDOW_METHOD}
   private fun applyTabletOrientation() {
-    requestedOrientation = if (isInMultiWindowMode || resources.configuration.smallestScreenWidthDp >= 600) {
+    ${ORIENTATION_CONDITION} {
       ActivityInfo.SCREEN_ORIENTATION_FULL_USER
     } else {
       ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
@@ -63,6 +71,13 @@ module.exports = function withAndroidTabletOrientation(config) {
         ORIENTATION_METHODS,
         "the MainActivity class declaration",
       );
+    } else if (contents.includes(PHONE_ONLY_CONDITION)) {
+      contents = contents
+        .replace(PHONE_ONLY_CONDITION, ORIENTATION_CONDITION)
+        .replace(
+          "\n  private fun applyTabletOrientation()",
+          `${MULTI_WINDOW_METHOD}\n  private fun applyTabletOrientation()`,
+        );
     }
 
     // Relocate the call in existing native projects too, before splash setup and React content.

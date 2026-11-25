@@ -8,6 +8,7 @@ import android.content.ClipData
 import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.pm.ProviderInfo
 import android.net.Uri
 import android.view.DragEvent
@@ -273,9 +274,9 @@ class ComposerPasteTest {
     )
   }
 
-  private fun dropEditor(): SelectionAwareEditText {
+  private fun dropEditor(wrapActivity: Boolean = false): SelectionAwareEditText {
     val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
-    return SelectionAwareEditText(activity).apply {
+    return SelectionAwareEditText(if (wrapActivity) ContextWrapper(activity) else activity).apply {
       activity.setContentView(this)
       isFocusableInTouchMode = true
       setText("before")
@@ -327,6 +328,19 @@ class ComposerPasteTest {
       received
     )
     assertEquals("before", target.text.toString())
+  }
+
+  @Test
+  fun imageDropUsesTheWindowReactNativeMountedTheComposerIn() {
+    // React Native views get a ThemedReactContext, which wraps their window's activity.
+    val target = dropEditor(wrapActivity = true)
+    val received = mutableListOf<List<String>>()
+    target.pasteImagesListener = { received.add(it) }
+    val clip = imageClip("screenshot.png")
+
+    assertTrue(target.onDragEvent(dragEvent(clip, DragEvent.ACTION_DRAG_STARTED)))
+    assertTrue(target.onDragEvent(dragEvent(clip)))
+    assertEquals(listOf(listOf("content://images/screenshot.png")), received)
   }
 
   @Test

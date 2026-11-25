@@ -120,6 +120,7 @@ import {
   rootNavigationRef,
   rootNavigationRoutes,
 } from "./lib/rootNavigation";
+import { isBackForWindow } from "./lib/backHandler";
 import { pruneNewTaskFlowStates } from "./features/threads/new-task-flow-state";
 import { pruneNewTaskBranchCheckouts } from "./features/threads/NewTaskDraftRouteScreen";
 import { installAppUpdateChecks } from "./features/updates/app-updates";
@@ -406,6 +407,7 @@ function AppContent() {
                     onReady={handleNavigationReady}
                     theme={navigationTheme}
                     onStateChange={handleNavigationStateChange}
+                    shouldHandleBackButton={() => isBackForWindow(windowId)}
                   />
                 </NavigationIndependentTree>
                 <Dialog.Host />

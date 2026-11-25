@@ -1,7 +1,9 @@
 import { useGT } from "gt-react-native";
 import { useEffect, useState } from "react";
 import { useNavigation, useNavigationState } from "@react-navigation/native";
-import { BackHandler, Keyboard } from "react-native";
+import { Keyboard } from "react-native";
+import { useAppWindowId } from "../../../lib/appWindows";
+import { addWindowBackListener } from "../../../lib/backHandler";
 
 import { AppBar } from "../../../components/ui/AppBar";
 import { useWorkspaceConnectionState } from "../../../state/workspace";
@@ -16,6 +18,7 @@ import {
 export function WorkspaceListHeader(props: WorkspaceListHeaderProps) {
   const gt = useGT();
   const navigation = useNavigation();
+  const windowId = useAppWindowId();
   const workspace = useWorkspaceTabs();
   const isTabActive = workspace?.isTabActive;
   const homeFocused = useNavigationState((state) => state.routes[state.index]?.name === "Home");
@@ -42,7 +45,7 @@ export function WorkspaceListHeader(props: WorkspaceListHeaderProps) {
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to BackHandler while searching to close search on Android back
   useEffect(() => {
     if (!searching || !listFocused) return;
-    const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+    const subscription = addWindowBackListener(windowId, () => {
       // Frozen Home screens can keep effects alive after a detail route opens.
       const state = navigation.getState();
       if (
@@ -56,7 +59,7 @@ export function WorkspaceListHeader(props: WorkspaceListHeaderProps) {
       return true;
     });
     return () => subscription.remove();
-  }, [closeSearch, searching, listFocused, navigation, isTabActive]);
+  }, [closeSearch, searching, listFocused, navigation, isTabActive, windowId]);
 
   return (
     <AppBar

@@ -14,6 +14,8 @@ import {
 } from "./adaptive-workspace-context";
 import { threadSelectionDeferral } from "./deferred-navigation";
 import { uuidv4 } from "../../lib/uuid";
+import { useAppWindowId } from "../../lib/appWindows";
+import { addWindowBackListener } from "../../lib/backHandler";
 import { EnvironmentId, ThreadId, type SidebarProjectGroupingMode } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import {
@@ -32,14 +34,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import {
-  BackHandler,
-  Keyboard,
-  Platform,
-  Pressable,
-  useWindowDimensions,
-  View,
-} from "react-native";
+import { Keyboard, Platform, Pressable, useWindowDimensions, View } from "react-native";
 import Animated, {
   runOnJS,
   useAnimatedStyle,
@@ -287,6 +282,7 @@ function AdaptiveWorkspaceLayoutContent(
         workspace !== undefined &&
         !workspaceUsesColumns(workspace.state.selectedTab)));
   const navigation = useNavigation();
+  const windowId = useAppWindowId();
   const [primarySidebarPreferredVisible, setPrimarySidebarPreferredVisible] = useState(true);
   const [fileInspectorPreferredVisible, setFileInspectorPreferredVisible] = useState(true);
   const [nativeInspectorWidthFraction, setNativeInspectorWidthFraction] = useState(0.4);
@@ -853,7 +849,7 @@ function AdaptiveWorkspaceLayoutContent(
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Back closes a floating sidebar before it leaves the page
   useEffect(() => {
     if (!floatingSidebarOpen || nativeWorkspace) return;
-    const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+    const subscription = addWindowBackListener(windowId, () => {
       // A sheet or modal over the workspace takes Back first.
       const state = rootStackState(navigation);
       if (state && workspaceRoutesOf(state.routes.slice(0, state.index + 1)).overlays.length > 0) {
@@ -863,7 +859,7 @@ function AdaptiveWorkspaceLayoutContent(
       return true;
     });
     return () => subscription.remove();
-  }, [floatingSidebarOpen, nativeWorkspace, navigation, setPrimarySidebarVisible]);
+  }, [floatingSidebarOpen, nativeWorkspace, navigation, setPrimarySidebarVisible, windowId]);
   // Showing or hiding the sidebar clips a fixed-width list. A hinge resize instead tracks the
   // animated edge, so the header actions slide with it rather than jumping or being covered.
   const listPaneGap = layout.listPaneGap ?? 0;

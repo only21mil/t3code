@@ -119,6 +119,7 @@ overrides:
   "@legendapp/list": 3.9.0
   "@pierre/diffs": 1.7.0-beta.4
   "@react-native-menu/menu": 2.0.0
+  "@react-navigation/native": 7.5.1
   "@react-navigation/native-stack": 7.21.0
   dbus-next: 0.10.2
   node-pty: 1.2.0-beta.15
@@ -253,6 +254,9 @@ patchedDependencies:
   # and keeps drag selections intact across virtualized scroll renders.
   "@pierre/diffs@1.7.0-beta.4": patches/@pierre__diffs@1.7.0-beta.4.patch
   "@react-native-menu/menu@2.0.0": patches/@react-native-menu__menu@2.0.0.patch
+  # Android windows share one JS runtime and BackHandler; each window's container takes Back only
+  # when it was pressed in that window.
+  "@react-navigation/native@7.5.1": patches/@react-navigation__native@7.5.1.patch
   "@react-navigation/native-stack@7.21.0": patches/@react-navigation%2Fnative-stack@7.21.0.patch
   dbus-next@0.10.2: patches/dbus-next@0.10.2.patch
   node-pty@1.2.0-beta.15: patches/node-pty@1.2.0-beta.15.patch

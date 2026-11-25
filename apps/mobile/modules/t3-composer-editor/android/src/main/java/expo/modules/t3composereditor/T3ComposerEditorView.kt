@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.ContextWrapper
 import android.graphics.Color
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -50,7 +51,7 @@ class T3ComposerEditorView(context: Context, appContext: AppContext) : ExpoView(
   // React Native ignores the editor's requestLayout(), which makes TextView defer caret scrolls.
   override val shouldUseAndroidLayout = true
 
-  private val editor = SelectionAwareEditText(context) { appContext.currentActivity }
+  private val editor = SelectionAwareEditText(context)
   private val defaultHighlightColor = editor.highlightColor
   private val defaultSelectionColor = context.resolveThemeColor(
     android.R.attr.colorAccent,
@@ -627,7 +628,11 @@ private fun parseTokens(value: String): List<ComposerToken> = try {
 
 internal class SelectionAwareEditText(
   context: Context,
-  private val currentActivity: () -> Activity? = { context as? Activity }
+  // The composer's own window: each Android window is an activity, which ThemedReactContext wraps.
+  private val currentActivity: () -> Activity? = {
+    generateSequence(context) { (it as? ContextWrapper)?.baseContext }
+      .firstNotNullOfOrNull { it as? Activity }
+  }
 ) : EditText(context) {
   var readOnly = false
   var selectionListener: ((Int, Int) -> Unit)? = null

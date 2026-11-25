@@ -1,0 +1,179 @@
+diff --git a/lib/module/NavigationContainer.js b/lib/module/NavigationContainer.js
+index eb131bab086f3e42dd4d0fdba20fa820ee2b6881..be656a118b8719193539934c34dd86178457fe45 100644
+--- a/lib/module/NavigationContainer.js
++++ b/lib/module/NavigationContainer.js
+@@ -18,6 +18,7 @@ function NavigationContainerInner({
+   linking,
+   fallback = null,
+   documentTitle,
++  shouldHandleBackButton,
+   ...rest
+ }, ref) {
+   const isLinkingEnabled = linking ? linking.enabled !== false : false;
+@@ -25,7 +26,7 @@ function NavigationContainerInner({
+     validatePathConfig(linking.config);
+   }
+   const refContainer = React.useRef(null);
+-  useBackButton(refContainer);
++  useBackButton(refContainer, shouldHandleBackButton);
+   useDocumentTitle(refContainer, documentTitle);
+   const {
+     getInitialState
+diff --git a/lib/module/useBackButton.native.js b/lib/module/useBackButton.native.js
+index 0c3038485bd42e03deb1434c9e3f80698002dce5..ccd5d86317bd2fd929a430b801926434203bd384 100644
+--- a/lib/module/useBackButton.native.js
++++ b/lib/module/useBackButton.native.js
+@@ -2,14 +2,16 @@
+ 
+ import * as React from 'react';
+ import { BackHandler } from 'react-native';
+-export function useBackButton(ref) {
++import useLatestCallback from 'use-latest-callback';
++export function useBackButton(ref, shouldHandleBackButton) {
++  const shouldHandle = useLatestCallback(() => shouldHandleBackButton?.() ?? true);
+   React.useEffect(() => {
+     // eslint-disable-next-line @eslint-react/web-api/no-leaked-event-listener
+     const subscription = BackHandler.addEventListener('hardwareBackPress',
+     // eslint-disable-next-line @eslint-react/web-api/no-leaked-event-listener
+     () => {
+       const navigation = ref.current;
+-      if (navigation == null) {
++      if (navigation == null || !shouldHandle()) {
+         return false;
+       }
+       if (navigation.canGoBack()) {
+@@ -19,6 +21,6 @@ export function useBackButton(ref) {
+       return false;
+     });
+     return () => subscription.remove();
+-  }, [ref]);
++  }, [ref, shouldHandle]);
+ }
+ //# sourceMappingURL=useBackButton.native.js.map
+\ No newline at end of file
+diff --git a/lib/typescript/src/NavigationContainer.d.ts b/lib/typescript/src/NavigationContainer.d.ts
+index 9f4ea0ceabc0b917a4fa9444d8f71b722ae2d7a6..e6d31ff62143902acb080336293530281be7c7d4 100644
+--- a/lib/typescript/src/NavigationContainer.d.ts
++++ b/lib/typescript/src/NavigationContainer.d.ts
+@@ -37,6 +37,13 @@ type Props<ParamList extends {}> = NavigationContainerProps & {
+      * unless `documentTitle.enabled` is `false`.
+      */
+     documentTitle?: DocumentTitleOptions;
++    /**
++     * Whether the container handles the current Android hardware back press.
++     * Several containers on one JS runtime (one per window) share BackHandler.
++     *
++     * Defaults to always.
++     */
++    shouldHandleBackButton?: () => boolean;
+ };
+ /**
+  * Container component that manages the navigation state.
+diff --git a/lib/typescript/src/useBackButton.d.ts b/lib/typescript/src/useBackButton.d.ts
+index 665ea6477b8391c6362c84b8623d46bd30183f9f..de172463385ae49161e323c0ee2335d8c181ae95 100644
+--- a/lib/typescript/src/useBackButton.d.ts
++++ b/lib/typescript/src/useBackButton.d.ts
+@@ -1,3 +1,3 @@
+ import type { NavigationContainerRef, ParamListBase } from '@react-navigation/core';
+-export declare function useBackButton(_: React.RefObject<NavigationContainerRef<ParamListBase> | null>): void;
++export declare function useBackButton(_: React.RefObject<NavigationContainerRef<ParamListBase> | null>, _shouldHandleBackButton?: () => boolean): void;
+ //# sourceMappingURL=useBackButton.d.ts.map
+\ No newline at end of file
+diff --git a/lib/typescript/src/useBackButton.native.d.ts b/lib/typescript/src/useBackButton.native.d.ts
+index 460e73087c26ae68a8d2615cba753fe3958ac70e..17e2f65d77f933589d44e84fa24da0c98871030d 100644
+--- a/lib/typescript/src/useBackButton.native.d.ts
++++ b/lib/typescript/src/useBackButton.native.d.ts
+@@ -1,4 +1,4 @@
+ import type { NavigationContainerRef, ParamListBase } from '@react-navigation/core';
+ import * as React from 'react';
+-export declare function useBackButton(ref: React.RefObject<NavigationContainerRef<ParamListBase> | null>): void;
++export declare function useBackButton(ref: React.RefObject<NavigationContainerRef<ParamListBase> | null>, shouldHandleBackButton?: () => boolean): void;
+ //# sourceMappingURL=useBackButton.native.d.ts.map
+\ No newline at end of file
+diff --git a/src/NavigationContainer.tsx b/src/NavigationContainer.tsx
+index 2afd96b3c43604c0633348cdfe3a4456d08e9344..ca676daba47b36ffdd3df24edfcfaf846c4062d4 100644
+--- a/src/NavigationContainer.tsx
++++ b/src/NavigationContainer.tsx
+@@ -65,6 +65,13 @@ type Props<ParamList extends {}> = NavigationContainerProps & {
+    * unless `documentTitle.enabled` is `false`.
+    */
+   documentTitle?: DocumentTitleOptions;
++  /**
++   * Whether the container handles the current Android hardware back press.
++   * Several containers on one JS runtime (one per window) share BackHandler.
++   *
++   * Defaults to always.
++   */
++  shouldHandleBackButton?: () => boolean;
+ };
+ 
+ function NavigationContainerInner(
+@@ -74,6 +81,7 @@ function NavigationContainerInner(
+     linking,
+     fallback = null,
+     documentTitle,
++    shouldHandleBackButton,
+     ...rest
+   }: Props<ParamListBase>,
+   ref?: React.Ref<NavigationContainerRef<ParamListBase> | null>
+@@ -87,7 +95,7 @@ function NavigationContainerInner(
+   const refContainer =
+     React.useRef<NavigationContainerRef<ParamListBase>>(null);
+ 
+-  useBackButton(refContainer);
++  useBackButton(refContainer, shouldHandleBackButton);
+   useDocumentTitle(refContainer, documentTitle);
+ 
+   const { getInitialState } = useLinking(refContainer, {
+diff --git a/src/useBackButton.native.tsx b/src/useBackButton.native.tsx
+index 357c5e9f39b5e0517faddb96f793fd4154021a2c..3fc46fd3e764827b0c1fa33e9e14ca3494ad3400 100644
+--- a/src/useBackButton.native.tsx
++++ b/src/useBackButton.native.tsx
+@@ -4,10 +4,16 @@ import type {
+ } from '@react-navigation/core';
+ import * as React from 'react';
+ import { BackHandler } from 'react-native';
++import useLatestCallback from 'use-latest-callback';
+ 
+ export function useBackButton(
+-  ref: React.RefObject<NavigationContainerRef<ParamListBase> | null>
++  ref: React.RefObject<NavigationContainerRef<ParamListBase> | null>,
++  shouldHandleBackButton?: () => boolean
+ ) {
++  const shouldHandle = useLatestCallback(
++    () => shouldHandleBackButton?.() ?? true
++  );
++
+   React.useEffect(() => {
+     // eslint-disable-next-line @eslint-react/web-api/no-leaked-event-listener
+     const subscription = BackHandler.addEventListener(
+@@ -16,7 +22,7 @@ export function useBackButton(
+       () => {
+         const navigation = ref.current;
+ 
+-        if (navigation == null) {
++        if (navigation == null || !shouldHandle()) {
+           return false;
+         }
+ 
+@@ -31,5 +37,5 @@ export function useBackButton(
+     );
+ 
+     return () => subscription.remove();
+-  }, [ref]);
++  }, [ref, shouldHandle]);
+ }
+diff --git a/src/useBackButton.tsx b/src/useBackButton.tsx
+index 0819035d604d19412e5f0a4f41bdfb45110eb80e..e3046380ca37f25849b9ed0c1750b075f39f17df 100644
+--- a/src/useBackButton.tsx
++++ b/src/useBackButton.tsx
+@@ -4,7 +4,8 @@ import type {
+ } from '@react-navigation/core';
+ 
+ export function useBackButton(
+-  _: React.RefObject<NavigationContainerRef<ParamListBase> | null>
++  _: React.RefObject<NavigationContainerRef<ParamListBase> | null>,
++  _shouldHandleBackButton?: () => boolean
+ ) {
+   // No-op
+   // BackHandler is not available on web

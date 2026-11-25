@@ -32,6 +32,7 @@ const reactTests = [
   "src/features/pull-requests/usePullRequestList.test.tsx",
   "src/components/ui/AppBar.android.test.tsx",
   "src/components/ui/AndroidAnchoredMenu.android.test.tsx",
+  "src/lib/backHandler.test.tsx",
   "src/features/files/ZipArchiveView.test.tsx",
   "src/features/pull-requests/guide/useReviewGuide.test.tsx",
   "src/features/settings/SettingsServerControlsRouteScreen.test.tsx",
@@ -176,6 +177,8 @@ export default defineConfig({
           include: reactTests,
           // Native components mock React Native and render through react-dom in these tests.
           environment: "jsdom",
+          // backHandler.test loads the patched container hook, whose React Native import it mocks.
+          server: { deps: { inline: [/@react-navigation\/native\/lib\/module\/useBackButton/] } },
           setupFiles: [
             "../../packages/shared/src/testing/providerEnv.ts",
             "../../packages/shared/src/testing/gitEnv.ts",

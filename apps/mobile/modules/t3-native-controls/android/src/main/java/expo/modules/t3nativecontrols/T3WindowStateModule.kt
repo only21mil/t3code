@@ -13,6 +13,9 @@ class T3WindowStateModule : Module() {
 
     View(T3WindowStateView::class) {
       Events("onWindowStateChange")
+      Prop("windowId") { view: T3WindowStateView, id: Int ->
+        view.context.hostActivity()?.let { T3Windows.appWindowIds[it] = id }
+      }
     }
   }
 }

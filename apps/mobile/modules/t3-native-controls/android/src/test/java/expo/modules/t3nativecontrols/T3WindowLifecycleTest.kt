@@ -2,6 +2,9 @@ package expo.modules.t3nativecontrols
 
 import expo.modules.t3nativecontrols.T3WindowLifecycle.Step
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class T3WindowLifecycleTest {
@@ -25,7 +28,7 @@ class T3WindowLifecycleTest {
 
     // Only the window React Native serves may pause it; the other one takes over.
     assertEquals(Step.Follow("a"), lifecycle.paused("b"))
-    assertEquals(Step.Forward, lifecycle.resumed("b"))
+    assertEquals(Step.Follow("b"), lifecycle.resumed("b"))
     assertEquals(Step.Hold, lifecycle.paused("a"))
     assertEquals(Step.Forward, lifecycle.paused("b"))
   }
@@ -75,5 +78,58 @@ class T3WindowLifecycleTest {
 
     assertEquals(listOf("a"), lifecycle.windows)
     assertEquals(Step.Forward, lifecycle.destroyed("a"))
+  }
+
+  @Test
+  fun followsAWindowThatResumesBesideAnother() {
+    assertEquals(Step.Forward, lifecycle.resumed("a"))
+    // React Native is already resumed, so only Follow moves its context to the new window.
+    assertEquals(Step.Follow("b"), lifecycle.resumed("b"))
+  }
+
+  @Test
+  fun neverFollowsAWindowAlreadyGone() {
+    lifecycle.resumed("a")
+    lifecycle.resumed("b")
+    gone += "a"
+
+    assertEquals(Step.Forward, lifecycle.paused("b"))
+  }
+
+  @Test
+  fun pausesTheHostWhenTheWindowInUseClosesWhileTheOthersArePaused() {
+    lifecycle.resumed("a")
+    lifecycle.resumed("b")
+    lifecycle.paused("a")
+
+    assertEquals(Step.Pause, lifecycle.destroyed("b"))
+    assertNull(lifecycle.current)
+  }
+
+  @Test
+  fun forgetsTheWindowInUseOnceItIsDestroyed() {
+    lifecycle.resumed("a")
+    lifecycle.resumed("b")
+    lifecycle.paused("a")
+    lifecycle.paused("b")
+
+    assertEquals(Step.Hold, lifecycle.destroyed("b"))
+    assertNull(lifecycle.current)
+  }
+
+  @Test
+  fun hearsFocusOnlyWhenTheAppGainsOrLosesIt() {
+    lifecycle.resumed("a")
+    lifecycle.resumed("b")
+    lifecycle.focused("a")
+    assertTrue(lifecycle.focusChanged("a", gained = true))
+
+    // A tap on b: b gains focus, then a's loss is checked.
+    lifecycle.focused("b")
+    assertFalse(lifecycle.focusChanged("b", gained = true))
+    assertFalse(lifecycle.focusChanged("a", gained = false))
+
+    assertTrue(lifecycle.focusChanged("b", gained = false))
+    assertTrue(lifecycle.focusChanged("a", gained = true))
   }
 }

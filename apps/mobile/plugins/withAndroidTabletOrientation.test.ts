@@ -102,4 +102,14 @@ describe("withAndroidTabletOrientation", () => {
       .replace("super.onCreate(null)", "super.onCreate(null)\n    applyTabletOrientation()");
     expect(await prebuildAndroid({ ...once, mainActivity: existingActivity })).toEqual(once);
   });
+
+  it("unlocks split-screen panes in a MainActivity prebuilt with the phone-only policy", async () => {
+    const once = await prebuildAndroid();
+    const phoneOnlyActivity = once.mainActivity
+      .replace(/\n  override fun onMultiWindowModeChanged[^}]*\}\n/, "")
+      .replace("if (isInMultiWindowMode || resources", "if (resources");
+    expect(phoneOnlyActivity).not.toContain("isInMultiWindowMode");
+
+    expect(await prebuildAndroid({ ...once, mainActivity: phoneOnlyActivity })).toEqual(once);
+  });
 });

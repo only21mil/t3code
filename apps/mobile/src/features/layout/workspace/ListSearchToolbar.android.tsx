@@ -1,7 +1,9 @@
 import { useNavigation } from "@react-navigation/native";
 import { useGT } from "gt-react-native";
 import { useEffect } from "react";
-import { BackHandler, Keyboard } from "react-native";
+import { Keyboard } from "react-native";
+import { useAppWindowId } from "../../../lib/appWindows";
+import { addWindowBackListener } from "../../../lib/backHandler";
 import { AppBar } from "../../../components/ui/AppBar";
 import { appBarMenuItemsFromActions } from "../../../components/ui/menuActionItems";
 import { useHardwareKeyboardCommand } from "../../keyboard/hardwareKeyboardCommands";
@@ -20,6 +22,7 @@ export function ListSearchToolbar(props: {
 }) {
   const gt = useGT();
   const navigation = useNavigation();
+  const windowId = useAppWindowId();
   const { filters, tab: section } = props;
   const workspace = useWorkspaceTabs()!;
   const { dispatch, getScrollOffset, recordScrollOffset, isTabActive } = workspace;
@@ -45,7 +48,7 @@ export function ListSearchToolbar(props: {
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to BackHandler while searching to close the list search on Android back
   useEffect(() => {
     if (!searching) return;
-    const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+    const subscription = addWindowBackListener(windowId, () => {
       // Frozen Home screens stay mounted under a detail route or another tab,
       // so back only applies while this list is in front.
       const state = navigation.getState();
@@ -56,7 +59,7 @@ export function ListSearchToolbar(props: {
       return true;
     });
     return () => subscription.remove();
-  }, [searching, closeSearch, navigation, isTabActive, section]);
+  }, [searching, closeSearch, navigation, isTabActive, section, windowId]);
   return (
     <AppBar
       title="T3 Code"

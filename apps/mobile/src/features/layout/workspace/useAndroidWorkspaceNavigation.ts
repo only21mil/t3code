@@ -1,7 +1,9 @@
 import { StackActions, useFocusEffect, useNavigation } from "@react-navigation/native";
 import { useCallback } from "react";
-import { BackHandler, Keyboard, Platform } from "react-native";
+import { Keyboard, Platform } from "react-native";
 import { returnToAndroidWorkspaceList } from "../../../lib/android-workspace-navigation";
+import { useAppWindowId } from "../../../lib/appWindows";
+import { addWindowBackListener } from "../../../lib/backHandler";
 
 export function useWorkspaceBackNavigation() {
   const navigation = useNavigation();
@@ -14,16 +16,17 @@ export function useWorkspaceBackNavigation() {
 
 export function useAndroidWorkspaceBack() {
   const goBack = useWorkspaceBackNavigation();
+  const windowId = useAppWindowId();
   useFocusEffect(
     useCallback(() => {
       if (Platform.OS !== "android") return;
-      const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+      const subscription = addWindowBackListener(windowId, () => {
         if (Keyboard.isVisible()) Keyboard.dismiss();
         else goBack();
         return true;
       });
       return () => subscription.remove();
-    }, [goBack]),
+    }, [goBack, windowId]),
   );
   return goBack;
 }

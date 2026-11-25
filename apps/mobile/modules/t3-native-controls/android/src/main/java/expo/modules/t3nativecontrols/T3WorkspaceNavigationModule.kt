@@ -278,8 +278,9 @@ class T3WorkspaceNavigationView(
     )
     val overlay = expanded || progress != 0f
     LaunchedEffect(overlay) { onOverlayChange(mapOf("overlay" to overlay)) }
-    // The activity handles Back before React Native, so an open rail closes first.
-    val backDispatcher = (appContext.currentActivity as? ComponentActivity)?.onBackPressedDispatcher
+    // The activity handles Back before React Native, so an open rail closes first. Each window
+    // is an activity of its own; the rail closes in the one it is shown in.
+    val backDispatcher = (context.hostActivity() as? ComponentActivity)?.onBackPressedDispatcher
     DisposableEffect(backDispatcher, expanded) {
       val callback = object : OnBackPressedCallback(expanded) {
         override fun handleOnBackPressed() {

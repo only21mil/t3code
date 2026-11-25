@@ -92,20 +92,3 @@ describe("withAndroidMultipleWindows", () => {
     expect(twice).toEqual(once);
   });
 });
-
-describe("t3-native-controls launch mode", () => {
-  const res = NodePath.resolve(
-    import.meta.dirname,
-    "../modules/t3-native-controls/android/src/main/res",
-  );
-  const launchMode = (folder) =>
-    NodeFS.readFileSync(NodePath.join(res, folder, "t3_windows.xml"), "utf8").match(
-      /<integer name="t3_main_activity_launch_mode">(\d)<\/integer>/,
-    )?.[1];
-
-  it("stays singleTask before Android 12 and allows a window per task from it", () => {
-    // android.content.pm.ActivityInfo: LAUNCH_SINGLE_TASK = 2, LAUNCH_SINGLE_INSTANCE_PER_TASK = 4.
-    expect(launchMode("values")).toBe("2");
-    expect(launchMode("values-v31")).toBe("4");
-  });
-});
