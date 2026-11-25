@@ -49,23 +49,36 @@ type PresentedDialog = DialogRequest & {
   readonly windowId: AppWindowId | null;
 };
 
-// App services raise dialogs before the root mounts, so the request lives in
-// the module and the window's Host renders whatever is current. One dialog
-// shows at a time: a new request replaces the presented one.
-let presented: PresentedDialog | null = null;
+// App services raise dialogs before the root mounts, so requests live in the
+// module and each window's Host renders its own. A window shows one dialog at a
+// time: a new request replaces the one presented in its window only.
+let presented: ReadonlyArray<PresentedDialog> = [];
 let nextPresentationId = 0;
 const listeners = new Set<() => void>();
 
-function setPresented(next: PresentedDialog | null) {
+function setPresented(next: ReadonlyArray<PresentedDialog>) {
   presented = next;
   for (const listener of listeners) listener();
 }
 
+/**
+ * The window a dialog shows in. Once its own window closed, as when Android replaces the
+ * activity, the window in use takes it over; before any window is in use (null), every Host
+ * shows it.
+ */
+function ownerOf(dialog: PresentedDialog) {
+  return dialog.windowId !== null && isAppWindowOpen(dialog.windowId)
+    ? dialog.windowId
+    : activeAppWindowId();
+}
+
 function submitRequest(dialog: DialogRequest) {
-  const replaced = presented;
-  setPresented({ ...dialog, id: ++nextPresentationId, windowId: activeAppWindowId() });
+  const next = { ...dialog, id: ++nextPresentationId, windowId: activeAppWindowId() };
+  const owner = ownerOf(next);
+  const replaced = presented.filter((shown) => ownerOf(shown) === owner);
+  setPresented([...presented.filter((shown) => ownerOf(shown) !== owner), next]);
   // A replaced dialog closed without an answer, which its owner hears as a dismissal.
-  if (replaced) closeUnanswered(replaced);
+  for (const dialog of replaced) closeUnanswered(dialog);
 }
 
 function closeUnanswered(dialog: DialogRequest) {
@@ -73,10 +86,10 @@ function closeUnanswered(dialog: DialogRequest) {
   else dialog.request.onCancel?.();
 }
 
-/** Closes the dialog only if it is still the one the action came from. */
+/** Closes the dialog only if it is still presented. */
 function dismiss(id: number) {
-  if (presented?.id !== id) return false;
-  setPresented(null);
+  if (!presented.some((shown) => shown.id === id)) return false;
+  setPresented(presented.filter((shown) => shown.id !== id));
   return true;
 }
 
@@ -89,17 +102,14 @@ function subscribe(listener: () => void) {
   };
 }
 
-/**
- * The dialog this window presents. Once its own window closed, as when Android replaces the
- * activity, the window in use takes it over; before any window is in use, every Host shows it.
- */
+/** The newest dialog this window presents. */
 function presentedIn(windowId: AppWindowId) {
-  if (!presented) return null;
-  const owner =
-    presented.windowId !== null && isAppWindowOpen(presented.windowId)
-      ? presented.windowId
-      : activeAppWindowId();
-  return owner === null || owner === windowId ? presented : null;
+  return (
+    presented.findLast((dialog) => {
+      const owner = ownerOf(dialog);
+      return owner === null || owner === windowId;
+    }) ?? null
+  );
 }
 
 export function alert(...[title, message, buttons, options]: Parameters<typeof Alert.alert>): void {

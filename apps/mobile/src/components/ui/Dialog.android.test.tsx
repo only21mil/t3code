@@ -182,7 +182,7 @@ it("presents a dialog only in the window it was raised in", () => {
   expect(right.container.textContent).not.toContain("Delete thread");
 });
 
-it("replaces a dialog raised in one window with one raised in the other", () => {
+it("leaves a dialog raised in one window open while the other window raises one", () => {
   const left = mountHost(1);
   const right = mountHost(2);
   act(() => activateAppWindow(1));
@@ -196,11 +196,36 @@ it("replaces a dialog raised in one window with one raised in the other", () => 
     }),
   );
 
+  // An error from work in the other window, such as a failed send there.
+  act(() => activateAppWindow(2));
+  act(() => Dialog.alert("Could not send", undefined, [{ text: "OK" }]));
+
+  expect(onCancel).not.toHaveBeenCalled();
+  expect(left.container.textContent).toContain("Delete thread");
+  expect(right.container.textContent).toContain("Could not send");
+  expect(right.container.textContent).not.toContain("Delete thread");
+});
+
+it("replaces a dialog only with one raised in its own window", () => {
+  const left = mountHost(1);
+  const right = mountHost(2);
   act(() => activateAppWindow(2));
   act(() => Dialog.alert("Copied", undefined, [{ text: "OK" }]));
+  act(() => activateAppWindow(1));
+  const onCancel = vi.fn();
+  act(() =>
+    Dialog.confirm({
+      title: "Delete thread",
+      confirmText: "Delete",
+      onConfirm: () => {},
+      onCancel,
+    }),
+  );
+
+  act(() => Dialog.alert("Thread deleted", undefined, [{ text: "OK" }]));
 
   expect(onCancel).toHaveBeenCalledOnce();
-  expect(left.container.textContent).toBe("");
+  expect(left.container.textContent).toContain("Thread deleted");
   expect(right.container.textContent).toContain("Copied");
 });
 
