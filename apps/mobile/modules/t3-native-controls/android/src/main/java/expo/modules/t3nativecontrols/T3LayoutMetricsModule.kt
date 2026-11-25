@@ -1,6 +1,8 @@
 package expo.modules.t3nativecontrols
 
 import android.content.Context
+import android.view.View
+import android.view.View.OnLayoutChangeListener
 import android.view.WindowInsets
 import androidx.core.view.WindowInsetsCompat
 import expo.modules.kotlin.AppContext
@@ -31,11 +33,25 @@ class T3LayoutMetricsView(
   private val onMetricsChange by EventDispatcher()
   private var lastMetrics: Map<String, Any>? = null
 
+  // React Native resizes this view before the window's own layout pass, so the safe area is
+  // measured again once the window has its new size.
+  private val windowLayoutListener = OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+    publishMetrics()
+  }
+  private var observedRoot: View? = null
+
   override fun onAttachedToWindow() {
     super.onAttachedToWindow()
     lastMetrics = null
+    observedRoot = rootView.also { it.addOnLayoutChangeListener(windowLayoutListener) }
     requestApplyInsets()
     publishMetrics()
+  }
+
+  override fun onDetachedFromWindow() {
+    observedRoot?.removeOnLayoutChangeListener(windowLayoutListener)
+    observedRoot = null
+    super.onDetachedFromWindow()
   }
 
   override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
@@ -79,7 +95,7 @@ class T3LayoutMetricsView(
     fun edge(
       inset: Int?,
       offset: Int
-    ) = ((inset ?: 0) - offset).coerceAtLeast(0) / density.toDouble()
+    ) = insetOverlap(inset ?: 0, offset) / density.toDouble()
     return mapOf(
       "top" to edge(insets?.top, location[1]),
       "bottom" to edge(insets?.bottom, root.height - location[1] - height),
@@ -88,5 +104,12 @@ class T3LayoutMetricsView(
     )
   }
 }
+
+/**
+ * How much of a window edge's inset covers a view [offset] pixels in from that edge. A view
+ * measured against a window that has not laid out its new size yet can overhang the edge; it is
+ * still covered by no more than the inset.
+ */
+internal fun insetOverlap(inset: Int, offset: Int): Int = (inset - offset).coerceIn(0, inset)
 
 private const val REGULAR_MIN_WIDTH_DP = 600f
