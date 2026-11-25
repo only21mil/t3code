@@ -3,7 +3,13 @@ package expo.modules.t3nativecontrols
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
+// launchURL's file sets up a main-thread Handler when it loads, which needs Android's Looper.
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [36], manifest = Config.NONE)
 class T3WindowLaunchURLTest {
   @Test
   fun aWindowOpenedFromALinkReadsThatLink() {
