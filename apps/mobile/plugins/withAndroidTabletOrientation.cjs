@@ -1,6 +1,7 @@
 const { AndroidConfig, withAndroidManifest, withMainActivity } = require("expo/config-plugins");
 
 // FULL_USER respects rotation lock. Foldables change smallestScreenWidthDp without recreating the activity.
+// A split-screen pane is unlocked too: Android letterboxes a portrait lock in a landscape-shaped pane.
 
 const ORIENTATION_METHODS = `
   // Applied in onCreate and re-applied on fold/unfold; added by
@@ -10,8 +11,13 @@ const ORIENTATION_METHODS = `
     applyTabletOrientation()
   }
 
+  override fun onMultiWindowModeChanged(isInMultiWindowMode: Boolean, newConfig: Configuration) {
+    super.onMultiWindowModeChanged(isInMultiWindowMode, newConfig)
+    applyTabletOrientation()
+  }
+
   private fun applyTabletOrientation() {
-    requestedOrientation = if (resources.configuration.smallestScreenWidthDp >= 600) {
+    requestedOrientation = if (isInMultiWindowMode || resources.configuration.smallestScreenWidthDp >= 600) {
       ActivityInfo.SCREEN_ORIENTATION_FULL_USER
     } else {
       ActivityInfo.SCREEN_ORIENTATION_PORTRAIT

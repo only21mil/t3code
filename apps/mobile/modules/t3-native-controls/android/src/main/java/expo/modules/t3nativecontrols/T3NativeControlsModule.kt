@@ -29,9 +29,10 @@ class T3NativeControlsModule : Module() {
     AsyncFunction("setNavigationBarStyle") { light: Boolean ->
       // Below Android 10, React Native paints the navigation bar color itself.
       if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return@AsyncFunction
-      val window = appContext.currentActivity?.window ?: return@AsyncFunction
-      val controller = WindowCompat.getInsetsController(window, window.decorView)
-      controller.isAppearanceLightNavigationBars = light
+      for (window in appWindows()) {
+        WindowCompat.getInsetsController(window, window.decorView)
+          .isAppearanceLightNavigationBars = light
+      }
     }.runOnQueue(Queues.MAIN)
 
     Function("is24HourFormat") {
@@ -118,6 +119,12 @@ class T3NativeControlsModule : Module() {
         ?.writeText(scene)
     }
   }
+
+  // Every T3 Code window, or the current activity before any window has resumed.
+  private fun appWindows() =
+    T3Windows.activities
+      .ifEmpty { listOfNotNull(appContext.currentActivity) }
+      .mapNotNull { it.window }
 }
 
 // Android 10+ lets apps add their own media without a storage permission.

@@ -81,14 +81,17 @@ describe("withAndroidTabletOrientation", () => {
     );
   });
 
-  it("generates the phone/tablet policy before activity creation and stays stable on repeated prebuild", async () => {
+  it("generates the phone/tablet/split-screen policy before activity creation and stays stable on repeated prebuild", async () => {
     const once = await prebuildAndroid();
 
     expect(once.mainActivity).toMatch(
       /override fun onCreate\(savedInstanceState: Bundle\?\)\s*\{[^}]*applyTabletOrientation\(\)[^}]*super\.onCreate\(null\)/,
     );
     expect(once.mainActivity).toMatch(
-      /private fun applyTabletOrientation\(\)\s*\{\s*requestedOrientation = if \(resources\.configuration\.smallestScreenWidthDp >= 600\)\s*\{\s*ActivityInfo\.SCREEN_ORIENTATION_FULL_USER\s*\} else \{\s*ActivityInfo\.SCREEN_ORIENTATION_PORTRAIT\s*\}/,
+      /private fun applyTabletOrientation\(\)\s*\{\s*requestedOrientation = if \(isInMultiWindowMode \|\| resources\.configuration\.smallestScreenWidthDp >= 600\)\s*\{\s*ActivityInfo\.SCREEN_ORIENTATION_FULL_USER\s*\} else \{\s*ActivityInfo\.SCREEN_ORIENTATION_PORTRAIT\s*\}/,
+    );
+    expect(once.mainActivity).toMatch(
+      /override fun onMultiWindowModeChanged\(isInMultiWindowMode: Boolean, newConfig: Configuration\)\s*\{\s*super\.onMultiWindowModeChanged\(isInMultiWindowMode, newConfig\)\s*applyTabletOrientation\(\)/,
     );
     expect(await prebuildAndroid(once)).toEqual(once);
     const existingActivity = once.mainActivity

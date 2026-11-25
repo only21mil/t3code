@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <!-- MainActivity's launchMode (withAndroidMultipleWindows). singleTask keeps one window before
+       Android 12, which treats singleInstancePerTask as standard and would stack a new activity
+       on every deep link. -->
+  <integer name="t3_main_activity_launch_mode">2</integer>
+</resources>

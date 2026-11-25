@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <!-- singleInstancePerTask: links and launches reach an open window, and "New window" opens
+       another in a task of its own. -->
+  <integer name="t3_main_activity_launch_mode">4</integer>
+</resources>

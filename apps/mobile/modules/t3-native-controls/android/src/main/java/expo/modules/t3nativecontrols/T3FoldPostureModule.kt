@@ -55,10 +55,11 @@ class T3FoldPostureView(
     observeFold()
   }
 
-  // The activity can be missing when the view first attaches, so layout passes retry.
+  // The activity can be missing when the view first attaches, so layout passes retry. Each window
+  // is an activity of its own, and the hinge is measured against this view's.
   private fun observeFold() {
     if (scope != null || !isAttachedToWindow) return
-    val activity = appContext.currentActivity ?: return
+    val activity = context.hostActivity() ?: appContext.currentActivity ?: return
     scope = MainScope().also { scope ->
       scope.launch {
         WindowInfoTracker.getOrCreate(activity).windowLayoutInfo(activity).collect { info ->
