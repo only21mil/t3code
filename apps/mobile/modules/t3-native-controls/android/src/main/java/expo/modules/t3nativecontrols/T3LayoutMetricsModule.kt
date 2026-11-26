@@ -35,9 +35,10 @@ class T3LayoutMetricsView(
 
   // React Native resizes this view before the window's own layout pass, so the safe area is
   // measured again once the window has its new size.
-  private val windowLayoutListener = OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
-    publishMetrics()
-  }
+  private val windowLayoutListener =
+    OnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+      if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) publishMetrics()
+    }
   private var observedRoot: View? = null
 
   override fun onAttachedToWindow() {

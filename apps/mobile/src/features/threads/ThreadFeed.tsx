@@ -155,7 +155,6 @@ import {
   Pressable,
   StyleSheet,
   type ColorValue,
-  useWindowDimensions,
   View,
 } from "react-native";
 import { Image as ExpoImage } from "expo-image";
@@ -3109,8 +3108,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const { themeAppearance } = useAppearancePreferences();
   const copyFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const headerMaterialVisibleRef = useRef(false);
-  const { fontScale } = useWindowDimensions();
-  const { width: windowWidth } = useWindowSize();
+  const { width: windowWidth, fontScale } = useWindowSize();
   const { appearance } = useAppearancePreferences();
   const workRowSizing = deriveThreadWorkLogSizing({
     baseFontSize: appearance.baseFontSize,

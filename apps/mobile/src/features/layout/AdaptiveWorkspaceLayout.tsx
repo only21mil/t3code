@@ -34,7 +34,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Keyboard, Platform, Pressable, useWindowDimensions, View } from "react-native";
+import { Keyboard, Platform, Pressable, View } from "react-native";
 import Animated, {
   runOnJS,
   useAnimatedStyle,
@@ -103,7 +103,7 @@ import {
   NativeWorkspaceInspectorContext,
 } from "../../native/v5-workspace-context";
 
-import { useNativeLayoutMetrics } from "../../native/native-layout-metrics";
+import { useNativeLayoutMetrics, useWindowSize } from "../../native/native-layout-metrics";
 import { AndroidHingeObserver } from "../../native/AndroidHingeObserver";
 import { WindowHingeContext } from "../../native/window-hinge-context";
 import { useAndroidWorkspaceRoot } from "./workspace/AndroidWorkspaceTabsProvider";
@@ -267,9 +267,8 @@ function AdaptiveWorkspaceLayoutContent(
   const projectGroupingMode = props.projectGroupingMode;
   const nativeWorkspace = use(NativeWorkspaceModeContext);
   const usesPresentationHost = use(WorkspacePresentationHostContext);
-  const windowDimensions = useWindowDimensions();
   const nativeMetrics = useNativeLayoutMetrics();
-  const { width: viewportWidth, height } = nativeMetrics ?? windowDimensions;
+  const { width: viewportWidth, height } = useWindowSize();
   const pathname = props.pathname;
   const workspace = useWorkspaceTabs();
   // Settings and Usage occupy the workspace rather than a list/detail pair.

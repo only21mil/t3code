@@ -422,8 +422,8 @@ function AppContent(props: { readonly launchURL: string | null | undefined }) {
           <SafeAreaProvider>
             <StatusBar barStyle={themeAppearance === "dark" ? "light-content" : "dark-content"} />
             {/* native-stack needs the theme's dark flag to select dark native headers. */}
-            <GlobalVoiceInputControl>
-              <NativeLayoutMetricsProvider>
+            <NativeLayoutMetricsProvider>
+              <GlobalVoiceInputControl>
                 {/* Each window's root has a container; they are not nested, and each handles links. */}
                 <NavigationIndependentTree>
                   <Navigation
@@ -438,9 +438,9 @@ function AppContent(props: { readonly launchURL: string | null | undefined }) {
                 <Dialog.Host />
                 <ThreadArrangementHost />
                 <ProjectChipIconRasterizer />
-              </NativeLayoutMetricsProvider>
-            </GlobalVoiceInputControl>
-            <OverlayPortalHost />
+              </GlobalVoiceInputControl>
+              <OverlayPortalHost />
+            </NativeLayoutMetricsProvider>
           </SafeAreaProvider>
         </KeyboardProvider>
       </GestureHandlerRootView>

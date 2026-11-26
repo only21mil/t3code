@@ -11,6 +11,9 @@ const paneWidths = new Map([
   [2, 680],
 ]);
 
+// Each window's view, to report new metrics after the first.
+const metricsChanges = new Map<number, (metrics: NativeLayoutMetrics) => void>();
+
 function paneMetrics(width: number): NativeLayoutMetrics {
   return {
     width,
@@ -31,17 +34,30 @@ vi.mock("expo", () => ({
     }) {
       const windowId = use(AppWindowContext);
       const onMetricsChange = props.onMetricsChange;
+      metricsChanges.set(windowId, (metrics) => onMetricsChange?.({ nativeEvent: metrics }));
       useEffect(() => {
         onMetricsChange?.({ nativeEvent: paneMetrics(paneWidths.get(windowId) ?? 0) });
       }, [onMetricsChange, windowId]);
       return null;
     },
 }));
-vi.mock("react-native", () => ({ Platform: { OS: "android" } }));
+vi.mock("react-native", () => {
+  // React Native's one window size, which side by side is not this window's.
+  const window = { width: 1040, height: 900, scale: 2, fontScale: 1 };
+  return {
+    Platform: { OS: "android" },
+    Dimensions: { get: () => window },
+    useWindowDimensions: () => window,
+  };
+});
 vi.mock("./NativeLayoutObserver", () => import("./NativeLayoutObserver.android"));
 
-const { NativeLayoutMetricsProvider, useNativeLayoutMetrics, firstNativeLayoutMetrics } =
-  await import("./native-layout-metrics");
+const {
+  NativeLayoutMetricsProvider,
+  useNativeLayoutMetrics,
+  useWindowSize,
+  firstNativeLayoutMetrics,
+} = await import("./native-layout-metrics");
 
 const roots: Root[] = [];
 
@@ -78,4 +94,27 @@ it("gives each Android window its own width", async () => {
   expect(right.textContent).toBe("680");
   expect((await firstNativeLayoutMetrics(1, 0))?.width).toBe(360);
   expect((await firstNativeLayoutMetrics(2, 0))?.width).toBe(680);
+});
+
+it("re-renders a window size reader only when the window's size changes", () => {
+  let renders = 0;
+  function SizeReader() {
+    renders++;
+    return <>{useWindowSize().width}</>;
+  }
+  const container = mountWindow(1, <SizeReader />);
+  const rendered = renders;
+
+  // The keyboard or a cutout moves only the safe area.
+  act(() =>
+    metricsChanges.get(1)?.({
+      ...paneMetrics(360),
+      safeArea: { top: 24, bottom: 300, left: 0, right: 0 },
+    }),
+  );
+  expect(renders).toBe(rendered);
+  expect(container.textContent).toBe("360");
+
+  act(() => metricsChanges.get(1)?.(paneMetrics(420)));
+  expect(container.textContent).toBe("420");
 });

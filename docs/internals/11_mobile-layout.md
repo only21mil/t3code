@@ -57,3 +57,5 @@ Platform splits live in layers 1, 2 and 4, as `.ios` and `.android` files.
   and UIKit shows them over the visible pane.
 - A route opened from the inspector sheet must wait for the sheet to close, through
   `InspectorSheetContext`. Presenting over a closing sheet races its dismissal on iOS.
+- Android windows side by side share React Native's one window size, so size by `useWindowSize()`,
+  not `useWindowDimensions()`.

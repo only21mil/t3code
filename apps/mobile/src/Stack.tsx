@@ -14,7 +14,7 @@ import {
 import { createNativeStackScreen } from "@react-navigation/native-stack";
 import { msg, T, useGT, useMessages } from "gt-react-native";
 import type { ReactNode } from "react";
-import { Platform, Pressable, ScrollView, StyleSheet, useWindowDimensions } from "react-native";
+import { Platform, Pressable, ScrollView, StyleSheet } from "react-native";
 import { useResolveClassNames } from "uniwind";
 
 import { AppText as Text } from "./components/ui/AppText";
@@ -155,7 +155,7 @@ import {
 import { ShowcaseReadyMarker } from "./features/showcase/ShowcaseCaptureCoordinator";
 import { immersiveRoute, modalRoute, pageRoute, sheetRoute } from "./features/layout/route-options";
 import { deriveLayout } from "./lib/layout";
-import { useNativeLayoutMetrics } from "./native/native-layout-metrics";
+import { useNativeLayoutMetrics, useWindowSize } from "./native/native-layout-metrics";
 import { isPresentedRoute } from "./native/workspace-stack-projection";
 import { workspaceDetailRouter } from "./features/layout/workspace/workspace-detail-selection";
 
@@ -917,10 +917,8 @@ registerPresentedRoutes(
 );
 
 export const RootStack = RootStackConfig.with(function AdaptiveRootStack({ Navigator }) {
-  const windowDimensions = useWindowDimensions();
+  const { width, height } = useWindowSize();
   const nativeMetrics = useNativeLayoutMetrics();
-  // With several windows, React Native's one window size can be another window's.
-  const { width, height } = nativeMetrics ?? windowDimensions;
   const usesSplitView = deriveLayout({
     width,
     height,

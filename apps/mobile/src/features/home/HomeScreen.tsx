@@ -30,7 +30,6 @@ import {
 import {
   Platform,
   ScrollView,
-  useWindowDimensions,
   View,
   type ScrollViewProps,
   type GestureResponderEvent,
@@ -57,6 +56,7 @@ import { nativeHeaderScrollEdgeEffects } from "../../native/scrollEdgeEffects";
 import {
   useNativeColumnLayoutMetrics,
   useNativeLayoutMetrics,
+  useWindowSize,
 } from "../../native/native-layout-metrics";
 import { useWorkspaceListEmptyTopInset } from "../layout/workspace/workspace-list-insets";
 import { useNativeWorkspaceColumnsSupported } from "../../native/NativeWorkspaceColumns";
@@ -223,8 +223,7 @@ export function HomeScreen(props: HomeScreenProps) {
     ? (columnMetrics ?? screenMetrics)?.safeArea
     : undefined;
   // Wide Android lists need reading-width gutters to clear edges and camera cutouts.
-  const windowDimensions = useWindowDimensions();
-  const windowWidth = (screenMetrics ?? windowDimensions).width;
+  const { width: windowWidth } = useWindowSize();
   const androidListGutter =
     Platform.OS === "android"
       ? deriveCenteredContentHorizontalPadding({

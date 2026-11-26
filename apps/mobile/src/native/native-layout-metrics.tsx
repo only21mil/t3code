@@ -1,5 +1,5 @@
-import { createContext, use, useEffect, useState, type ReactNode } from "react";
-import { Platform, useWindowDimensions } from "react-native";
+import { createContext, use, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Dimensions, Platform, useWindowDimensions } from "react-native";
 import { activeAppWindowId, useAppWindowId, type AppWindowId } from "../lib/appWindows";
 import { deriveDeviceType, isDuoDevice, type DeviceType } from "../lib/device-type";
 import type { NativeLayoutMetrics } from "../lib/reserved-regions";
@@ -8,6 +8,9 @@ import { NativeWindowLayoutObserver } from "./NativeLayoutObserver";
 const IS_PAD = Platform.OS === "ios" && Platform.isPad;
 
 const NativeLayoutContext = createContext<NativeLayoutMetrics | null>(null);
+type WindowSize = { readonly width: number; readonly height: number; readonly fontScale: number };
+// Separate from the metrics so size readers skip safe-area updates.
+const WindowSizeContext = createContext<WindowSize | null>(null);
 // Separate from the metrics so device checks skip every resize and safe-area update.
 const DeviceTypeContext = createContext<DeviceType>(
   deriveDeviceType({ isPad: IS_PAD, metrics: null }),
@@ -68,13 +71,20 @@ export function NativeLayoutMetricsProvider(props: { readonly children: ReactNod
     setMetrics(next);
   };
   const deviceType = deriveDeviceType({ isPad: IS_PAD, metrics });
+  const dimensions = useWindowDimensions();
+  const width = metrics?.width ?? dimensions.width;
+  const height = metrics?.height ?? dimensions.height;
+  const fontScale = dimensions.fontScale;
+  const windowSize = useMemo(() => ({ width, height, fontScale }), [width, height, fontScale]);
   return (
     <NativeLayoutMetricsDeadlineContext value={metricsDeadline}>
       <NativeLayoutContext value={metrics}>
-        <DeviceTypeContext value={deviceType}>
-          <NativeWindowLayoutObserver onChange={publish} />
-          {props.children}
-        </DeviceTypeContext>
+        <WindowSizeContext value={windowSize}>
+          <DeviceTypeContext value={deviceType}>
+            <NativeWindowLayoutObserver onChange={publish} />
+            {props.children}
+          </DeviceTypeContext>
+        </WindowSizeContext>
       </NativeLayoutContext>
     </NativeLayoutMetricsDeadlineContext>
   );
@@ -85,9 +95,8 @@ export function useNativeLayoutMetrics() {
 }
 
 /** This window's size. Side by side on Android, React Native's one window size is another's. */
-export function useWindowSize(): { readonly width: number; readonly height: number } {
-  const dimensions = useWindowDimensions();
-  return use(NativeLayoutContext) ?? dimensions;
+export function useWindowSize(): WindowSize {
+  return use(WindowSizeContext) ?? Dimensions.get("window");
 }
 
 /** Epoch ms after which a consumer still waiting for the first metrics gives up. */
