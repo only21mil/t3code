@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { filterCommandPaletteItems, type CommandPaletteItem } from "./commandPaletteItems";
+import {
+  currentThreadActions,
+  filterCommandPaletteItems,
+  type CommandPaletteItem,
+} from "./commandPaletteItems";
 
 const NOW = Date.UTC(2026, 9, 23);
 
@@ -52,5 +56,35 @@ describe("filterCommandPaletteItems", () => {
       ["siva:one", true],
     ]);
     expect(filterCommandPaletteItems(items, "> layout", ["siva:one"], NOW)).toEqual([]);
+  });
+});
+
+describe("currentThreadActions", () => {
+  const open = { loaded: true, settled: false, snoozed: false, snoozable: true, pinned: false };
+
+  it("lists nothing when no thread is open", () => {
+    expect(currentThreadActions(null)).toEqual([]);
+  });
+
+  it("offers the open thread's row menu actions", () => {
+    expect(currentThreadActions(open)).toEqual(["settle", "snooze", "pin", "archive"]);
+    expect(currentThreadActions({ ...open, snoozable: false })).toEqual([
+      "settle",
+      "pin",
+      "archive",
+    ]);
+  });
+
+  it("flips settle and pin to undo what is already done", () => {
+    expect(currentThreadActions({ ...open, settled: true, pinned: true })).toEqual([
+      "unsettle",
+      "unpin",
+      "archive",
+    ]);
+    expect(currentThreadActions({ ...open, snoozed: true })).toEqual(["unsnooze", "archive"]);
+  });
+
+  it("offers only archive until the host's config loads", () => {
+    expect(currentThreadActions({ ...open, loaded: false })).toEqual(["archive"]);
   });
 });

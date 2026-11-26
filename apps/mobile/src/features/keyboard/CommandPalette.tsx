@@ -9,6 +9,11 @@ import {
   type EnvironmentThreadSearchMatch,
   type ShownOrder,
 } from "@t3tools/client-runtime/state/thread-search";
+import {
+  canSnooze,
+  effectiveSnoozed,
+  resolveSnoozePresets,
+} from "@t3tools/client-runtime/state/thread-settled";
 import { isShownUnderParent } from "@t3tools/client-runtime/state/threads";
 import { THREAD_JUMP_KEYBINDING_COMMANDS } from "@t3tools/contracts";
 import {
@@ -52,7 +57,9 @@ import {
   useThreadShell,
   useVisibleThreadShells,
 } from "../../state/entities";
+import { threadListEnvironmentsAtom } from "../../state/presentation";
 import { useThreadSearch } from "../../state/queries";
+import { useThreadListActions } from "../home/useThreadListActions";
 import { requestThreadMessageJump } from "../threads/threadMessageJump";
 import { useCanShareWithGuest } from "../threads/useCanShareWithGuest";
 import { threadEnvironment } from "../../state/threads";
@@ -67,6 +74,7 @@ import { useStartTriage } from "../triage/useStartTriage";
 import { useNewTaskFlow } from "../threads/new-task-flow-provider";
 import { useActiveNewTask } from "../../state/active-new-task";
 import {
+  currentThreadActions,
   filterCommandPaletteItems,
   nextPaletteIndex,
   type CommandPaletteItem,
@@ -103,11 +111,19 @@ const ACTION_ICONS: Record<string, AppSymbolName> = {
   terminal: "terminal",
   review: PullRequestGlyph.pullRequest,
   copyThreadReference: "link",
+  settleThread: "checkmark",
+  unsettleThread: "arrow.uturn.backward",
+  snoozeThread: "clock",
+  unsnoozeThread: "clock",
+  pinThread: "pin",
+  unpinThread: "pin.slash",
+  archiveThread: "archivebox",
 };
 
 function itemIcon(item: CommandPaletteItem): AppSymbolName {
   if (item.kind === "thread") return "text.bubble";
-  return ACTION_ICONS[item.key] ?? "ellipsis";
+  // Snooze rows key by preset: `snoozeThread:<preset>`.
+  return ACTION_ICONS[item.key.split(":")[0]!] ?? "ellipsis";
 }
 
 function PaletteRow(props: {
@@ -228,6 +244,7 @@ export function CommandPalette(props: {
 }) {
   const navigation = useNavigation();
   const gt = useGT();
+  const m = useMessages();
   const selectTab = useSelectWorkspaceTab();
   const { themeVariables } = useAppearancePreferences();
   const selectDetail = useSelectWorkspaceDetail();
@@ -292,6 +309,18 @@ export function CommandPalette(props: {
     triageEnvironmentId !== null &&
     serverConfigs.get(triageEnvironmentId)?.environment.capabilities.triage === true;
   const canShareWithGuest = useCanShareWithGuest(activeThreadRef?.environmentId ?? null);
+  const { settlementEnvironmentIds, snoozePresetsByEnvironmentId } = useAtomValue(
+    threadListEnvironmentsAtom,
+  );
+  const {
+    settleThread,
+    unsettleThread,
+    snoozeThread,
+    unsnoozeThread,
+    pinThread,
+    unpinThread,
+    archiveThread,
+  } = useThreadListActions();
   const contentMatchByKey = new Map(
     search.matches
       .filter((match) => match.source === "user" || match.source === "assistant")
@@ -423,6 +452,49 @@ export function CommandPalette(props: {
         });
       }
     }
+    if (activeThread) {
+      const thread = activeThread;
+      const at = new Date(now);
+      const rows = {
+        settle: [gt("Settle", { $context: "verb, thread action" }), settleThread],
+        unsettle: [gt("Un-settle", { $context: "verb, thread action" }), unsettleThread],
+        unsnooze: [gt("Wake thread"), unsnoozeThread],
+        pin: [gt("Pin", { $context: "verb, thread action" }), pinThread],
+        unpin: [gt("Unpin", { $context: "verb, thread action" }), unpinThread],
+        archive: [gt("Archive", { $context: "verb, thread action" }), archiveThread],
+      } as const;
+      const presets = snoozePresetsByEnvironmentId.get(thread.environmentId);
+      for (const action of currentThreadActions({
+        loaded: settlementEnvironmentIds.has(thread.environmentId),
+        settled: thread.settledOverride === "settled",
+        snoozed: effectiveSnoozed(thread, { now: at.toISOString() }),
+        snoozable: canSnooze(thread, { now: at.toISOString() }),
+        pinned: thread.pinnedAt != null,
+      })) {
+        if (action === "snooze") {
+          actions.push(
+            ...resolveSnoozePresets(at, presets ? { presets } : {}, m).map((preset) => ({
+              key: `snoozeThread:${preset.id}`,
+              kind: "action" as const,
+              title: gt("Snooze", { $context: "verb, thread action" }),
+              detail: `${preset.label} · ${preset.whenLabel}`,
+              searchTerms: [preset.label],
+              run: () => void snoozeThread(thread, preset.snoozedUntil),
+            })),
+          );
+        } else {
+          const [title, run] = rows[action];
+          actions.push({
+            key: `${action}Thread`,
+            kind: "action",
+            title,
+            // "pin" still finds Unpin once the thread is pinned.
+            searchTerms: ["thread", action.replace(/^un/, "")],
+            run: () => void run(thread),
+          });
+        }
+      }
+    }
     const openProjects = projects.filter((project) => project.archivedAt == null);
     const projectItems: CommandPaletteItem[] = [
       ...openProjects.filter((project) => project.pinnedAt != null),
@@ -510,6 +582,17 @@ export function CommandPalette(props: {
     delegatedUnderParent,
     triageEnvironmentId,
     gt,
+    m,
+    now,
+    settlementEnvironmentIds,
+    snoozePresetsByEnvironmentId,
+    settleThread,
+    unsettleThread,
+    snoozeThread,
+    unsnoozeThread,
+    pinThread,
+    unpinThread,
+    archiveThread,
   ]);
   const rankedMessageKeys = useMemo(() => {
     const subjectByKey = new Map(

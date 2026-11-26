@@ -103,6 +103,34 @@ export function filterCommandPaletteItems(
   return [...ranked, ...fromMessages];
 }
 
+export type CurrentThreadAction =
+  | "settle"
+  | "unsettle"
+  | "snooze"
+  | "unsnooze"
+  | "pin"
+  | "unpin"
+  | "archive";
+
+/** The open thread's row menu actions, gated as the thread list's row menu gates them. */
+export function currentThreadActions(
+  thread: {
+    /** The host's config has loaded, which settle, snooze and pin wait for. */
+    readonly loaded: boolean;
+    readonly settled: boolean;
+    readonly snoozed: boolean;
+    readonly snoozable: boolean;
+    readonly pinned: boolean;
+  } | null,
+): CurrentThreadAction[] {
+  if (!thread) return [];
+  if (!thread.loaded) return ["archive"];
+  if (thread.snoozed) return ["unsnooze", "archive"];
+  const pin = thread.pinned ? "unpin" : "pin";
+  if (thread.settled) return ["unsettle", pin, "archive"];
+  return thread.snoozable ? ["settle", "snooze", pin, "archive"] : ["settle", pin, "archive"];
+}
+
 export function nextPaletteIndex(index: number, direction: -1 | 1, count: number) {
   return count === 0 ? 0 : (index + direction + count) % count;
 }
