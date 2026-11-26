@@ -63,7 +63,10 @@ export const layer = McpToolAccess.toLayer(WorkflowToolkit, {
           const name = yield* required(input.workflow, "workflow");
           const idempotencyKey = yield* required(input.idempotencyKey, "idempotencyKey");
           const { runId } = yield* workflows
-            .start(name, input.input === undefined ? {} : input.input, { idempotencyKey })
+            .start(name, input.input === undefined ? {} : input.input, {
+              idempotencyKey,
+              ...(input.tags === undefined ? {} : { tags: input.tags }),
+            })
             .pipe(Effect.mapError(refused));
           return yield* workflows.get(runId).pipe(Effect.mapError(refused));
         }

@@ -43,7 +43,7 @@ export default workflow(
 ## CLI commands
 
 ```sh
-t3 workflow start <name> --input '<json>' --key <key>
+t3 workflow start <name> --input '<json>' --key <key> [--tag <tag>]...
 t3 workflow list [--status paused] [--tag <tag>] [--subject <url or id>]
 t3 workflow show <run>
 t3 workflow resume <run>

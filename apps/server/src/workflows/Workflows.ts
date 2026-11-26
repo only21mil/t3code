@@ -90,6 +90,8 @@ export class Workflows extends Context.Service<
         readonly version?: number;
         /** What a new run is about. A start that finds its run already there leaves it be. */
         readonly subject?: WorkflowStore.ReferenceInput;
+        /** What a new run is tagged with, until its body's `tags` replaces them. */
+        readonly tags?: ReadonlyArray<string>;
       },
     ) => Effect.Effect<{ readonly runId: string }, WorkflowError>;
     /**

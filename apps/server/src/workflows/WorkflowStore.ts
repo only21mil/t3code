@@ -202,6 +202,7 @@ export class WorkflowStore extends Context.Service<
       readonly idempotencyKey: string;
       readonly input: Schema.Json;
       readonly parent?: RunParent | undefined;
+      readonly tags?: ReadonlyArray<string> | undefined;
     }) => Effect.Effect<void>;
     readonly runStatus: (
       runId: string,
@@ -740,12 +741,12 @@ export const make = Effect.gen(function* () {
       const inserted = yield* sql`
           INSERT INTO workflow_runs (
             run_id, workflow, version, engine_tag, idempotency_key, title, status, input_json,
-            parent_run_id, parent_wait, started_at, updated_at
+            parent_run_id, parent_wait, tags_json, started_at, updated_at
           ) VALUES (
             ${run.runId}, ${run.workflow}, ${run.version}, ${run.engineTag},
             ${run.idempotencyKey}, ${`${run.workflow} ${run.idempotencyKey}`}, 'running',
             ${jsonText(run.input)}, ${run.parent?.runId ?? null}, ${run.parent?.wait ?? null},
-            ${at}, ${at}
+            ${jsonText([...new Set(run.tags)])}, ${at}, ${at}
           )
           ON CONFLICT DO NOTHING
           RETURNING run_id

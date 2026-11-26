@@ -14,7 +14,7 @@ import * as SchemaAST from "effect/SchemaAST";
 import * as SqlClient from "effect/sql/SqlClient";
 import { Activity, DurableClock, DurableDeferred, Workflow, WorkflowEngine } from "effect/workflow";
 
-import { checkOptions, durationOf } from "./options.ts";
+import { checkOptions, durationOf, tagList } from "./options.ts";
 import {
   EngineLink,
   forStep,
@@ -805,16 +805,10 @@ export const tags = (
   values: ReadonlyArray<string>,
   ...rest: ReadonlyArray<never>
 ): Effect.Effect<void, never, InRun> => {
+  const usage = 'tags takes one list of words, as in tags(["pr", "backlog"]).';
   // Files are not type-checked, so `tags("pr", "backlog")` would tag the run with one of them.
-  if (
-    !Array.isArray(values) ||
-    rest.length > 0 ||
-    // Array.from fills a gap, as in `tags([, "pr"])`, which `some` would step over.
-    Array.from(values).some((value) => typeof value !== "string" || value.trim() === "")
-  ) {
-    throw new Error('tags takes one list of words, as in tags(["pr", "backlog"]).');
-  }
-  const kept = [...new Set(values as ReadonlyArray<string>)];
+  if (rest.length > 0) throw new Error(usage);
+  const kept = tagList(values, usage);
   return Effect.flatMap(RunContext, (current) => {
     // Numbered by how many came before in the body, which a replay walks the same way.
     let n = 0;

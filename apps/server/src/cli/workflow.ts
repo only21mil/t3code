@@ -72,6 +72,10 @@ const startCommand = Command.make("start", {
       "Required. Names this run: starting again with the same key is the same run, not a second one.",
     ),
   ),
+  tag: Flag.String("tag").pipe(
+    Flag.withDescription("Tag a new run with this, for `list --tag`. Repeat for more."),
+    Flag.atLeast(0),
+  ),
   json: jsonFlag,
 }).pipe(
   Command.withDescription("Start a workflow run and print it."),
@@ -86,7 +90,13 @@ const startCommand = Command.make("start", {
         Effect.fn("cli.workflow.start")(function* (tools) {
           const started = yield* tools.call(
             "t3_workflow",
-            { action: "start", workflow: flags.workflow, input, idempotencyKey: flags.key },
+            {
+              action: "start",
+              workflow: flags.workflow,
+              input,
+              idempotencyKey: flags.key,
+              ...(flags.tag.length === 0 ? {} : { tags: flags.tag }),
+            },
             RunResult,
           );
           yield* printRun(started, flags.json);

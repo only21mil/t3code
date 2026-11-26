@@ -11,7 +11,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
-import { checkOptions } from "./options.ts";
+import { checkOptions, tagList } from "./options.ts";
 import { type StepReferences, stepReferences } from "./runReferences.ts";
 import type { WorkflowDefinition } from "./workflow.ts";
 import { type SubjectInput, subjectReference, WorkflowForge } from "./WorkflowForge.ts";
@@ -437,19 +437,27 @@ export const signal = (
 
 /**
  * Start a run of another workflow and go on without it. The same `key` is the same run; a
- * `subject` is what a new run is about, as its body's `subject` would say. Inside `step` or
- * `onEnd` only; to wait for the run's result, use `invoke` in the body instead.
+ * `subject` is what a new run is about and `tags` what it is tagged with, as its body's `subject`
+ * and `tags` would say. Inside `step` or `onEnd` only; to wait for the run's result, use `invoke`
+ * in the body instead.
  */
 export const start = <P>(
   workflow: WorkflowDefinition<P>,
   payload: P,
-  options: { readonly key: string; readonly subject?: SubjectInput },
+  options: {
+    readonly key: string;
+    readonly subject?: SubjectInput;
+    readonly tags?: ReadonlyArray<string>;
+  },
 ) =>
   Effect.flatMap(Runs, (runs) => {
-    checkOptions("start", options, ["key", "subject"]);
+    checkOptions("start", options, ["key", "subject", "tags"]);
     return runs.start(workflow.name, payload, {
       idempotencyKey: options.key,
       version: workflow.version,
+      ...(options.tags === undefined
+        ? {}
+        : { tags: tagList(options.tags, 'start\'s tags is one list of words, as in ["pr"].') }),
       ...(options.subject === undefined
         ? {}
         : { subject: subjectReference("start's subject", options.subject) }),

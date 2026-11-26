@@ -236,6 +236,27 @@ it.effect("signal from an agent's shell answers in the name of the agent's threa
   }),
 );
 
+it.effect("start sends each --tag, and no tags without one", () =>
+  Effect.gen(function* () {
+    const args = ["start", "review", "--key", "pr-1"];
+    const tagged = yield* runCli([...args, "--tag", "pr", "--tag", "backlog"], serving("running"));
+    assert.isUndefined(tagged.error);
+    assert.deepStrictEqual(tagged.calls, [
+      {
+        action: "start",
+        workflow: "review",
+        input: {},
+        idempotencyKey: "pr-1",
+        tags: ["pr", "backlog"],
+      },
+    ]);
+    const plain = yield* runCli(args, serving("running"));
+    assert.deepStrictEqual(plain.calls, [
+      { action: "start", workflow: "review", input: {}, idempotencyKey: "pr-1" },
+    ]);
+  }),
+);
+
 it.effect("list --tag and questions --kind ask the server for only those", () =>
   Effect.gen(function* () {
     const listed = yield* runCli(["list", "--tag", "backlog", "--json"], () =>

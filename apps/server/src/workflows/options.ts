@@ -11,6 +11,18 @@ export const durationOf = (what: string, input: Duration.Input): Duration.Durati
       ),
   );
 
+/** A run's tags, once each. Files are not type-checked, so `usage` says how to write them. */
+export const tagList = (values: unknown, usage: string): ReadonlyArray<string> => {
+  // Array.from fills a gap, as in `[, "pr"]`, which `some` would step over.
+  if (
+    !Array.isArray(values) ||
+    Array.from(values).some((value) => typeof value !== "string" || value.trim() === "")
+  ) {
+    throw new Error(usage);
+  }
+  return [...new Set(values as ReadonlyArray<string>)];
+};
+
 /**
  * Refuses an option the call does not take. A workflow file is not type-checked, so a misspelt or
  * renamed option would otherwise be dropped without a word.

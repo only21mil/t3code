@@ -2812,6 +2812,45 @@ it("tags refuses a list with a gap in it", () => {
   assert.throws(() => tags(gapped), /tags takes one list of words/);
 });
 
+it.effect("a run started with tags has them from its start, once each", () =>
+  Effect.gen(function* () {
+    const { boot } = yield* harness();
+    yield* boot(
+      Effect.gen(function* () {
+        const workflows = yield* Workflows.Workflows;
+        const tagsOf = (runId: string) => Effect.map(workflows.get(runId), ({ run }) => run.tags);
+        const started = yield* workflows.start(
+          "wanting",
+          {},
+          { idempotencyKey: "tagged", tags: ["pr", "backlog", "pr"] },
+        );
+        yield* workflows.waitFor(started.runId, status("waiting"));
+        assert.deepStrictEqual(yield* tagsOf(started.runId), ["pr", "backlog"]);
+        assert.deepStrictEqual(
+          (yield* workflows.list({ tag: "backlog" })).map((run) => run.runId),
+          [started.runId],
+        );
+        // A start that finds its run already there leaves its tags be.
+        const again = yield* workflows.start(
+          "wanting",
+          {},
+          { idempotencyKey: "tagged", tags: ["other"] },
+        );
+        assert.strictEqual(again.runId, started.runId);
+        assert.deepStrictEqual(yield* tagsOf(started.runId), ["pr", "backlog"]);
+        // The body's own tags replace those it was started with.
+        const sorted = yield* workflows.start(
+          "sorter",
+          { tags: ["sorted"] },
+          { idempotencyKey: "retagged", tags: ["started"] },
+        );
+        yield* workflows.waitFor(sorted.runId, status("waiting"));
+        assert.deepStrictEqual(yield* tagsOf(sorted.runId), ["sorted"]);
+      }),
+    );
+  }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+);
+
 it.effect("questions carry their kind and runs their tags, and both can be filtered by", () =>
   Effect.gen(function* () {
     const { boot } = yield* harness();
