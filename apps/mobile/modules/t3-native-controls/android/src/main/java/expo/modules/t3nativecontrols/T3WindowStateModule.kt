@@ -40,7 +40,8 @@ class T3WindowStateView(
     // The activity removes its views as it is destroyed, before its React root unloads.
     val activity = context.hostActivity()
     if (activity != null && (activity.isFinishing || activity.isDestroyed)) {
-      onWindowStateChange(mapOf("state" to "closed"))
+      // A finished task's dialogs end with it; a recreated window's move to the window in use.
+      onWindowStateChange(mapOf("state" to if (activity.isFinishing) "finished" else "closed"))
     }
     super.onDetachedFromWindow()
   }

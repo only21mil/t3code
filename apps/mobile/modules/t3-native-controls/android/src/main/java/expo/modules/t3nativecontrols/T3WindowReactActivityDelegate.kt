@@ -12,6 +12,7 @@ import android.util.Log
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactApplication
 import com.facebook.react.ReactHost
+import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.ReactContext
 import com.facebook.react.common.LifecycleState
 import com.facebook.react.defaults.DefaultReactActivityDelegate
@@ -20,19 +21,25 @@ import java.lang.ref.WeakReference
 
 /** The T3 Code windows (activities) open on the one React host, oldest first. */
 object T3Windows {
-  internal val lifecycle = T3WindowLifecycle<Activity, Intent> { it.isDestroyed }
+  internal val lifecycle = T3WindowLifecycle<Activity, String> { it.isDestroyed }
 
   val activities: List<Activity>
     get() = lifecycle.windows
 
-  /** A window's JS id arrived (T3WindowState); a link it held meanwhile reaches it now. */
+  /**
+   * A window's JS id arrived (T3WindowState). A link it held meanwhile goes straight to that
+   * window's JS: native listeners heard its intent already, and the window in use stays.
+   */
   internal fun listening(window: Activity, jsId: Int?) {
     val host = (window.application as? ReactApplication)?.reactHost ?: return
     val held = lifecycle.listening(window, jsId)
-    if (held != null) {
-      host.deliverLink(window, held)
-    } else {
-      lifecycle.inUse(window)?.let(host::announceWindowInUse)
+    lifecycle.inUse(window)?.let(host::announceWindowInUse)
+    if (held != null && jsId != null) {
+      val link = Arguments.createMap().apply {
+        putInt("windowId", jsId)
+        putString("url", held)
+      }
+      host.currentReactContext?.emitDeviceEvent(WINDOW_LINK_EVENT, link)
     }
   }
 
@@ -70,8 +77,6 @@ open class T3WindowReactActivityDelegate(
     if (hasFocus) {
       cancelFocusLoss()
       follow(T3Windows.lifecycle.focused(window))
-      // JS activates a window only once the gate serves it, not on every native focus.
-      reactHost?.let { host -> T3Windows.lifecycle.inUse(window)?.let(host::announceWindowInUse) }
       if (T3Windows.lifecycle.focusGained(window)) super.onWindowFocusChanged(true)
       return
     }
@@ -105,7 +110,7 @@ open class T3WindowReactActivityDelegate(
     val host = reactHost
     if (host == null || intent == null) return super.onNewIntent(intent)
     val link = launchURL(intent.action, intent.dataString)
-    if (link != null && T3Windows.lifecycle.holdsLink(window, intent)) {
+    if (link != null && T3Windows.lifecycle.holdsLink(window, link)) {
       // Other listeners still hear the intent; only its link waits for this window's JS.
       host.currentReactContext?.onNewIntent(window, intent)
     } else {
@@ -141,8 +146,11 @@ open class T3WindowReactActivityDelegate(
     pendingFocusLoss = null
   }
 
+  // JS activates a window only once the host serves it, not on every native focus.
   private fun follow(step: T3WindowLifecycle.Step<Activity>) {
-    reactHost?.follow(step)
+    val host = reactHost ?: return
+    host.follow(step)
+    T3Windows.lifecycle.servedAfter(step, window)?.let(host::announceWindowInUse)
   }
 }
 
@@ -188,8 +196,9 @@ private const val TAG = "T3Windows"
 // App.tsx reads it from the root's initial props.
 private const val LAUNCH_URL_PROP = "launchURL"
 
-// NativeWindowObserver.android listens for it.
+// NativeWindowObserver.android listens for them.
 private const val WINDOW_IN_USE_EVENT = "T3WindowInUse"
+private const val WINDOW_LINK_EVENT = "T3WindowLink"
 private val mainHandler = Handler(Looper.getMainLooper())
 private val reactContextActivity =
   runCatching {

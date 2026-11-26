@@ -24,7 +24,11 @@ function resolveObserver() {
 const Observer = resolveObserver();
 
 /** Reports when the window of the React root it is mounted in becomes the one in use, or closes. */
-export function NativeWindowObserver(props: { readonly onChange: (state: WindowState) => void }) {
+export function NativeWindowObserver(props: {
+  readonly hearsLinks?: boolean;
+  readonly navigationReady?: boolean;
+  readonly onChange: (state: WindowState) => void;
+}) {
   return Observer ? (
     <Observer
       pointerEvents="none"
@@ -32,4 +36,8 @@ export function NativeWindowObserver(props: { readonly onChange: (state: WindowS
       style={{ position: "absolute", width: 0, height: 0 }}
     />
   ) : null;
+}
+
+export function listenForHeldLinks(_windowId: number, _listener: (url: string) => void) {
+  return () => {};
 }

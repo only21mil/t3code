@@ -1,20 +1,9 @@
 import { expect, it, vi } from "vite-plus/test";
 
-const harness = vi.hoisted(() => {
-  let onRead: (() => void) | null = null;
-  return {
-    urlListeners: [] as Array<(event: { readonly url: string }) => void>,
-    readPayloads: vi.fn(() => {
-      onRead?.();
-      return [];
-    }),
-    /** Resolves when the inbox next reads the native share handoff. */
-    nextRead: () =>
-      new Promise<void>((resolve) => {
-        onRead = resolve;
-      }),
-  };
-});
+const harness = vi.hoisted(() => ({
+  urlListeners: [] as Array<(event: { readonly url: string }) => void>,
+  readPayloads: vi.fn(() => []),
+}));
 
 vi.mock("react-native", () => ({
   Platform: { OS: "android" },
@@ -57,23 +46,35 @@ vi.mock("../layout/workspace/workspace-detail-selection", () => ({
   selectWorkspaceDetail: () => ({}),
 }));
 
-const { startIncomingShareInbox } = await import("./IncomingShareProvider");
+const { ingestShareLink, startIncomingShareInbox } = await import("./IncomingShareProvider");
+
+// Another share runs after any refresh already running, so the reads it returns count them all.
+async function readsOnceDrained() {
+  await ingestShareLink("t3code://expo-sharing");
+  return harness.readPayloads.mock.calls.length;
+}
 
 it("ingests a share handed to one Android window while another stays resumed", async () => {
-  const loaded = harness.nextRead();
   const stop = startIncomingShareInbox();
-  await loaded;
+  const reads = await readsOnceDrained();
 
   // expo-sharing hands the share to the receiving window as a link.
   expect(harness.urlListeners).toHaveLength(1);
-  const ingested = harness.nextRead();
   for (const listener of harness.urlListeners) listener({ url: "t3code://expo-sharing" });
-  await ingested;
-  expect(harness.readPayloads).toHaveBeenCalledTimes(2);
+  expect(await readsOnceDrained()).toBe(reads + 2);
 
   // Other links are not share handoffs.
   for (const listener of harness.urlListeners) listener({ url: "t3code://threads/env/thread" });
-  expect(harness.readPayloads).toHaveBeenCalledTimes(2);
+  expect(await readsOnceDrained()).toBe(reads + 3);
   stop();
   expect(harness.urlListeners).toHaveLength(0);
+});
+
+it("ingests a share that opens a new Android window beside a resumed one", async () => {
+  const reads = harness.readPayloads.mock.calls.length;
+  // The new window's launch link; no link event or return to the foreground reaches the app.
+  await ingestShareLink("t3code://expo-sharing");
+  expect(harness.readPayloads).toHaveBeenCalledTimes(reads + 1);
+  await ingestShareLink("t3code://threads/env/thread");
+  expect(harness.readPayloads).toHaveBeenCalledTimes(reads + 1);
 });

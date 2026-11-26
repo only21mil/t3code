@@ -6,14 +6,16 @@ import {
   type ViewProps,
 } from "react-native";
 
+import { cancelWindowDialogs } from "../components/ui/Dialog.android";
 import { activateAppWindow, useAppWindowId, type AppWindowId } from "../lib/appWindows";
 
 type WindowState = "active" | "closed";
 
 interface ObserverProps extends ViewProps {
   readonly windowId: number;
+  // "finished" when the window's task is finishing; "closed" when it is recreated.
   readonly onWindowStateChange: (
-    event: NativeSyntheticEvent<{ readonly state: WindowState }>,
+    event: NativeSyntheticEvent<{ readonly state: WindowState | "finished" }>,
   ) => void;
 }
 
@@ -46,9 +48,25 @@ if (WindowStateModule?.runDefaultBack) {
   });
 }
 
+// A link native code held for a window reaches only that window's navigation, wherever focus is.
+const heldLinkListeners = new Map<AppWindowId, (url: string) => void>();
+DeviceEventEmitter.addListener(
+  "T3WindowLink",
+  (link: { readonly windowId: AppWindowId; readonly url: string }) =>
+    heldLinkListeners.get(link.windowId)?.(link.url),
+);
+
+export function listenForHeldLinks(windowId: AppWindowId, listener: (url: string) => void) {
+  heldLinkListeners.set(windowId, listener);
+  return () => {
+    if (heldLinkListeners.get(windowId) === listener) heldLinkListeners.delete(windowId);
+  };
+}
+
 /** Reports when the activity of the React root it is mounted in is destroyed. */
 export function NativeWindowObserver(props: {
   readonly hearsLinks: boolean;
+  readonly navigationReady: boolean;
   readonly onChange: (state: WindowState) => void;
 }) {
   const windowId = useAppWindowId();
@@ -56,8 +74,12 @@ export function NativeWindowObserver(props: {
     <Observer
       pointerEvents="none"
       // Native code delivers a link it held for this window once its navigation can open it.
-      windowId={props.hearsLinks ? windowId : 0}
-      onWindowStateChange={(event) => props.onChange(event.nativeEvent.state)}
+      windowId={props.hearsLinks && props.navigationReady ? windowId : 0}
+      onWindowStateChange={({ nativeEvent: { state } }) => {
+        // A closed task's dialogs go with it; a recreated window's move to the window in use.
+        if (state === "finished") cancelWindowDialogs(windowId);
+        props.onChange(state === "finished" ? "closed" : state);
+      }}
       style={{ position: "absolute", width: 0, height: 0 }}
     />
   ) : null;

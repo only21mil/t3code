@@ -31,6 +31,7 @@ import { CloudAuthProvider } from "./features/cloud/CloudAuthProvider";
 import { prepareNativeShowcaseCapture } from "./features/showcase/nativeShowcaseScene";
 import { installShowcaseCapture } from "./features/showcase/ShowcaseCaptureCoordinator";
 import {
+  ingestShareLink,
   presentPendingIncomingShare,
   pruneIncomingShareImports,
   startIncomingShareInbox,
@@ -101,7 +102,7 @@ import {
 } from "./features/layout/workspace/workspace-selection-store";
 import { workspaceDetailLinkAction } from "./features/layout/workspace/workspace-detail-selection";
 import { NativeLayoutMetricsProvider } from "./native/native-layout-metrics";
-import { NativeWindowObserver } from "./native/NativeWindowObserver";
+import { listenForHeldLinks, NativeWindowObserver } from "./native/NativeWindowObserver";
 import {
   activateAppWindow,
   allocateAppWindowId,
@@ -168,6 +169,8 @@ let launchLinkTaken = false;
 async function initialWindowURL(windowId: AppWindowId, ownLaunchURL: string | null | undefined) {
   const readsLaunchLink = !launchLinkTaken || Platform.OS !== "ios";
   launchLinkTaken = true;
+  // A share that opens a new Android window beside a resumed one arrives only as its launch link.
+  if (ownLaunchURL) void ingestShareLink(ownLaunchURL);
   const launchURL =
     ownLaunchURL !== undefined
       ? ownLaunchURL
@@ -213,11 +216,13 @@ function linkToAppPath(href: string): void {
   linkToRootPath(href, appLinkAction);
 }
 
+const HOLDS_LINKS = Platform.OS === "android";
+
 /** Every window's container hears an opened link; it belongs to the window in use. */
 function windowLinking(
   windowId: AppWindowId,
   launchURL: string | null | undefined,
-  onHearsLinks: (hearsLinks: boolean) => void,
+  onHearsLinks?: (hearsLinks: boolean) => void,
 ) {
   return {
     ...appLinking,
@@ -228,9 +233,11 @@ function windowLinking(
       const subscription = Linking.addEventListener("url", ({ url }) => {
         if (rootNavigationWindowStatus(windowId) === "current") listener(url);
       });
-      onHearsLinks(true);
+      const heldLinks = listenForHeldLinks(windowId, listener);
+      onHearsLinks?.(true);
       return () => {
-        onHearsLinks(false);
+        onHearsLinks?.(false);
+        heldLinks();
         subscription.remove();
       };
     },
@@ -379,9 +386,11 @@ function AppContent(props: { readonly launchURL: string | null | undefined }) {
   const { themeAppearance } = useAppearancePreferences();
   const navigationTheme = useMobileNavigationTheme();
   const launchURL = props.launchURL;
+  // Android holds a link for this window until its navigation hears links and can open them.
   const [hearsLinks, setHearsLinks] = useState(false);
+  const [navigationReady, setNavigationReady] = useState(false);
   const linking = useMemo(
-    () => windowLinking(windowId, launchURL, setHearsLinks),
+    () => windowLinking(windowId, launchURL, HOLDS_LINKS ? setHearsLinks : undefined),
     [windowId, launchURL],
   );
   const attachNavigation = useCallback(
@@ -410,6 +419,7 @@ function AppContent(props: { readonly launchURL: string | null | undefined }) {
       <SplashScreenCoordinator />
       <NativeWindowObserver
         hearsLinks={hearsLinks}
+        navigationReady={navigationReady}
         onChange={(state) =>
           state === "active" ? activateAppWindow(windowId) : closeAppWindow(windowId)
         }
@@ -429,7 +439,10 @@ function AppContent(props: { readonly launchURL: string | null | undefined }) {
                   <Navigation
                     ref={attachNavigation}
                     linking={linking}
-                    onReady={handleNavigationReady}
+                    onReady={() => {
+                      handleNavigationReady();
+                      if (HOLDS_LINKS) setNavigationReady(true);
+                    }}
                     theme={navigationTheme}
                     onStateChange={handleNavigationStateChange}
                     shouldHandleBackButton={() => isBackForWindow(windowId)}

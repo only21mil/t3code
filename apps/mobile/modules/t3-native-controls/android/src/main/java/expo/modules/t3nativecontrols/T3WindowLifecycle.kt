@@ -114,7 +114,7 @@ class T3WindowLifecycle<W : Any, L : Any>(private val isGone: (W) -> Boolean) {
    * the link the window held meanwhile, to deliver once.
    */
   fun listening(window: W, jsId: Int?): L? {
-    if (jsId == null) {
+    if (jsId == null || isGone(window)) {
       jsIds.remove(window)
       return null
     }
@@ -127,6 +127,14 @@ class T3WindowLifecycle<W : Any, L : Any>(private val isGone: (W) -> Boolean) {
 
   /** The [jsId] of a window React Native serves, which its JS then makes the active window. */
   fun inUse(window: W): Int? = jsIds[window]?.takeIf { window === current }
+
+  /** After [step] for [window], the [jsId] of the window React Native now serves. */
+  fun servedAfter(step: Step<W>, window: W): Int? =
+    when (step) {
+      is Step.Follow -> inUse(step.window)
+      Step.Forward -> inUse(window)
+      else -> null
+    }
 
   /** Whether the window holds this link because its JS cannot take it yet; the latest one wins. */
   fun holdsLink(window: W, link: L): Boolean {

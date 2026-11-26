@@ -243,3 +243,24 @@ it("moves a dialog to the window in use once its own window closes", () => {
 
   expect(replacement.container.textContent).toContain("Shared content imported");
 });
+
+it("cancels the dialogs of a window whose task finishes instead of moving them", () => {
+  const closing = mountHost(1);
+  const remaining = mountHost(2);
+  act(() => activateAppWindow(1));
+  const onCancel = vi.fn();
+  const onConfirm = vi.fn();
+  act(() => Dialog.confirm({ title: "Delete thread", confirmText: "Delete", onConfirm, onCancel }));
+  act(() => activateAppWindow(2));
+  act(() => Dialog.alert("Copied", undefined, [{ text: "OK" }]));
+
+  act(() => Dialog.cancelWindowDialogs(1));
+  roots.splice(roots.indexOf(closing.root), 1);
+  act(() => closing.root.unmount());
+  act(() => closeAppWindow(1));
+
+  expect(onCancel).toHaveBeenCalledOnce();
+  expect(onConfirm).not.toHaveBeenCalled();
+  expect(remaining.container.textContent).toContain("Copied");
+  expect(remaining.container.textContent).not.toContain("Delete thread");
+});

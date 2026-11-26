@@ -357,8 +357,28 @@ class T3WindowLifecycleTest {
     // A window that closes drops what it held.
     lifecycle.resumed("c")
     assertTrue(lifecycle.holdsLink("c", "t3code://lost"))
+    gone += "c"
     lifecycle.destroyed("c")
     assertNull(lifecycle.listening("c", 3))
+    // Its view can still report the id as it detaches; a destroyed window never gets one.
+    assertNull(lifecycle.jsId("c"))
+  }
+
+  // U10
+  @Test
+  fun namesTheWindowTheHostServesWheneverItMoves() {
+    val resumed = lifecycle.resumed("a")
+    lifecycle.listening("a", 1)
+    assertEquals(1, lifecycle.servedAfter(resumed, "a"))
+    // b opens in use before its JS id is known; JS learns it when the id arrives.
+    val opened = lifecycle.resumed("b")
+    assertEquals(Step.Follow("b"), opened)
+    assertNull(lifecycle.servedAfter(opened, "b"))
+    lifecycle.listening("b", 2)
+
+    assertEquals(1, lifecycle.servedAfter(lifecycle.paused("b"), "b"))
+    assertEquals(2, lifecycle.servedAfter(lifecycle.resumed("b"), "b"))
+    assertNull(lifecycle.servedAfter(lifecycle.paused("a"), "a"))
   }
 
   // T10

@@ -86,6 +86,14 @@ function closeUnanswered(dialog: DialogRequest) {
   else dialog.request.onCancel?.();
 }
 
+/** The window's task is finishing: its dialogs close unanswered instead of moving to another. */
+export function cancelWindowDialogs(windowId: AppWindowId) {
+  const cancelled = presented.filter((shown) => shown.windowId === windowId);
+  if (cancelled.length === 0) return;
+  setPresented(presented.filter((shown) => shown.windowId !== windowId));
+  for (const dialog of cancelled) closeUnanswered(dialog);
+}
+
 /** Closes the dialog only if it is still presented. */
 function dismiss(id: number) {
   if (!presented.some((shown) => shown.id === id)) return false;

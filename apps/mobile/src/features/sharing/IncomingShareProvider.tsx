@@ -327,16 +327,21 @@ export function presentPendingIncomingShare(): void {
   );
 }
 
+/**
+ * expo-sharing hands a share to an Android window as a `<scheme>://expo-sharing` link: to a running
+ * one as an opened link, to a new one as its launch link. Beside another resumed window the app
+ * never leaves the foreground, so the link ingests it.
+ */
+export function ingestShareLink(url: string): Promise<void> {
+  return /^[\w+.-]+:\/\/expo-sharing\b/.test(url) ? refreshIncomingShares() : Promise.resolve();
+}
+
 /** App-lifetime: loads the inbox and re-ingests native handoffs on every resume and handoff. */
 export function startIncomingShareInbox(): () => void {
   void refreshIncomingShares();
   if (!receiveSharingEnabled()) return () => {};
   const stopOnActive = subscribeAppActive(() => void refreshIncomingShares());
-  // expo-sharing hands a share to a running Android window as a `<scheme>://expo-sharing` link.
-  // Beside another resumed window the app never leaves the foreground, so the link ingests it.
-  const handoffs = Linking.addEventListener("url", ({ url }) => {
-    if (/^[\w+.-]+:\/\/expo-sharing\b/.test(url)) void refreshIncomingShares();
-  });
+  const handoffs = Linking.addEventListener("url", ({ url }) => void ingestShareLink(url));
   return () => {
     stopOnActive();
     handoffs.remove();
